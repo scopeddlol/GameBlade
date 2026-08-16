@@ -77,5 +77,8 @@ services:
       retries: 3
       start_period: 20s
 
+    # Quoted deliberately: without quotes, an editor that adds a space after the
+    # colon turns this into a map and Compose rejects it with
+    # "security_opt.0 must be a string".
     security_opt:
-      - no-new-privileges:true
+      - 'no-new-privileges:true'
