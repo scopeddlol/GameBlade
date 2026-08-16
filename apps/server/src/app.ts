@@ -1,10 +1,16 @@
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import type { ApiErrorBody } from '@gameblade/shared';
-import Fastify, { LogController, type FastifyError, type FastifyInstance } from 'fastify';
+import Fastify, {
+  LogController,
+  type FastifyError,
+  type FastifyInstance,
+  type FastifyReply,
+} from 'fastify';
 import { ZodError } from 'zod';
 import { createAuthHook } from './auth/middleware.js';
 import type { Config } from './config.js';
@@ -160,6 +166,21 @@ async function registerWebClient(app: FastifyInstance, config: Config): Promise<
     return;
   }
 
+  // The client ships relative asset URLs and reads its own base path from
+  // <base href>. Rewriting it here is what lets one build serve both "/" and a
+  // sub-path like "/gameblade" behind a reverse proxy, with no rebuild.
+  const indexPath = path.join(config.webRoot, 'index.html');
+  const rawIndex = await readFile(indexPath, 'utf8');
+  const baseHref = config.basePath === '' ? '/' : `${config.basePath}/`;
+  const indexHtml = rawIndex.replace(
+    /<base\s+href="[^"]*"\s*\/?>/i,
+    `<base href="${baseHref}" />`,
+  );
+
+  if (!/<base\s+href=/i.test(rawIndex)) {
+    app.log.warn('index.html has no <base href> tag — sub-path hosting will not work');
+  }
+
   const prefix = config.basePath === '' ? '/' : `${config.basePath}/`;
 
   await app.register(fastifyStatic, {
@@ -178,6 +199,16 @@ async function registerWebClient(app: FastifyInstance, config: Config): Promise<
 
   const apiPrefix = `${config.basePath}/api`;
 
+  const sendIndex = (reply: FastifyReply) =>
+    reply.header('Cache-Control', 'no-cache').type('text/html; charset=utf-8').send(indexHtml);
+
+  // Explicit index routes; @fastify/static is registered with index:false so the
+  // rewritten HTML is always what gets served.
+  app.get(prefix, async (_request, reply) => sendIndex(reply));
+  if (config.basePath !== '') {
+    app.get(config.basePath, async (_request, reply) => sendIndex(reply));
+  }
+
   app.setNotFoundHandler((request, reply) => {
     if (request.url.startsWith(apiPrefix)) {
       const body: ApiErrorBody = {
@@ -188,6 +219,7 @@ async function registerWebClient(app: FastifyInstance, config: Config): Promise<
     if (request.method !== 'GET') {
       return reply.code(404).send({ error: { code: 'not_found', message: 'Not found' } });
     }
-    return reply.header('Cache-Control', 'no-cache').sendFile('index.html');
+    // Any other GET is a client-side route, so hand back the SPA shell.
+    return sendIndex(reply);
   });
 }
