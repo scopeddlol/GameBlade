@@ -8,6 +8,7 @@ import {
   Image as ImageIcon,
   RefreshCw,
   Search,
+  ShieldCheck,
   Star,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -17,6 +18,15 @@ import { useSession } from '../hooks/useSession.js';
 import { api } from '../lib/api.js';
 import { API_BASE } from '../lib/base.js';
 import { formatBytes, formatDate } from '../lib/format.js';
+
+/** Mirrors ChecksumService.getProgress() on the server. */
+interface ChecksumProgress {
+  state: 'idle' | 'hashing' | 'error';
+  processed: number;
+  total: number;
+  currentFile: string | null;
+  error: string | null;
+}
 
 export function GamePage() {
   const { id = '' } = useParams();
@@ -46,6 +56,20 @@ export function GamePage() {
     mutationFn: () => api.post(`/games/${id}/refresh-artwork`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['game', id] }),
   });
+
+  const checksumMutation = useMutation({
+    mutationFn: () => api.post(`/games/${id}/checksums`, { force: false }),
+  });
+
+  // Only polled while hashing is actually running.
+  const checksumProgress = useQuery({
+    queryKey: ['checksums', 'progress'],
+    queryFn: () => api.get<ChecksumProgress>('/games/checksums/progress'),
+    enabled: isAdmin && checksumMutation.isSuccess,
+    refetchInterval: (query) => (query.state.data?.state === 'hashing' ? 1000 : false),
+  });
+
+  const hashing = checksumProgress.data?.state === 'hashing';
 
   if (gameQuery.isLoading) return <PageLoader label="Loading game" />;
   if (gameQuery.isError || !gameQuery.data) {
@@ -196,6 +220,22 @@ export function GamePage() {
                         <RefreshCw className="h-4 w-4" aria-hidden />
                       )}
                       Refresh artwork
+                    </button>
+                    <button
+                      type="button"
+                      className="gb-btn-ghost"
+                      onClick={() => checksumMutation.mutate()}
+                      disabled={checksumMutation.isPending || hashing}
+                      title="Hash every file so the desktop client can verify downloads"
+                    >
+                      {hashing ? (
+                        <Spinner className="h-4 w-4" />
+                      ) : (
+                        <ShieldCheck className="h-4 w-4" />
+                      )}
+                      {hashing
+                        ? `Hashing ${checksumProgress.data?.processed ?? 0}/${checksumProgress.data?.total ?? 0}`
+                        : 'Compute checksums'}
                     </button>
                   </>
                 ) : null}

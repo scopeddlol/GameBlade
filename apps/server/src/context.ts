@@ -3,6 +3,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { AuthService } from './auth/service.js';
 import type { Config } from './config.js';
 import type { Db } from './db/index.js';
+import { ChecksumService } from './services/checksums.js';
 import { DownloadTokenService } from './services/downloads.js';
 import { ImageCache } from './services/metadata/images.js';
 import { MetadataService } from './services/metadata/service.js';
@@ -16,6 +17,7 @@ export interface GamebladeContext {
   settings: SettingsService;
   metadata: MetadataService;
   scanner: ScannerService;
+  checksums: ChecksumService;
   downloadTokens: DownloadTokenService;
   images: ImageCache;
   /** Cookie path, so a sub-path deployment does not leak cookies to siblings. */
@@ -34,6 +36,7 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
   const images = new ImageCache(db, config.imageCacheDir, logger);
   const metadata = new MetadataService(db, settings, images, logger);
   const scanner = new ScannerService(db, metadata, logger);
+  const checksums = new ChecksumService(db, logger);
   const auth = new AuthService(db);
   const downloadTokens = new DownloadTokenService(db, config.sessionSecret);
 
@@ -46,6 +49,7 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
     settings,
     metadata,
     scanner,
+    checksums,
     downloadTokens,
     images,
     cookiePath,

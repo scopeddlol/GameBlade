@@ -149,7 +149,10 @@ exists to remove that failure mode.
   it stopped.
 - **Retries with backoff** — a flaky tunnel recovers on its own instead of failing
   the download.
-- **Verifies SHA-256** when the server supplies a checksum.
+- **Verifies SHA-256** when the server has a checksum for a file. Checksums are
+  opt-in per game — open a game as an administrator and press **Compute
+  checksums** — because hashing reads every byte and is far too expensive to do
+  automatically across a multi-terabyte archive.
 - Signs in with a **device token stored in the Windows Credential Manager**, never
   a password on disk. Each device is listed and revocable from **Settings**.
 

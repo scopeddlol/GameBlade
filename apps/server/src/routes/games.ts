@@ -273,6 +273,34 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
+  /**
+   * Compute SHA-256 for a game's files, enabling end-to-end verification in the
+   * desktop client. Opt-in per game because it reads every byte from disk.
+   */
+  app.post('/games/:id/checksums', async (request, reply) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const { force } = (request.body ?? {}) as { force?: boolean };
+
+    const game = db.select().from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    if (app.gameblade.checksums.isRunning) {
+      return reply.code(409).send({
+        error: { code: 'checksums_in_progress', message: 'Checksums are already being computed' },
+      });
+    }
+
+    // Runs in the background; the client polls progress.
+    void app.gameblade.checksums.start(id, { force: force ?? false });
+    return reply.code(202).send({ started: true });
+  });
+
+  app.get('/games/checksums/progress', async (request) => {
+    requireAdmin(request);
+    return app.gameblade.checksums.getProgress();
+  });
+
   /** Exclude a game from future auto-matching without deleting it. */
   app.post('/games/:id/skip-match', async (request) => {
     requireAdmin(request);
