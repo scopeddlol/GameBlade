@@ -1,0 +1,28 @@
+node_modules/
+dist/
+build/
+out/
+coverage/
+*.tsbuildinfo
+
+# Runtime data — database, cached artwork, logs
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Tauri
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

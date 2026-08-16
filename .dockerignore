@@ -1,0 +1,17 @@
+**/node_modules
+**/dist
+**/build
+**/coverage
+**/*.tsbuildinfo
+
+data/
+.git/
+.github/
+.env
+.env.*
+!.env.example
+
+apps/desktop/
+docs/
+*.md
+!README.md

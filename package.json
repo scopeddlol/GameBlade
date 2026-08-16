@@ -1,0 +1,29 @@
+{
+  "name": "gameblade",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted game archive server with a Jellyfin-style library, IGDB/SteamGridDB metadata, invite-only multi-user access and a Windows desktop client.",
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/server\" --filter \"./apps/web\" dev",
+    "dev:server": "pnpm --filter @gameblade/server dev",
+    "dev:web": "pnpm --filter @gameblade/web dev",
+    "dev:desktop": "pnpm --filter @gameblade/desktop dev",
+    "build": "pnpm --filter @gameblade/shared build && pnpm --filter @gameblade/server build && pnpm --filter @gameblade/web build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md,yml,yaml,css}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,yml,yaml,css}\"",
+    "docker:build": "docker build -t gameblade:local .",
+    "docker:up": "docker compose up -d"
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3"
+  }
+}
