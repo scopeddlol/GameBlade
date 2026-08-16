@@ -73,9 +73,7 @@ export const gameQuerySchema = z.object({
   matchStatus: z.enum(['unmatched', 'auto', 'manual', 'skipped']).optional(),
   favoritesOnly: z.coerce.boolean().optional(),
   includeMissing: z.coerce.boolean().default(false),
-  sort: z
-    .enum(['title', 'added', 'released', 'size', 'rating'])
-    .default('title'),
+  sort: z.enum(['title', 'added', 'released', 'size', 'rating']).default('title'),
   order: z.enum(['asc', 'desc']).default('asc'),
   offset: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(200).default(60),

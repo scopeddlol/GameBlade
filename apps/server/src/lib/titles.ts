@@ -112,10 +112,7 @@ export function parseTitle(rawName: string, isArchive: boolean): string {
 
 /** Title used for provider lookups: no trailing year, no edition suffix noise. */
 export function toSearchTitle(title: string): string {
-  return title
-    .replace(TRAILING_YEAR_PATTERN, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return title.replace(TRAILING_YEAR_PATTERN, '').replace(/\s+/g, ' ').trim();
 }
 
 /** Case- and article-insensitive key used for alphabetical ordering. */

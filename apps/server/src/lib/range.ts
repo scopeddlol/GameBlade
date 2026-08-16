@@ -5,9 +5,7 @@ export interface ByteRange {
 }
 
 export type RangeResult =
-  | { type: 'none' }
-  | { type: 'satisfiable'; range: ByteRange }
-  | { type: 'unsatisfiable' };
+  { type: 'none' } | { type: 'satisfiable'; range: ByteRange } | { type: 'unsatisfiable' };
 
 /**
  * Parse a single-range `Range: bytes=...` header.

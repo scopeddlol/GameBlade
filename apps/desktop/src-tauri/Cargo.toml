@@ -1,0 +1,52 @@
+[package]
+name = "gameblade-desktop"
+version = "0.1.0"
+description = "GameBlade desktop client"
+authors = ["GameBlade"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "gameblade_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-store = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Download engine
+reqwest = { version = "0.12", default-features = false, features = [
+    "stream",
+    "json",
+    "rustls-tls",
+    "http2",
+] }
+tokio = { version = "1", features = ["fs", "io-util", "sync", "time", "macros", "rt-multi-thread"] }
+futures-util = "0.3"
+sha2 = "0.10"
+hex = "0.4"
+thiserror = "2"
+
+# Device tokens live in the OS credential store, never on disk in plain text.
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
+
+[features]
+# Enabled by tauri when building without the dev server.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+# A downloader should be small and quick to start; optimise for size and strip
+# symbols rather than chasing peak throughput we would never reach over a WAN.
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

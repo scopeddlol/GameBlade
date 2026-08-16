@@ -75,7 +75,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       refresh,
       signOut,
     }),
-    [sessionQuery.data, sessionQuery.isLoading, statusQuery.data, statusQuery.isLoading, refresh, signOut],
+    [
+      sessionQuery.data,
+      sessionQuery.isLoading,
+      statusQuery.data,
+      statusQuery.isLoading,
+      refresh,
+      signOut,
+    ],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

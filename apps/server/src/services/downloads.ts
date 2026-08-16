@@ -27,7 +27,10 @@ const SECRET_KEY = 'downloadTokenSecret';
 export class DownloadTokenService {
   private secret: Buffer;
 
-  constructor(private readonly db: Db, envSecret: string | null) {
+  constructor(
+    private readonly db: Db,
+    envSecret: string | null,
+  ) {
     this.secret = envSecret ? Buffer.from(envSecret, 'utf8') : this.loadOrCreateSecret();
   }
 
@@ -51,7 +54,10 @@ export class DownloadTokenService {
     return generated;
   }
 
-  issue(claims: Omit<DownloadClaims, 'expiresAt'>, ttlSeconds = DOWNLOAD_TOKEN_TTL_SECONDS): {
+  issue(
+    claims: Omit<DownloadClaims, 'expiresAt'>,
+    ttlSeconds = DOWNLOAD_TOKEN_TTL_SECONDS,
+  ): {
     token: string;
     expiresAt: string;
   } {

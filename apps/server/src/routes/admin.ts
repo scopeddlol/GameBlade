@@ -154,7 +154,9 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     };
 
     db.insert(invites).values(invite).run();
-    return reply.code(201).send({ ...invite, isValid: true, createdByUsername: context.user.username });
+    return reply
+      .code(201)
+      .send({ ...invite, isValid: true, createdByUsername: context.user.username });
   });
 
   app.delete('/admin/invites/:id', async (request) => {
@@ -303,9 +305,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         ? { allowSelfRegistration: input.allowSelfRegistration }
         : {}),
       ...(input.igdbClientId !== undefined ? { igdbClientId: input.igdbClientId } : {}),
-      ...(input.igdbClientSecret !== undefined
-        ? { igdbClientSecret: input.igdbClientSecret }
-        : {}),
+      ...(input.igdbClientSecret !== undefined ? { igdbClientSecret: input.igdbClientSecret } : {}),
       ...(input.steamGridDbKey !== undefined ? { steamGridDbKey: input.steamGridDbKey } : {}),
     });
 
@@ -337,7 +337,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       .get();
 
     const userCount =
-      db.select({ count: sql<number>`count(*)` }).from(users).get()?.count ?? 0;
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(users)
+        .get()?.count ?? 0;
 
     return {
       games: gameStats?.total ?? 0,
@@ -345,7 +348,11 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       matched: gameStats?.matched ?? 0,
       missing: gameStats?.missing ?? 0,
       users: userCount,
-      libraries: db.select({ count: sql<number>`count(*)` }).from(libraries).get()?.count ?? 0,
+      libraries:
+        db
+          .select({ count: sql<number>`count(*)` })
+          .from(libraries)
+          .get()?.count ?? 0,
       basePath: config.basePath,
       scan: scanner.getProgress(),
     };

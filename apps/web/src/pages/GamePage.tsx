@@ -265,9 +265,7 @@ export function GamePage() {
         </section>
       ) : null}
 
-      {isAdmin && matchOpen ? (
-        <MatchPanel game={game} onDone={() => setMatchOpen(false)} />
-      ) : null}
+      {isAdmin && matchOpen ? <MatchPanel game={game} onDone={() => setMatchOpen(false)} /> : null}
     </div>
   );
 }

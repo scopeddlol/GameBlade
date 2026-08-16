@@ -60,9 +60,7 @@ export function LoginPage() {
       const from = (location.state as { from?: string } | null)?.from;
       navigate(from ?? '/', { replace: true });
     } catch (caught) {
-      setError(
-        caught instanceof ApiRequestError ? caught.message : 'Could not reach the server.',
-      );
+      setError(caught instanceof ApiRequestError ? caught.message : 'Could not reach the server.');
     } finally {
       setSubmitting(false);
     }

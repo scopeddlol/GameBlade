@@ -172,10 +172,7 @@ async function registerWebClient(app: FastifyInstance, config: Config): Promise<
   const indexPath = path.join(config.webRoot, 'index.html');
   const rawIndex = await readFile(indexPath, 'utf8');
   const baseHref = config.basePath === '' ? '/' : `${config.basePath}/`;
-  const indexHtml = rawIndex.replace(
-    /<base\s+href="[^"]*"\s*\/?>/i,
-    `<base href="${baseHref}" />`,
-  );
+  const indexHtml = rawIndex.replace(/<base\s+href="[^"]*"\s*\/?>/i, `<base href="${baseHref}" />`);
 
   if (!/<base\s+href=/i.test(rawIndex)) {
     app.log.warn('index.html has no <base href> tag — sub-path hosting will not work');

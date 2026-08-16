@@ -13,10 +13,7 @@ export interface DbHandle {
   sqlite: Database.Database;
 }
 
-export function createDb(
-  databasePath: string,
-  logger?: { info: (msg: string) => void },
-): DbHandle {
+export function createDb(databasePath: string, logger?: { info: (msg: string) => void }): DbHandle {
   mkdirSync(path.dirname(databasePath), { recursive: true });
 
   const sqlite = new Database(databasePath);
@@ -45,7 +42,10 @@ function applyMigrations(
   )`);
 
   const applied = new Set(
-    sqlite.prepare<[], { id: string }>('SELECT id FROM _migrations').all().map((r) => r.id),
+    sqlite
+      .prepare<[], { id: string }>('SELECT id FROM _migrations')
+      .all()
+      .map((r) => r.id),
   );
 
   for (const migration of migrations) {

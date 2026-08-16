@@ -1,0 +1,81 @@
+services:
+  gameblade:
+    # Pull the image CI publishes. To build locally instead, comment `image`
+    # out and uncomment `build`.
+    image: ghcr.io/scopeddlol/gameblade:latest
+    # build:
+    #   context: .
+    container_name: gameblade
+    restart: unless-stopped
+
+    environment:
+      # --- Core ---
+      TZ: ${TZ:-Etc/UTC}
+      PORT: 8080
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Comma-separated library roots *inside the container*. These are
+      # registered automatically on first start.
+      LIBRARY_PATHS: /library
+
+      # --- Reverse proxy ---
+      # Required behind Pangolin/Traefik/nginx so client IPs and the https
+      # scheme are read from X-Forwarded-* instead of the proxy's own address.
+      TRUST_PROXY: ${TRUST_PROXY:-true}
+      # Set only when hosting under a sub-path, e.g. /gameblade.
+      BASE_PATH: ${BASE_PATH:-}
+      # 'auto' marks cookies Secure when X-Forwarded-Proto is https.
+      SECURE_COOKIES: ${SECURE_COOKIES:-auto}
+
+      # --- First-run administrator (optional) ---
+      # Only applied while no accounts exist. Leave unset to create the first
+      # admin through the web UI instead.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+
+      # Invite-only by default. Admins can flip this in Settings.
+      ALLOW_SELF_REGISTRATION: ${ALLOW_SELF_REGISTRATION:-false}
+
+      # --- Metadata providers (optional; can also be set in the UI) ---
+      IGDB_CLIENT_ID: ${IGDB_CLIENT_ID:-}
+      IGDB_CLIENT_SECRET: ${IGDB_CLIENT_SECRET:-}
+      STEAMGRIDDB_API_KEY: ${STEAMGRIDDB_API_KEY:-}
+
+      # --- Scanning ---
+      SCAN_ON_START: ${SCAN_ON_START:-true}
+      SCAN_INTERVAL_MINUTES: ${SCAN_INTERVAL_MINUTES:-360}
+
+    volumes:
+      # Database and cached artwork.
+      - ./data:/data
+      # Your archive. Read-only: GameBlade never needs to modify these files,
+      # and :ro means a bug or a compromise cannot damage the collection.
+      - ${LIBRARY_PATH:-/mnt/games}:/library:ro
+
+    # Published only for direct/LAN access. Behind Pangolin's tunnel this can be
+    # removed entirely so nothing is exposed on the host.
+    ports:
+      - '${HTTP_PORT:-8080}:8080'
+
+    # SQLite plus streaming file I/O; the ceiling exists to catch a runaway, not
+    # because normal operation needs anywhere near this much.
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get({host:'127.0.0.1',port:8080,path:(process.env.BASE_PATH||'')+'/api/health'},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    security_opt:
+      - no-new-privileges:true

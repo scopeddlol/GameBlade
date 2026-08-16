@@ -74,7 +74,10 @@ export class AuthService {
   }
 
   countUsers(): number {
-    const row = this.db.select({ count: sql<number>`count(*)` }).from(users).get();
+    const row = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(users)
+      .get();
     return row?.count ?? 0;
   }
 
@@ -109,11 +112,7 @@ export class AuthService {
       throw ApiError.forbidden('This account has been disabled');
     }
 
-    this.db
-      .update(users)
-      .set({ lastLoginAt: isoNow() })
-      .where(eq(users.id, user.id))
-      .run();
+    this.db.update(users).set({ lastLoginAt: isoNow() }).where(eq(users.id, user.id)).run();
     return user;
   }
 
@@ -171,7 +170,10 @@ export class AuthService {
   }
 
   destroySession(token: string): void {
-    this.db.delete(sessions).where(eq(sessions.tokenHash, hashToken(token))).run();
+    this.db
+      .delete(sessions)
+      .where(eq(sessions.tokenHash, hashToken(token)))
+      .run();
   }
 
   destroyAllSessions(userId: string): void {
@@ -246,11 +248,7 @@ export class AuthService {
    */
   claimInvite(rawCode: string): Role {
     const code = normaliseInviteCode(rawCode);
-    const invite = this.db
-      .select()
-      .from(invites)
-      .where(eq(invites.code, code))
-      .get();
+    const invite = this.db.select().from(invites).where(eq(invites.code, code)).get();
 
     if (!invite) throw ApiError.badRequest('That invite code is not valid');
     if (invite.revokedAt) throw ApiError.gone('That invite has been revoked');
@@ -272,7 +270,11 @@ export class AuthService {
     return invite.role;
   }
 
-  async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
     const user = this.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
 

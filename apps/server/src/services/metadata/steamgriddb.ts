@@ -67,9 +67,7 @@ export class SteamGridDbClient {
   }
 
   async search(term: string): Promise<SgdbGame[]> {
-    const data = await this.request<SgdbGame[]>(
-      `/search/autocomplete/${encodeURIComponent(term)}`,
-    );
+    const data = await this.request<SgdbGame[]>(`/search/autocomplete/${encodeURIComponent(term)}`);
     return data ?? [];
   }
 

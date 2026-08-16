@@ -4,7 +4,10 @@ const TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
 const API_URL = 'https://api.igdb.com/v4';
 
 /** IGDB serves every asset from one CDN; `t_*` selects the rendition. */
-export function igdbImageUrl(imageId: string, size: 'cover_big' | '1080p' | 'screenshot_big' | 'thumb'): string {
+export function igdbImageUrl(
+  imageId: string,
+  size: 'cover_big' | '1080p' | 'screenshot_big' | 'thumb',
+): string {
   return `https://images.igdb.com/igdb/image/upload/t_${size}/${imageId}.jpg`;
 }
 

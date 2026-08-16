@@ -39,5 +39,8 @@ export function newInviteCode(): string {
 }
 
 export function normaliseInviteCode(code: string): string {
-  return code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return code
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
 }

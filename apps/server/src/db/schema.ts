@@ -217,7 +217,10 @@ export const downloadEvents = sqliteTable(
     finishedAt: text('finished_at'),
     completed: integer('completed', { mode: 'boolean' }).notNull().default(false),
   },
-  (t) => [index('download_events_user_idx').on(t.userId), index('download_events_game_idx').on(t.gameId)],
+  (t) => [
+    index('download_events_user_idx').on(t.userId),
+    index('download_events_game_idx').on(t.gameId),
+  ],
 );
 
 /** Free-form key/value store for runtime settings and provider credentials. */

@@ -80,7 +80,9 @@ export class ScannerService {
    * Start a scan unless one is already in flight, in which case the existing
    * run is returned so callers never queue duplicate work.
    */
-  scan(options: { libraryId?: string; force?: boolean; fetchMetadata?: boolean } = {}): Promise<void> {
+  scan(
+    options: { libraryId?: string; force?: boolean; fetchMetadata?: boolean } = {},
+  ): Promise<void> {
     if (this.running) return this.running;
 
     this.running = this.runScan(options)

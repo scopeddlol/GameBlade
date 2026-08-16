@@ -148,7 +148,9 @@ function LibrariesTab() {
               <div className="bg-ink-700 h-1.5 w-full overflow-hidden rounded-full">
                 <div
                   className="bg-blade-500 h-full transition-all"
-                  style={{ width: `${Math.min(100, (progress.processed / progress.total) * 100)}%` }}
+                  style={{
+                    width: `${Math.min(100, (progress.processed / progress.total) * 100)}%`,
+                  }}
                 />
               </div>
             ) : null}
@@ -306,8 +308,7 @@ function UsersTab() {
           <div key={user.id} className="flex flex-wrap items-center gap-3 py-3">
             <div className="min-w-[160px] flex-1">
               <p className="text-sm font-medium">
-                {user.username}{' '}
-                {user.role === 'admin' ? <Badge tone="info">Admin</Badge> : null}
+                {user.username} {user.role === 'admin' ? <Badge tone="info">Admin</Badge> : null}
                 {user.isActive ? null : <Badge tone="danger">Disabled</Badge>}
               </p>
               <p className="text-ink-400 text-xs">
@@ -668,7 +669,11 @@ function ProvidersTab() {
           <Field
             label="IGDB client secret"
             htmlFor="igdbSecret"
-            hint={settings?.igdbClientSecretSet ? 'A secret is saved. Leave blank to keep it.' : undefined}
+            hint={
+              settings?.igdbClientSecretSet
+                ? 'A secret is saved. Leave blank to keep it.'
+                : undefined
+            }
           >
             <input
               id="igdbSecret"

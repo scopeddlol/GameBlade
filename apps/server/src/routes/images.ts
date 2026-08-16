@@ -19,7 +19,8 @@ export async function imageRoutes(app: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const { token } = request.query as { token?: string };
 
-    const authorised = request.auth !== null || (token ? auth.resolveDeviceToken(token) !== null : false);
+    const authorised =
+      request.auth !== null || (token ? auth.resolveDeviceToken(token) !== null : false);
     if (!authorised) throw ApiError.unauthorized();
 
     const record = images.findById(id);
@@ -34,12 +35,14 @@ export async function imageRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(304).send();
     }
 
-    return reply
-      .header('Content-Type', record.contentType)
-      .header('Content-Length', String(info.size))
-      .header('ETag', etag)
-      // Each id maps to one immutable cached file, so this can cache forever.
-      .header('Cache-Control', 'private, max-age=31536000, immutable')
-      .send(createReadStream(filePath));
+    return (
+      reply
+        .header('Content-Type', record.contentType)
+        .header('Content-Length', String(info.size))
+        .header('ETag', etag)
+        // Each id maps to one immutable cached file, so this can cache forever.
+        .header('Cache-Control', 'private, max-age=31536000, immutable')
+        .send(createReadStream(filePath))
+    );
   });
 }

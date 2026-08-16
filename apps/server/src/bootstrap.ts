@@ -90,28 +90,22 @@ export function startSchedules(app: FastifyInstance): () => void {
   }
 
   if (config.scanIntervalMinutes > 0) {
-    const interval = setInterval(
-      () => {
-        if (scanner.isRunning) return;
-        app.log.info('starting scheduled library scan');
-        void scanner.scan({ fetchMetadata: true });
-      },
-      config.scanIntervalMinutes * 60_000,
-    );
+    const interval = setInterval(() => {
+      if (scanner.isRunning) return;
+      app.log.info('starting scheduled library scan');
+      void scanner.scan({ fetchMetadata: true });
+    }, config.scanIntervalMinutes * 60_000);
     interval.unref();
     timers.push(interval);
   }
 
-  const cleanup = setInterval(
-    () => {
-      try {
-        auth.pruneExpired();
-      } catch (error) {
-        app.log.warn({ err: error }, 'failed to prune expired sessions');
-      }
-    },
-    60 * 60_000,
-  );
+  const cleanup = setInterval(() => {
+    try {
+      auth.pruneExpired();
+    } catch (error) {
+      app.log.warn({ err: error }, 'failed to prune expired sessions');
+    }
+  }, 60 * 60_000);
   cleanup.unref();
   timers.push(cleanup);
 

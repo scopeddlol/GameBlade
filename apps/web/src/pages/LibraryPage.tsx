@@ -65,7 +65,10 @@ export function LibraryPage() {
     staleTime: 5 * 60_000,
   });
 
-  const listKey = ['games', { search, genre, platform, libraryId, favoritesOnly, sort, order, page }];
+  const listKey = [
+    'games',
+    { search, genre, platform, libraryId, favoritesOnly, sort, order, page },
+  ];
 
   const gamesQuery = useQuery({
     queryKey: listKey,
@@ -123,7 +126,10 @@ export function LibraryPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative min-w-[220px] flex-1">
-          <Search className="text-ink-400 absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" aria-hidden />
+          <Search
+            className="text-ink-400 absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2"
+            aria-hidden
+          />
           <input
             type="search"
             className="gb-input pl-9"

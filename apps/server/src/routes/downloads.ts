@@ -227,8 +227,7 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const gameRoot = resolveWithin(libraryPath, game.relPath);
-      const candidate =
-        game.kind === 'archive' ? gameRoot : resolveWithin(gameRoot, file.relPath);
+      const candidate = game.kind === 'archive' ? gameRoot : resolveWithin(gameRoot, file.relPath);
       const absolute = await assertRealPathWithin(libraryPath, candidate);
 
       return streamFile(request, reply, {

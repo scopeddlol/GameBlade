@@ -29,11 +29,7 @@ declare module 'fastify' {
   }
 }
 
-export function createContext(
-  config: Config,
-  db: Db,
-  logger: FastifyBaseLogger,
-): GamebladeContext {
+export function createContext(config: Config, db: Db, logger: FastifyBaseLogger): GamebladeContext {
   const settings = new SettingsService(db, config);
   const images = new ImageCache(db, config.imageCacheDir, logger);
   const metadata = new MetadataService(db, settings, images, logger);

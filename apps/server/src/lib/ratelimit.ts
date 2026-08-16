@@ -82,7 +82,11 @@ export function sleep(ms: number): Promise<void> {
 /** Retry with exponential backoff, honouring an upstream `Retry-After` header. */
 export async function withRetry<T>(
   fn: () => Promise<T>,
-  options: { attempts?: number; baseDelayMs?: number; onRetry?: (error: unknown, attempt: number) => void } = {},
+  options: {
+    attempts?: number;
+    baseDelayMs?: number;
+    onRetry?: (error: unknown, attempt: number) => void;
+  } = {},
 ): Promise<T> {
   const attempts = options.attempts ?? 3;
   const baseDelay = options.baseDelayMs ?? 500;

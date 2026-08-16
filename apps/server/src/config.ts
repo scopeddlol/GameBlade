@@ -2,12 +2,10 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 
-const booleanish = z
-  .union([z.boolean(), z.string()])
-  .transform((v) => {
-    if (typeof v === 'boolean') return v;
-    return ['1', 'true', 'yes', 'on'].includes(v.trim().toLowerCase());
-  });
+const booleanish = z.union([z.boolean(), z.string()]).transform((v) => {
+  if (typeof v === 'boolean') return v;
+  return ['1', 'true', 'yes', 'on'].includes(v.trim().toLowerCase());
+});
 
 /**
  * `TRUST_PROXY` accepts the same values Fastify does: a boolean, a hop count,
@@ -21,7 +19,10 @@ function parseTrustProxy(raw: string | undefined): boolean | number | string[] {
   if (['1', 'true', 'yes', 'on'].includes(value.toLowerCase())) return true;
   if (['0', 'false', 'no', 'off'].includes(value.toLowerCase())) return false;
   if (/^\d+$/.test(value)) return Number(value);
-  return value.split(',').map((s) => s.trim()).filter(Boolean);
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 /** Normalises `/gameblade/` and `gameblade` alike to `/gameblade`; root is ''. */
@@ -96,7 +97,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     basePath: normaliseBasePath(e.BASE_PATH),
     trustProxy: parseTrustProxy(e.TRUST_PROXY),
     secureCookies: e.SECURE_COOKIES as boolean | 'auto',
-    corsOrigins: e.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean),
+    corsOrigins: e.CORS_ORIGINS.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
 
     sessionSecret: e.SESSION_SECRET ?? null,
     bootstrapAdmin:

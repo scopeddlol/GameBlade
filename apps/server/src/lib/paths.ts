@@ -88,12 +88,7 @@ export function sanitiseFilename(name: string): string {
     if (FORBIDDEN_FILENAME_CHARS.has(ch)) continue;
     out += ch;
   }
-  const cleaned = out
-    .replace(/\s+/g, ' ')
-    .replace(/^\.+/, '')
-    .trim()
-    .slice(0, 200)
-    .trim();
+  const cleaned = out.replace(/\s+/g, ' ').replace(/^\.+/, '').trim().slice(0, 200).trim();
   return cleaned || 'download';
 }
 
