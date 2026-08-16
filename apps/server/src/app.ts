@@ -4,7 +4,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import type { ApiErrorBody } from '@gameblade/shared';
-import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
+import Fastify, { LogController, type FastifyError, type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import { createAuthHook } from './auth/middleware.js';
 import type { Config } from './config.js';
@@ -34,7 +34,15 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
     requestTimeout: 0,
     keepAliveTimeout: 76_000,
     bodyLimit: 1024 * 1024,
-    disableRequestLogging: config.logLevel !== 'debug' && config.logLevel !== 'trace',
+    logController: new LogController({
+      // A poster grid pulls dozens of images and a desktop download opens many
+      // parallel connections; logging each would bury everything that matters.
+      // Unless debugging, only non-asset routes produce request logs.
+      disableRequestLogging: (request) => {
+        if (config.logLevel === 'debug' || config.logLevel === 'trace') return false;
+        return request.url.includes('/api/images/') || request.url.includes('/api/download/');
+      },
+    }),
   });
 
   const { db } = createDb(config.databasePath, app.log);

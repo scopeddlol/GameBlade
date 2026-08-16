@@ -120,6 +120,17 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       : undefined;
     const parsed = parseRange(rangeHeader, info.size);
 
+    // Answered before the octet-stream headers below, so the error body is still
+    // serialised as JSON rather than rejected as an invalid binary payload.
+    if (parsed.type === 'unsatisfiable') {
+      return reply
+        .code(416)
+        .header('Accept-Ranges', 'bytes')
+        .header('Content-Range', `bytes */${info.size}`)
+        .type('application/json')
+        .send({ error: { code: 'range_not_satisfiable', message: 'Requested range is invalid' } });
+    }
+
     reply
       .header('Accept-Ranges', 'bytes')
       .header('Content-Type', 'application/octet-stream')
@@ -129,13 +140,6 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       // Nothing between here and the client should transform or buffer the body.
       .header('Cache-Control', 'private, no-transform')
       .header('X-Accel-Buffering', 'no');
-
-    if (parsed.type === 'unsatisfiable') {
-      return reply
-        .code(416)
-        .header('Content-Range', `bytes */${info.size}`)
-        .send({ error: { code: 'range_not_satisfiable', message: 'Requested range is invalid' } });
-    }
 
     const start = parsed.type === 'satisfiable' ? parsed.range.start : 0;
     const end = parsed.type === 'satisfiable' ? parsed.range.end : Math.max(0, info.size - 1);

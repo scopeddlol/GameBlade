@@ -1,0 +1,12 @@
+# Normalise to LF in the repository. The image is built on Linux, where a CRLF
+# in a shell script or entrypoint is a runtime failure.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.zip binary
+*.gz binary
+pnpm-lock.yaml -diff
