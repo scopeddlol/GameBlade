@@ -45,6 +45,12 @@ services:
       SCAN_ON_START: ${SCAN_ON_START:-true}
       SCAN_INTERVAL_MINUTES: ${SCAN_INTERVAL_MINUTES:-360}
 
+    # The container runs as uid 1000. A bind-mounted ./data owned by root leaves
+    # SQLite unable to create its database file, so either chown it:
+    #   sudo chown -R 1000:1000 ./data
+    # or uncomment this and set it to your own `id -u`:`id -g`.
+    # user: '1000:1000'
+
     volumes:
       # Database and cached artwork.
       - ./data:/data

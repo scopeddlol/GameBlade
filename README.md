@@ -34,6 +34,17 @@ docker compose up -d
 Open `http://<host>:8080` and create the first administrator account. That
 first-run screen is only available while the database has no users.
 
+> **If it fails to start with a database error**, the `data` folder is almost
+> certainly owned by root while the container runs as uid 1000. SQLite is built
+> into the image — nothing to install — it just cannot create its file:
+>
+> ```bash
+> sudo chown -R 1000:1000 ./data
+> ```
+>
+> Alternatively set `user: "1000:1000"` on the service to match your own
+> `id -u`/`id -g`.
+
 ### What a library looks like
 
 Anything at the top level of a library root is treated as one game — either a

@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { accessSync, constants, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
@@ -14,7 +14,8 @@ export interface DbHandle {
 }
 
 export function createDb(databasePath: string, logger?: { info: (msg: string) => void }): DbHandle {
-  mkdirSync(path.dirname(databasePath), { recursive: true });
+  const dataDir = path.dirname(databasePath);
+  assertDataDirWritable(dataDir);
 
   const sqlite = new Database(databasePath);
 
@@ -30,6 +31,49 @@ export function createDb(databasePath: string, logger?: { info: (msg: string) =>
 
   const db = drizzle(sqlite, { schema });
   return { db, sqlite };
+}
+
+/**
+ * SQLite is embedded, so a "database" failure at boot is almost always the data
+ * directory not being writable — typically a bind mount owned by root while the
+ * container runs as uid 1000. Raw SQLITE_CANTOPEN says none of that, so the
+ * cause and the fix are reported explicitly instead.
+ */
+function assertDataDirWritable(dataDir: string): void {
+  try {
+    mkdirSync(dataDir, { recursive: true });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EACCES' || code === 'EPERM') {
+      throw new Error(buildPermissionMessage(dataDir, 'could not be created'));
+    }
+    throw error;
+  }
+
+  try {
+    accessSync(dataDir, constants.W_OK | constants.X_OK);
+  } catch {
+    throw new Error(buildPermissionMessage(dataDir, 'is not writable'));
+  }
+}
+
+function buildPermissionMessage(dataDir: string, problem: string): string {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const gid = typeof process.getgid === 'function' ? process.getgid() : null;
+  const identity = uid === null ? 'this process' : `uid ${uid}${gid === null ? '' : `:${gid}`}`;
+
+  return [
+    `The data directory "${dataDir}" ${problem} by ${identity}.`,
+    '',
+    'GameBlade stores its SQLite database there. In Docker this usually means the',
+    'bind-mounted host folder is owned by a different user than the container.',
+    '',
+    'Fix it on the host with:',
+    `  sudo chown -R ${uid ?? 1000}:${gid ?? 1000} <the folder you mounted at ${dataDir}>`,
+    '',
+    'Or run the container as the owning user by adding to your compose service:',
+    '  user: "1000:1000"   # replace with your own values from: id -u && id -g',
+  ].join('\n');
 }
 
 function applyMigrations(
