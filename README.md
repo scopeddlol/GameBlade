@@ -64,10 +64,10 @@ Both are optional — GameBlade runs fine without them, it just shows titles and
 file sizes instead of artwork. Add credentials in **Admin → Metadata**, or via
 environment variables.
 
-| Provider         | What it supplies                              | Where to get credentials                                                       |
-| ---------------- | --------------------------------------------- | ------------------------------------------------------------------------------ |
-| **IGDB**         | Summaries, release dates, genres, ratings      | Create an app at [dev.twitch.tv](https://dev.twitch.tv/console/apps) — IGDB uses Twitch OAuth |
-| **SteamGridDB**  | Posters, hero banners, logos, icons            | Your [SteamGridDB API preferences](https://www.steamgriddb.com/profile/preferences/api) |
+| Provider        | What it supplies                          | Where to get credentials                                                                      |
+| --------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **IGDB**        | Summaries, release dates, genres, ratings | Create an app at [dev.twitch.tv](https://dev.twitch.tv/console/apps) — IGDB uses Twitch OAuth |
+| **SteamGridDB** | Posters, hero banners, logos, icons       | Your [SteamGridDB API preferences](https://www.steamgriddb.com/profile/preferences/api)       |
 
 IGDB enforces 4 requests/second; GameBlade rate-limits itself to stay under that,
 so a first scan of a large library takes a while but never gets throttled out.
@@ -171,22 +171,22 @@ Everything is optional except a library path. Values set in the admin UI take
 precedence over environment variables, so you can seed credentials via compose
 and change them later without touching the stack.
 
-| Variable                 | Default    | Purpose                                                     |
-| ------------------------ | ---------- | ----------------------------------------------------------- |
-| `LIBRARY_PATHS`          | —          | Comma-separated library roots **inside the container**       |
-| `DATA_DIR`               | `/data`    | Database and cached artwork                                  |
-| `PORT` / `HOST`          | `8080` / `0.0.0.0` | Listen address                                      |
-| `BASE_PATH`              | —          | Sub-path to host under, e.g. `/gameblade`                    |
-| `TRUST_PROXY`            | `false`    | `true`, a hop count, or a CIDR list                          |
-| `SECURE_COOKIES`         | `auto`     | `auto` follows `X-Forwarded-Proto`                           |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | — | Creates the first admin, only while no users exist   |
-| `ALLOW_SELF_REGISTRATION`| `false`    | Invite-only when false                                       |
-| `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` | — | Twitch application credentials             |
-| `STEAMGRIDDB_API_KEY`    | —          | SteamGridDB API key                                          |
-| `SCAN_ON_START`          | `true`     | Scan shortly after boot                                      |
-| `SCAN_INTERVAL_MINUTES`  | `360`      | Scheduled rescan interval; `0` disables                      |
-| `LOG_LEVEL`              | `info`     | `fatal` … `trace`                                            |
-| `SESSION_SECRET`         | generated  | Download-token signing key; set only for multiple replicas   |
+| Variable                                | Default            | Purpose                                                    |
+| --------------------------------------- | ------------------ | ---------------------------------------------------------- |
+| `LIBRARY_PATHS`                         | —                  | Comma-separated library roots **inside the container**     |
+| `DATA_DIR`                              | `/data`            | Database and cached artwork                                |
+| `PORT` / `HOST`                         | `8080` / `0.0.0.0` | Listen address                                             |
+| `BASE_PATH`                             | —                  | Sub-path to host under, e.g. `/gameblade`                  |
+| `TRUST_PROXY`                           | `false`            | `true`, a hop count, or a CIDR list                        |
+| `SECURE_COOKIES`                        | `auto`             | `auto` follows `X-Forwarded-Proto`                         |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD`     | —                  | Creates the first admin, only while no users exist         |
+| `ALLOW_SELF_REGISTRATION`               | `false`            | Invite-only when false                                     |
+| `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` | —                  | Twitch application credentials                             |
+| `STEAMGRIDDB_API_KEY`                   | —                  | SteamGridDB API key                                        |
+| `SCAN_ON_START`                         | `true`             | Scan shortly after boot                                    |
+| `SCAN_INTERVAL_MINUTES`                 | `360`              | Scheduled rescan interval; `0` disables                    |
+| `LOG_LEVEL`                             | `info`             | `fatal` … `trace`                                          |
+| `SESSION_SECRET`                        | generated          | Download-token signing key; set only for multiple replicas |
 
 ---
 
