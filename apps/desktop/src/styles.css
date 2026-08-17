@@ -1590,6 +1590,50 @@ textarea:focus {
   gap: 14px;
 }
 
+.storage-locations {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.storage-location {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: var(--ink-800);
+  border: 1px solid var(--ink-700);
+  border-radius: var(--radius);
+}
+.storage-location-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.storage-location-head .path {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  word-break: break-all;
+}
+.storage-location-actions {
+  display: flex;
+  gap: 7px;
+}
+.storage-location-pick {
+  width: 100%;
+  border: 1px solid var(--ink-700);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s ease;
+}
+.storage-location-pick:hover:not(:disabled) {
+  border-color: var(--blade-500);
+}
+.storage-location-pick:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .field {
   display: flex;
   flex-direction: column;

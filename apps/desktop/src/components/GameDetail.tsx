@@ -27,8 +27,9 @@ import {
   type DownloadState,
   type InstalledGame,
   type SaveRulePayload,
+  type StorageLocation,
 } from '../lib/ipc.js';
-import { Artwork, Badge, ErrorNote, Loading, ProgressBar, Spinner } from './ui.js';
+import { Artwork, Badge, ErrorNote, Loading, Modal, ProgressBar, Spinner } from './ui.js';
 
 interface Rules {
   save: SaveRule[];
@@ -58,6 +59,12 @@ export function GameDetailPanel({
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [showStoragePicker, setShowStoragePicker] = useState(false);
+
+  const locationsQuery = useQuery({
+    queryKey: ['storage-locations'],
+    queryFn: () => ipc.listStorageLocations(),
+  });
 
   const gameQuery = useQuery({
     queryKey: ['games', gameId],
@@ -94,14 +101,25 @@ export function GameDetailPanel({
   };
 
   const installMutation = useMutation({
-    mutationFn: () => ipc.startDownload(gameId),
+    mutationFn: (destination?: string) => ipc.startDownload(gameId, destination),
     onSuccess: () => {
+      setShowStoragePicker(false);
       setNotice('Download started — track it from the Downloads panel.');
       setError(null);
       void queryClient.invalidateQueries({ queryKey: ['downloads'] });
     },
     onError: (caught) => setError(errorMessage(caught)),
   });
+
+  const locations = locationsQuery.data ?? [];
+
+  const startInstall = () => {
+    if (locations.length > 1) {
+      setShowStoragePicker(true);
+    } else {
+      installMutation.mutate(undefined);
+    }
+  };
 
   const launchMutation = useMutation({
     mutationFn: async () => {
@@ -185,7 +203,7 @@ export function GameDetailPanel({
                   <button
                     type="button"
                     className={clsx('btn btn-primary btn-lg', isInstalling && 'btn-installing')}
-                    onClick={() => installMutation.mutate()}
+                    onClick={startInstall}
                     disabled={installMutation.isPending || isInstalling || game.isMissing}
                   >
                     {isInstalling ? (
@@ -298,7 +316,59 @@ export function GameDetailPanel({
           </>
         )}
       </div>
+
+      {showStoragePicker ? (
+        <StoragePickerModal
+          locations={locations}
+          pending={installMutation.isPending}
+          onChoose={(path) => installMutation.mutate(path)}
+          onClose={() => setShowStoragePicker(false)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function StoragePickerModal({
+  locations,
+  pending,
+  onChoose,
+  onClose,
+}: {
+  locations: StorageLocation[];
+  pending: boolean;
+  onChoose: (path: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title="Install to…" onClose={onClose}>
+      <div className="storage-locations">
+        {locations.map((location) => {
+          const usedPercent =
+            location.total_bytes > 0
+              ? ((location.total_bytes - location.available_bytes) / location.total_bytes) * 100
+              : 0;
+          return (
+            <button
+              key={location.path}
+              type="button"
+              className="storage-location storage-location-pick"
+              onClick={() => onChoose(location.path)}
+              disabled={pending}
+            >
+              <div className="storage-location-head">
+                <span className="path">{location.path}</span>
+                {location.is_default ? <Badge tone="info">Default</Badge> : null}
+              </div>
+              <ProgressBar value={usedPercent} />
+              <span className="muted small">
+                {formatBytes(location.available_bytes)} free of {formatBytes(location.total_bytes)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </Modal>
   );
 }
 

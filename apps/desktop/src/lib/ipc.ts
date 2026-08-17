@@ -57,12 +57,21 @@ export interface RunningGame {
 
 export interface ClientSettings {
   installDir: string;
+  extraInstallDirs: string[];
   syncSaves: boolean;
   promptOnSaveConflict: boolean;
   shareActivity: boolean;
   minimizeOnLaunch: boolean;
   downloadConcurrency: number;
   verifyDownloads: boolean;
+}
+
+/** Mirrors the Rust `StorageLocation` struct, which serialises with snake_case. */
+export interface StorageLocation {
+  path: string;
+  is_default: boolean;
+  available_bytes: number;
+  total_bytes: number;
 }
 
 export interface SaveRulePayload {
@@ -128,6 +137,7 @@ export const ipc = {
   clearDownload: (gameId: string) => invoke<void>('clear_download', { gameId }),
   listDownloads: () => invoke<DownloadState[]>('list_downloads'),
   diskUsage: () => invoke<DiskUsage>('disk_usage'),
+  listStorageLocations: () => invoke<StorageLocation[]>('list_storage_locations'),
 
   /* ------------------------------------------------------------- installs */
 

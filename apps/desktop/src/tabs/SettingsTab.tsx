@@ -1,9 +1,17 @@
 import type { DeviceInfo, ProfileDetail, SaveSlotInfo } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { open } from '@tauri-apps/plugin-dialog';
-import { FolderOpen, LogOut, Trash2 } from 'lucide-react';
+import { FolderPlus, LogOut, Star, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Artwork, Avatar, Badge, ErrorNote, Loading, SectionHeader } from '../components/ui.js';
+import {
+  Artwork,
+  Avatar,
+  Badge,
+  ErrorNote,
+  Loading,
+  ProgressBar,
+  SectionHeader,
+} from '../components/ui.js';
 import { useSession } from '../hooks/useSession.js';
 import { formatBytes, formatRelative } from '../lib/format.js';
 import { errorMessage, ipc, type ClientSettings } from '../lib/ipc.js';
@@ -32,6 +40,7 @@ export function SettingsTab() {
       setNotice('Saved.');
       setError(null);
       void queryClient.invalidateQueries({ queryKey: ['settings'] });
+      void queryClient.invalidateQueries({ queryKey: ['storage-locations'] });
     },
     onError: (caught) => setError(errorMessage(caught)),
   });
@@ -41,15 +50,6 @@ export function SettingsTab() {
     const next = { ...draft, ...patch };
     setDraft(next);
     saveMutation.mutate(next);
-  };
-
-  const chooseFolder = async () => {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: 'Where should games be installed?',
-    });
-    if (typeof selected === 'string') update({ installDir: selected });
   };
 
   if (settingsQuery.isLoading || !draft) return <Loading label="Loading settings" />;
@@ -62,18 +62,15 @@ export function SettingsTab() {
       <ProfileSection onError={setError} />
 
       <section className="card">
-        <SectionHeader title="Downloads and installs" />
+        <SectionHeader
+          title="Storage locations"
+          subtitle="Where games install to. Installing a game offers a choice whenever more than one is set up."
+        />
+        <StorageLocationsField draft={draft} onUpdate={update} />
+      </section>
 
-        <label className="field">
-          <span>Install location</span>
-          <div className="row">
-            <input className="input" value={draft.installDir} readOnly />
-            <button type="button" className="btn btn-ghost" onClick={chooseFolder}>
-              <FolderOpen size={15} aria-hidden />
-              Change
-            </button>
-          </div>
-        </label>
+      <section className="card">
+        <SectionHeader title="Downloads and installs" />
 
         <label className="field">
           <span>Simultaneous transfers</span>
@@ -170,6 +167,93 @@ function Toggle({
         {hint ? <span className="muted small">{hint}</span> : null}
       </span>
     </label>
+  );
+}
+
+/**
+ * Manages the list of places a game may be installed to. Disk usage is
+ * fetched live rather than read off `draft`, since the settings object has
+ * no notion of free space — only the paths themselves.
+ */
+function StorageLocationsField({
+  draft,
+  onUpdate,
+}: {
+  draft: ClientSettings;
+  onUpdate: (patch: Partial<ClientSettings>) => void;
+}) {
+  const locationsQuery = useQuery({
+    queryKey: ['storage-locations'],
+    queryFn: () => ipc.listStorageLocations(),
+  });
+
+  const usageByPath = new Map((locationsQuery.data ?? []).map((loc) => [loc.path, loc]));
+
+  const addLocation = async () => {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: 'Add a storage location',
+    });
+    if (typeof selected !== 'string' || selected === draft.installDir) return;
+    if (draft.extraInstallDirs.includes(selected)) return;
+    onUpdate({ extraInstallDirs: [...draft.extraInstallDirs, selected] });
+  };
+
+  const makeDefault = (path: string) => {
+    onUpdate({
+      installDir: path,
+      extraInstallDirs: [draft.installDir, ...draft.extraInstallDirs.filter((dir) => dir !== path)],
+    });
+  };
+
+  const remove = (path: string) => {
+    onUpdate({ extraInstallDirs: draft.extraInstallDirs.filter((dir) => dir !== path) });
+  };
+
+  return (
+    <div className="storage-locations">
+      {[draft.installDir, ...draft.extraInstallDirs].map((path) => {
+        const usage = usageByPath.get(path);
+        const isDefault = path === draft.installDir;
+        const usedPercent =
+          usage && usage.total_bytes > 0
+            ? ((usage.total_bytes - usage.available_bytes) / usage.total_bytes) * 100
+            : 0;
+
+        return (
+          <div key={path} className="storage-location">
+            <div className="storage-location-head">
+              <span className="path">{path}</span>
+              {isDefault ? <Badge tone="info">Default</Badge> : null}
+            </div>
+            <ProgressBar value={usedPercent} />
+            <span className="muted small">
+              {usage
+                ? `${formatBytes(usage.available_bytes)} free of ${formatBytes(usage.total_bytes)}`
+                : 'Checking…'}
+            </span>
+            {!isDefault ? (
+              <div className="storage-location-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => makeDefault(path)}>
+                  <Star size={13} aria-hidden />
+                  Make default
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={() => remove(path)}>
+                  <Trash2 size={13} aria-hidden />
+                  Remove
+                </button>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+
+      <button type="button" className="btn btn-ghost" onClick={addLocation}>
+        <FolderPlus size={15} aria-hidden />
+        Add a location
+      </button>
+    </div>
   );
 }
 
