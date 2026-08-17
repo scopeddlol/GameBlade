@@ -1,4 +1,4 @@
-# Normalise to LF in the repository. The image is built on Linux, where a CRLF
+# Normalize to LF in the repository. The image is built on Linux, where a CRLF
 # in a shell script or entrypoint is a runtime failure.
 * text=auto eol=lf
 
