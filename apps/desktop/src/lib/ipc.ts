@@ -20,7 +20,7 @@ export interface UserInfo {
 }
 
 export type DownloadStatus =
-  'queued' | 'downloading' | 'verifying' | 'completed' | 'failed' | 'cancelled';
+  'queued' | 'downloading' | 'verifying' | 'completed' | 'failed' | 'canceled';
 
 /** Mirrors the Rust `DownloadState` struct, which serialises with snake_case. */
 export interface DownloadState {
@@ -60,7 +60,7 @@ export interface ClientSettings {
   syncSaves: boolean;
   promptOnSaveConflict: boolean;
   shareActivity: boolean;
-  minimiseOnLaunch: boolean;
+  minimizeOnLaunch: boolean;
   downloadConcurrency: number;
   verifyDownloads: boolean;
 }

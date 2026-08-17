@@ -49,7 +49,7 @@ export function DownloadQueue({
                           ? 'danger'
                           : download.status === 'completed'
                             ? 'success'
-                            : download.status === 'cancelled'
+                            : download.status === 'canceled'
                               ? 'neutral'
                               : 'info'
                       }

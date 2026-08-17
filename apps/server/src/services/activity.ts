@@ -129,7 +129,7 @@ export class ActivityService {
   ): ActivityEntry[] {
     if (rows.length === 0) return [];
 
-    const profiles = this.profiles.summariseMany(
+    const profiles = this.profiles.summarizeMany(
       rows.map((r) => r.userId),
       viewerId,
     );

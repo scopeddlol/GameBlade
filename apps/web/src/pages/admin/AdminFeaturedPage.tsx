@@ -62,7 +62,7 @@ export function AdminFeaturedPage() {
 
   const entries = featuredQuery.data ?? [];
 
-  /** Swaps an entry with its neighbour and persists the whole new order. */
+  /** Swaps an entry with its neighbor and persists the whole new order. */
   const move = (index: number, delta: number) => {
     const next = [...entries];
     const target = index + delta;
@@ -83,7 +83,7 @@ export function AdminFeaturedPage() {
 
       <section className="gb-card space-y-3 p-5">
         <h2 className="text-sm font-semibold tracking-wide uppercase">Add a game</h2>
-        <Field label="Search the catalogue" htmlFor="featuredSearch">
+        <Field label="Search the catalog" htmlFor="featuredSearch">
           <input
             id="featuredSearch"
             className="gb-input"

@@ -169,7 +169,7 @@ export const migrations: Migration[] = [
     `,
   },
   {
-    // Turns the catalogue into a platform: profiles, friends, per-user
+    // Turns the catalog into a platform: profiles, friends, per-user
     // libraries, playtime, achievements, cloud saves and the social feed.
     id: '0002_platform',
     sql: /* sql */ `

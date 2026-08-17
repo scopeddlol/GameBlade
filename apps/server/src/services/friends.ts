@@ -84,7 +84,7 @@ export class FriendService {
       })
       .run();
 
-    const requester = this.profiles.summariseOne(requesterId, targetId);
+    const requester = this.profiles.summarizeOne(requesterId, targetId);
     if (requester) {
       this.realtime.send(targetId, { type: 'friend-request', profile: requester });
       this.notifications.create({
@@ -120,7 +120,7 @@ export class FriendService {
       .where(eq(friendships.id, existing.id))
       .run();
 
-    const accepter = this.profiles.summariseOne(userId, requesterId);
+    const accepter = this.profiles.summarizeOne(userId, requesterId);
     if (accepter) {
       this.notifications.create({
         userId: requesterId,
@@ -139,7 +139,7 @@ export class FriendService {
       [userId, requesterId],
       [requesterId, userId],
     ] as const) {
-      const profile = this.profiles.summariseOne(subject, viewer);
+      const profile = this.profiles.summarizeOne(subject, viewer);
       if (profile) this.realtime.send(viewer, { type: 'presence', profile });
     }
   }
@@ -217,7 +217,7 @@ export class FriendService {
       .all();
 
     const friendIds = rows.map((r) => (r.a === userId ? r.b : r.a));
-    const profiles = this.profiles.summariseMany(friendIds, userId);
+    const profiles = this.profiles.summarizeMany(friendIds, userId);
     const shared = this.sharedGameCounts(userId, friendIds);
 
     return (
@@ -257,7 +257,7 @@ export class FriendService {
       .all();
 
     const otherIds = rows.map((r) => (r.userAId === userId ? r.userBId : r.userAId));
-    const profiles = this.profiles.summariseMany(otherIds, userId);
+    const profiles = this.profiles.summarizeMany(otherIds, userId);
 
     const incoming: FriendRequests['incoming'] = [];
     const outgoing: FriendRequests['outgoing'] = [];
@@ -282,7 +282,7 @@ export class FriendService {
       .all();
 
     const otherIds = rows.map((r) => (r.userAId === userId ? r.userBId : r.userAId));
-    const profiles = this.profiles.summariseMany(otherIds, userId);
+    const profiles = this.profiles.summarizeMany(otherIds, userId);
     return otherIds.flatMap((id) => {
       const profile = profiles.get(id);
       return profile ? [profile] : [];

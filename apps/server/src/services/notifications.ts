@@ -138,7 +138,7 @@ export class NotificationService {
     return {
       id: row.id,
       kind: row.kind as NotificationKind,
-      actor: row.actorId ? this.profiles.summariseOne(row.actorId, viewerId) : null,
+      actor: row.actorId ? this.profiles.summarizeOne(row.actorId, viewerId) : null,
       title: row.title,
       body: row.body,
       link: row.link,

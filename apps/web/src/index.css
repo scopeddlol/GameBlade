@@ -2,7 +2,7 @@
 
 /*
  * A dark, poster-first palette. The library is meant to be looked at, so the
- * chrome stays near-black and lets cover art supply the colour.
+ * chrome stays near-black and lets cover art supply the color.
  */
 @theme {
   --color-ink-950: #07080c;

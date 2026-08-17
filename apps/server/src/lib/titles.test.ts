@@ -51,7 +51,7 @@ describe('toSearchTitle', () => {
 });
 
 describe('matchKey', () => {
-  it('normalises punctuation and ampersands so equivalent titles collide', () => {
+  it('normalizes punctuation and ampersands so equivalent titles collide', () => {
     expect(matchKey('Rick & Morty')).toBe(matchKey('Rick and Morty'));
     expect(matchKey('Half-Life: Alyx')).toBe(matchKey('Half Life Alyx'));
   });

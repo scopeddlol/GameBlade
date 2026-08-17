@@ -20,7 +20,7 @@ export function createDb(databasePath: string, logger?: { info: (msg: string) =>
   const sqlite = new Database(databasePath);
 
   // WAL keeps reads flowing while a scan writes; NORMAL is the right durability
-  // trade-off for a media catalogue that can always be rebuilt by rescanning.
+  // trade-off for a media catalog that can always be rebuilt by rescanning.
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('synchronous = NORMAL');
   sqlite.pragma('foreign_keys = ON');

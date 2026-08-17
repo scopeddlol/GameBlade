@@ -75,7 +75,7 @@ export class ProfileService {
    * hide activity, or one whose visibility excludes the viewer, reports presence
    * but never what is being played.
    */
-  summarise(row: ProfileRow, options: { viewerId: string; areFriends: boolean }): ProfileSummary {
+  summarize(row: ProfileRow, options: { viewerId: string; areFriends: boolean }): ProfileSummary {
     const state = this.presence.get(row.userId);
     const maySeeActivity =
       row.showActivity &&
@@ -101,7 +101,7 @@ export class ProfileService {
   }
 
   /** Batch variant that resolves friendship once for the whole set. */
-  summariseMany(userIds: string[], viewerId: string): Map<string, ProfileSummary> {
+  summarizeMany(userIds: string[], viewerId: string): Map<string, ProfileSummary> {
     const unique = [...new Set(userIds)].filter(Boolean);
     if (unique.length === 0) return new Map();
 
@@ -124,13 +124,13 @@ export class ProfileService {
     return new Map(
       rows.map((row) => [
         row.userId,
-        this.summarise(row, { viewerId, areFriends: friends.has(row.userId) }),
+        this.summarize(row, { viewerId, areFriends: friends.has(row.userId) }),
       ]),
     );
   }
 
-  summariseOne(userId: string, viewerId: string): ProfileSummary | null {
-    return this.summariseMany([userId], viewerId).get(userId) ?? null;
+  summarizeOne(userId: string, viewerId: string): ProfileSummary | null {
+    return this.summarizeMany([userId], viewerId).get(userId) ?? null;
   }
 
   /** Accepted friends of a user, as a set for cheap membership tests. */
@@ -166,7 +166,7 @@ export class ProfileService {
     const friendship = isSelf ? null : this.friendshipView(viewerId, userId);
     const areFriends = friendship?.status === 'accepted';
 
-    const summary = this.summarise(
+    const summary = this.summarize(
       {
         userId,
         username: row.username,
@@ -278,7 +278,7 @@ export class ProfileService {
             row.visibility !== 'private' ||
             row.username.toLowerCase() === term.trim().toLowerCase(),
         )
-        .map((row) => this.summarise(row, { viewerId, areFriends: friends.has(row.userId) }))
+        .map((row) => this.summarize(row, { viewerId, areFriends: friends.has(row.userId) }))
     );
   }
 

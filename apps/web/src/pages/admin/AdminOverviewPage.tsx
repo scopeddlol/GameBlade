@@ -91,7 +91,7 @@ export function AdminOverviewPage() {
       </div>
 
       <section className="gb-card p-5">
-        <h2 className="mb-3 text-sm font-semibold tracking-wide uppercase">Catalogue health</h2>
+        <h2 className="mb-3 text-sm font-semibold tracking-wide uppercase">Catalog health</h2>
         <div className="text-ink-300 flex flex-wrap items-center gap-4 text-sm">
           <span>
             <strong className="text-ink-100">{stats?.matched ?? 0}</strong> matched to metadata

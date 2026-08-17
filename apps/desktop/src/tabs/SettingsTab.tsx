@@ -129,9 +129,9 @@ export function SettingsTab() {
         />
 
         <Toggle
-          label="Minimise when a game starts"
-          checked={draft.minimiseOnLaunch}
-          onChange={(minimiseOnLaunch) => update({ minimiseOnLaunch })}
+          label="Minimize when a game starts"
+          checked={draft.minimizeOnLaunch}
+          onChange={(minimizeOnLaunch) => update({ minimizeOnLaunch })}
         />
       </section>
 
@@ -261,7 +261,7 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
       </label>
 
       <label className="field">
-        <span>Accent colour</span>
+        <span>Accent color</span>
         <input
           type="color"
           className="color-input"

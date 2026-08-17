@@ -24,7 +24,7 @@ const SORTS = [
  *
  * Games already in the library are shown rather than hidden — seeing the whole
  * archive is the point of a store, and a tick beside what you own reads better
- * than a catalogue that mysteriously shrinks as you use it.
+ * than a catalog that mysteriously shrinks as you use it.
  */
 export function StoreTab({ onOpenGame }: { onOpenGame: (game: GameSummary) => void }) {
   const queryClient = useQueryClient();

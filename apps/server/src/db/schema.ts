@@ -339,7 +339,7 @@ export const playSessions = sqliteTable(
 );
 
 /**
- * Rolling totals maintained as sessions close. Denormalised on purpose: Home
+ * Rolling totals maintained as sessions close. Denormalized on purpose: Home
  * and Library sort by playtime on every render and must not aggregate live.
  */
 export const userGameStats = sqliteTable(

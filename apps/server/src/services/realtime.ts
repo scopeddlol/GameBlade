@@ -106,7 +106,7 @@ export class RealtimeGateway {
     // Each friend gets the summary as *they* are allowed to see it, which is
     // what keeps a "friends-only" profile from leaking its current game.
     for (const friendId of friends) {
-      const profile = this.profiles.summariseOne(userId, friendId);
+      const profile = this.profiles.summarizeOne(userId, friendId);
       if (profile) this.send(friendId, { type: 'presence', profile });
     }
   }

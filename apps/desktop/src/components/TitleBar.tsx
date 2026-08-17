@@ -52,7 +52,7 @@ export function TitleBar({ children }: { children?: ReactNode }) {
           type="button"
           className="window-button"
           onClick={() => void appWindow.minimize()}
-          aria-label="Minimise"
+          aria-label="Minimize"
         >
           <Minus size={15} aria-hidden />
         </button>
@@ -60,7 +60,7 @@ export function TitleBar({ children }: { children?: ReactNode }) {
           type="button"
           className="window-button"
           onClick={() => void appWindow.toggleMaximize()}
-          aria-label={maximized ? 'Restore' : 'Maximise'}
+          aria-label={maximized ? 'Restore' : 'Maximize'}
         >
           {maximized ? <Square size={12} aria-hidden /> : <Maximize2 size={13} aria-hidden />}
         </button>

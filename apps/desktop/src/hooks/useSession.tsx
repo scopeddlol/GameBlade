@@ -27,26 +27,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   // Restore the saved device token, then confirm the server still accepts it.
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
 
     void (async () => {
       const restored = await ipc.currentSession().catch(() => null);
-      if (cancelled) return;
+      if (canceled) return;
       if (!restored) {
         setSessionState(null);
         return;
       }
       try {
         await ipc.verifySession();
-        if (!cancelled) setSessionState(restored);
+        if (!canceled) setSessionState(restored);
       } catch {
         // Token revoked or server unreachable — fall back to the sign-in screen.
-        if (!cancelled) setSessionState(null);
+        if (!canceled) setSessionState(null);
       }
     })();
 
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, []);
 

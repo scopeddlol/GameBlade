@@ -38,7 +38,7 @@ export function newInviteCode(): string {
     .join('-');
 }
 
-export function normaliseInviteCode(code: string): string {
+export function normalizeInviteCode(code: string): string {
   return code
     .trim()
     .toUpperCase()

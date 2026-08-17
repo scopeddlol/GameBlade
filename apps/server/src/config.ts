@@ -25,8 +25,8 @@ function parseTrustProxy(raw: string | undefined): boolean | number | string[] {
     .filter(Boolean);
 }
 
-/** Normalises `/gameblade/` and `gameblade` alike to `/gameblade`; root is ''. */
-function normaliseBasePath(raw: string | undefined): string {
+/** Normalizes `/gameblade/` and `gameblade` alike to `/gameblade`; root is ''. */
+function normalizeBasePath(raw: string | undefined): string {
   if (!raw) return '';
   const trimmed = raw.trim().replace(/\/+$/, '');
   if (trimmed === '' || trimmed === '/') return '';
@@ -108,7 +108,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     mediaQuotaBytes: e.MEDIA_QUOTA_MB * 1024 * 1024,
     saveQuotaBytes: e.SAVE_QUOTA_MB * 1024 * 1024,
 
-    basePath: normaliseBasePath(e.BASE_PATH),
+    basePath: normalizeBasePath(e.BASE_PATH),
     trustProxy: parseTrustProxy(e.TRUST_PROXY),
     secureCookies: e.SECURE_COOKIES as boolean | 'auto',
     corsOrigins: e.CORS_ORIGINS.split(',')

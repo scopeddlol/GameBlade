@@ -17,7 +17,7 @@ import { useSession } from '../hooks/useSession.js';
 
 const SECTIONS = [
   { to: '/admin', end: true, icon: LayoutDashboard, label: 'Overview' },
-  { to: '/admin/catalog', end: false, icon: Gamepad2, label: 'Catalogue' },
+  { to: '/admin/catalog', end: false, icon: Gamepad2, label: 'Catalog' },
   { to: '/admin/featured', end: false, icon: Sparkles, label: 'Featured' },
   { to: '/admin/libraries', end: false, icon: Server, label: 'Libraries' },
   { to: '/admin/users', end: false, icon: Users, label: 'Users' },

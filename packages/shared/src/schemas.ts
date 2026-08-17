@@ -123,11 +123,11 @@ export type ProviderSettingsInput = z.infer<typeof providerSettingsSchema>;
 
 /* ------------------------------------------------------------------ profiles */
 
-/** Hex colour used as the profile accent throughout the desktop client. */
+/** Hex color used as the profile accent throughout the desktop client. */
 const hexColor = z
   .string()
   .trim()
-  .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour such as #7c5cff');
+  .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex color such as #7c5cff');
 
 export const updateProfileSchema = z.object({
   displayName: z.string().trim().min(1).max(48).optional(),

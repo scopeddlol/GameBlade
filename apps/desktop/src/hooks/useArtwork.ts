@@ -54,18 +54,18 @@ export function useArtwork(path: string | null | undefined): string | undefined 
       return;
     }
 
-    let cancelled = false;
+    let canceled = false;
     void resolve(path)
       .then((next) => {
-        if (!cancelled) setUrl(next);
+        if (!canceled) setUrl(next);
       })
       .catch(() => {
         // Missing artwork is normal; the caller renders a placeholder.
-        if (!cancelled) setUrl(undefined);
+        if (!canceled) setUrl(undefined);
       });
 
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [path]);
 

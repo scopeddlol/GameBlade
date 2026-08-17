@@ -267,7 +267,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete('/admin/libraries/:id', async (request) => {
     const { id } = request.params as { id: string };
-    // Only the catalogue rows are removed; the mounted files are never touched.
+    // Only the catalog rows are removed; the mounted files are never touched.
     db.delete(libraries).where(eq(libraries.id, id)).run();
     return { ok: true };
   });
@@ -289,7 +289,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/admin/scan/progress', async () => scanner.getProgress());
 
-  // ---- Removing catalogue entries ----
+  // ---- Removing catalog entries ----
 
   /**
    * Forget a game entirely.
@@ -297,7 +297,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
    * A scan only *flags* a vanished game, because an unmounted share must not
    * destroy hand-made metadata matches — but that leaves no way to clear out
    * something deleted on purpose. This is that way. Files on disk are never
-   * touched; only the catalogue row goes, and the foreign keys cascade it out
+   * touched; only the catalog row goes, and the foreign keys cascade it out
    * of libraries, playtime, achievements and the featured shelf.
    *
    * Deleting a game that is still on disk is refused unless forced: the next

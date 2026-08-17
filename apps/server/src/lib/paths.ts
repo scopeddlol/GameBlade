@@ -14,7 +14,7 @@ export function resolveWithin(root: string, relPath: string): string {
     throw ApiError.badRequest('Invalid path');
   }
 
-  const normalisedRoot = path.resolve(root);
+  const normalizedRoot = path.resolve(root);
   // path.resolve collapses '..' before we can inspect it, so reject explicitly.
   const segments = relPath.split(/[\\/]+/).filter((s) => s.length > 0 && s !== '.');
   if (segments.some((s) => s === '..')) {
@@ -24,8 +24,8 @@ export function resolveWithin(root: string, relPath: string): string {
     throw ApiError.badRequest('Invalid path');
   }
 
-  const resolved = path.resolve(normalisedRoot, ...segments);
-  if (!isInside(normalisedRoot, resolved)) {
+  const resolved = path.resolve(normalizedRoot, ...segments);
+  if (!isInside(normalizedRoot, resolved)) {
     throw ApiError.badRequest('Invalid path');
   }
   return resolved;

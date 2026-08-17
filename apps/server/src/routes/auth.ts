@@ -11,11 +11,11 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { requireUser } from '../auth/middleware.js';
 import { toPublicUser } from '../auth/service.js';
 import { ApiError } from '../lib/errors.js';
-import { normaliseInviteCode } from '../lib/ids.js';
+import { normalizeInviteCode } from '../lib/ids.js';
 import { eq } from 'drizzle-orm';
 import { invites } from '../db/schema.js';
 
-/** Honour `X-Forwarded-Proto` when it is trusted, so cookies get Secure behind TLS. */
+/** Honor `X-Forwarded-Proto` when it is trusted, so cookies get Secure behind TLS. */
 function isSecureRequest(request: FastifyRequest): boolean {
   const configured = request.server.gameblade.config.secureCookies;
   if (configured !== 'auto') return configured;
@@ -147,7 +147,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const invite = app.gameblade.db
       .select()
       .from(invites)
-      .where(eq(invites.code, normaliseInviteCode(code)))
+      .where(eq(invites.code, normalizeInviteCode(code)))
       .get();
 
     const valid =

@@ -1,6 +1,6 @@
 /*
  * A dark, poster-first palette. The library is meant to be looked at, so the
- * chrome stays near-black and lets cover art supply the colour.
+ * chrome stays near-black and lets cover art supply the color.
  */
 :root {
   --ink-950: #07080c;
@@ -247,7 +247,7 @@ button {
 /*
  * The window is created with decorations off, so this bar supplies both the
  * drag region and the caption buttons. Height matches the Windows caption so
- * the app does not feel shorter than its neighbours.
+ * the app does not feel shorter than its neighbors.
  */
 .titlebar {
   display: flex;

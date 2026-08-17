@@ -31,7 +31,7 @@ pub enum DownloadStatus {
     Verifying,
     Completed,
     Failed,
-    Cancelled,
+    Canceled,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -183,7 +183,7 @@ impl DownloadManager {
 
             let mut guard = state.lock().await;
             guard.status = match result {
-                Ok(()) if cancel.load(Ordering::SeqCst) => DownloadStatus::Cancelled,
+                Ok(()) if cancel.load(Ordering::SeqCst) => DownloadStatus::Canceled,
                 Ok(()) => DownloadStatus::Completed,
                 Err(err) => {
                     guard.error = Some(err.to_string());

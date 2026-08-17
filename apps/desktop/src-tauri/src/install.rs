@@ -199,11 +199,11 @@ pub fn detect_executable(root: &Path, title: &str) -> Option<PathBuf> {
         return None;
     }
 
-    let normalised_title = normalise(title);
+    let normalized_title = normalize(title);
     if let Some((path, _, _)) = candidates.iter().find(|(path, _, _)| {
         path.file_stem()
             .and_then(|s| s.to_str())
-            .map(|stem| normalise(stem) == normalised_title)
+            .map(|stem| normalize(stem) == normalized_title)
             .unwrap_or(false)
     }) {
         return Some(path.clone());
@@ -215,7 +215,7 @@ pub fn detect_executable(root: &Path, title: &str) -> Option<PathBuf> {
     candidates.first().map(|(path, _, _)| path.clone())
 }
 
-fn normalise(value: &str) -> String {
+fn normalize(value: &str) -> String {
     value
         .chars()
         .filter(|c| c.is_alphanumeric())
@@ -320,8 +320,8 @@ mod tests {
     }
 
     #[test]
-    fn normalise_ignores_punctuation_and_case() {
-        assert_eq!(normalise("Cave Story+"), "cavestory");
-        assert_eq!(normalise("cave_story"), "cavestory");
+    fn normalize_ignores_punctuation_and_case() {
+        assert_eq!(normalize("Cave Story+"), "cavestory");
+        assert_eq!(normalize("cave_story"), "cavestory");
     }
 }

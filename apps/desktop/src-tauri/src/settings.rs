@@ -22,8 +22,15 @@ pub struct Settings {
     /// setting on the server, so a single machine can stay quiet.
     pub share_activity: bool,
 
-    /// Minimise to the tray instead of exiting when a game launches.
-    pub minimise_on_launch: bool,
+    /// Minimize to the tray instead of exiting when a game launches.
+    ///
+    /// Aliased so a settings.json saved before this field was renamed still
+    /// loads: every field here is required with no #[serde(default)], so a
+    /// bare rename would make deserialization fail on the old key and
+    /// silently reset every other saved preference to default, not just this
+    /// one — load() falls back to Settings::default() on any parse error.
+    #[serde(alias = "minimiseOnLaunch")]
+    pub minimize_on_launch: bool,
 
     /// Simultaneous file transfers. More helps on a fast link with many small
     /// files and hurts on a slow one, so it is exposed rather than guessed.
@@ -40,7 +47,7 @@ impl Default for Settings {
             sync_saves: true,
             prompt_on_save_conflict: true,
             share_activity: true,
-            minimise_on_launch: true,
+            minimize_on_launch: true,
             download_concurrency: 4,
             verify_downloads: true,
         }

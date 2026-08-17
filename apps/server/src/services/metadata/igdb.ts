@@ -274,7 +274,7 @@ function rankByType(game: IgdbGame): number {
   return game.game_type === MAIN_GAME ? 0 : 1;
 }
 
-export function normaliseIgdbGame(game: IgdbGame) {
+export function normalizeIgdbGame(game: IgdbGame) {
   const companies = game.involved_companies ?? [];
   const pick = (predicate: (c: IgdbCompany) => boolean | undefined) =>
     Array.from(
@@ -314,4 +314,4 @@ export function normaliseIgdbGame(game: IgdbGame) {
   };
 }
 
-export type NormalisedIgdbGame = ReturnType<typeof normaliseIgdbGame>;
+export type NormalizedIgdbGame = ReturnType<typeof normalizeIgdbGame>;

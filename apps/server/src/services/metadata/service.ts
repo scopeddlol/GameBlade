@@ -11,7 +11,7 @@ import { games, type Game } from '../../db/schema.js';
 import { ApiError } from '../../lib/errors.js';
 import { matchKey } from '../../lib/titles.js';
 import type { SettingsService } from '../settings.js';
-import { IgdbClient, igdbImageUrl, normaliseIgdbGame } from './igdb.js';
+import { IgdbClient, igdbImageUrl, normalizeIgdbGame } from './igdb.js';
 import { ImageCache } from './images.js';
 import { SteamGridDbClient } from './steamgriddb.js';
 
@@ -157,7 +157,7 @@ export class MetadataService {
     const results = await igdb.search(title, limit);
     return results
       .map((raw) => {
-        const game = normaliseIgdbGame(raw);
+        const game = normalizeIgdbGame(raw);
         return {
           provider: 'igdb' as const,
           id: game.igdbId,
@@ -249,7 +249,7 @@ export class MetadataService {
     const raw = await igdb.getById(igdbId);
     if (!raw) throw ApiError.notFound('That IGDB entry no longer exists');
 
-    const meta = normaliseIgdbGame(raw);
+    const meta = normalizeIgdbGame(raw);
     const coverImageId = meta.coverUrl ? await this.imageCache.cache(meta.coverUrl, 'cover') : null;
 
     const screenshotIds: string[] = [];

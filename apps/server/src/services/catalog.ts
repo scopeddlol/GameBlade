@@ -29,7 +29,7 @@ import type { PlaytimeService } from './playtime.js';
 import type { ProfileService } from './profiles.js';
 
 /**
- * Reads the game catalogue for a specific user.
+ * Reads the game catalog for a specific user.
  *
  * Every listing needs the same four per-user decorations — owned, favourited,
  * played, achievement progress — so they are resolved as set lookups over the
@@ -188,7 +188,7 @@ export class CatalogService {
       .all() as Array<Game | { games: Game }>;
 
     // A joined select nests the row under its table name; a plain one does not.
-    const normalised = rows.map((row) => ('games' in row ? row.games : row));
+    const normalized = rows.map((row) => ('games' in row ? row.games : row));
 
     const totalRow = this.db
       .select({ count: sql<number>`count(*)` })
@@ -197,7 +197,7 @@ export class CatalogService {
       .get();
 
     return {
-      items: this.decorate(normalised, userId),
+      items: this.decorate(normalized, userId),
       total: totalRow?.count ?? 0,
       offset: query.offset,
       limit: query.limit,
@@ -227,7 +227,7 @@ export class CatalogService {
       .run();
   }
 
-  /** Distinct values present in the catalogue, for the Store filter rail. */
+  /** Distinct values present in the catalog, for the Store filter rail. */
   facets(): StoreFacets {
     const rows = this.db
       .select({
@@ -281,7 +281,7 @@ export class CatalogService {
       .all();
 
     const friendIds = [...this.profiles.friendIds(userId)];
-    const friendProfiles = this.profiles.summariseMany(friendIds, userId);
+    const friendProfiles = this.profiles.summarizeMany(friendIds, userId);
 
     // Only friends whose presence actually names a game land in this rail.
     const playingIds = friendIds

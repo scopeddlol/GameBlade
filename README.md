@@ -26,11 +26,12 @@ from it feel like a modern game launcher.
 | ---------------------------- | ------------- | ----------------------------------------------------------------------- |
 | **Server** (Docker)          | You           | Reads the library from disk, serves the API, stores saves and profiles  |
 | **Landing page** (`/`)       | Everyone      | Explains the archive and links the Windows client download              |
-| **Admin panel** (`/admin`)   | Administrator | Invites, users, catalogue, metadata editor, featured games, settings    |
+| **Admin panel** (`/admin`)   | Administrator | Invites, users, catalog, metadata editor, featured games, settings      |
 | **Desktop client** (Windows) | Players       | Home, Library, Store, Social and Settings — the whole player experience |
 
-There is deliberately no web library browser. A player who signs in on the web
-is sent back to the landing page to download the client.
+There is deliberately no web library browser — that lives entirely in the
+desktop client. A player who signs in on the web lands on an account page
+(username, email, password, signed-in devices) instead.
 
 ---
 
@@ -39,7 +40,7 @@ is sent back to the landing page to download the client.
 Both halves are published together by CI — an image without a matching client
 leaves you nothing to connect with.
 
-| Artefact           | Where                                                                                       |
+| Artifact           | Where                                                                                       |
 | ------------------ | ------------------------------------------------------------------------------------------- |
 | **Server image**   | `ghcr.io/scopeddlol/gameblade` — `latest`, plus a tag per release                           |
 | **Windows client** | The `.exe` on the [latest release](https://github.com/scopeddlol/GameBlade/releases/latest) |
@@ -187,9 +188,9 @@ device for that account.
 
 Everything an operator needs, at `/admin`:
 
-- **Overview** — catalogue health, connected clients, scan progress, and a
+- **Overview** — catalog health, connected clients, scan progress, and a
   broadcast announcement box that pushes a notification to every account.
-- **Catalogue** — a worklist of every game, filterable by match status. Opening
+- **Catalog** — a worklist of every game, filterable by match status. Opening
   one gives a full metadata editor: fields, artwork slots (each fetched and
   cached locally), Steam achievement import, and the launch and save rules the
   desktop client needs to actually run and back up that game.
@@ -233,7 +234,7 @@ previous state stays on disk even if the archive turns out to be wrong.
 Games here have no achievement runtime of their own, so definitions are imported
 and unlocks are reported by the client.
 
-Import a set from **Admin → Catalogue → (a game) → Achievements** with a Steam
+Import a set from **Admin → Catalog → (a game) → Achievements** with a Steam
 app id. This reads Steam's _published_ achievement schema — no player data is
 requested and no Steam account is linked — which is what makes it usable for a
 DRM-free copy of a game that also ships there. Global unlock rates come along
@@ -390,6 +391,6 @@ migration rather than editing an applied one.
 - Profile visibility is applied when a summary is built, per viewer, so a
   friends-only profile never leaks its current game to a stranger.
 
-## Licence
+## License
 
 AGPL-3.0-only.

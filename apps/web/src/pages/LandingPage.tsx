@@ -285,7 +285,7 @@ function Preservation() {
             </Bullet>
           </ul>
           <p className="text-ink-400 border-ink-800 border-t pt-4 text-xs leading-relaxed">
-            Nothing that requires a licence to play belongs in this library, and access is by invite
+            Nothing that requires a license to play belongs in this library, and access is by invite
             only.
           </p>
         </div>

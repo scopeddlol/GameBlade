@@ -8,7 +8,7 @@ import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { devices, invites, sessions, users, type User } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
-import { hashToken, newId, newToken, normaliseInviteCode } from '../lib/ids.js';
+import { hashToken, newId, newToken, normalizeInviteCode } from '../lib/ids.js';
 import { fakeVerify, hashPassword, verifyPassword } from './password.js';
 
 export interface AuthContext {
@@ -247,7 +247,7 @@ export class AuthService {
    * account should get.
    */
   claimInvite(rawCode: string): Role {
-    const code = normaliseInviteCode(rawCode);
+    const code = normalizeInviteCode(rawCode);
     const invite = this.db.select().from(invites).where(eq(invites.code, code)).get();
 
     if (!invite) throw ApiError.badRequest('That invite code is not valid');

@@ -18,7 +18,7 @@ import { api, ApiRequestError, queryString } from '../../lib/api.js';
 import { formatBytes } from '../../lib/format.js';
 
 /**
- * The catalogue browser and metadata editor.
+ * The catalog browser and metadata editor.
  *
  * Players never see this page — they browse from the desktop client — so it is
  * built as a dense worklist: find the entries that need attention, fix them,
@@ -73,7 +73,7 @@ export function AdminCatalogPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Catalogue</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Catalog</h1>
         <span className="text-ink-400 text-sm">
           {listQuery.data ? `${listQuery.data.total.toLocaleString()} games` : ''}
         </span>
@@ -128,7 +128,7 @@ export function AdminCatalogPage() {
       </div>
 
       {listQuery.isLoading ? (
-        <PageLoader label="Loading catalogue" />
+        <PageLoader label="Loading catalog" />
       ) : (listQuery.data?.items ?? []).length === 0 ? (
         <EmptyState
           title="Nothing matches"
@@ -185,7 +185,7 @@ export function AdminCatalogPage() {
 }
 
 /**
- * Removes one catalogue entry.
+ * Removes one catalog entry.
  *
  * Files on disk are never touched, so the wording has to be explicit about
  * that — "delete" next to a game is otherwise easy to read as "delete the
@@ -215,14 +215,14 @@ function DeleteGameButton({ game }: { game: GameSummary }) {
       title={
         game.isMissing
           ? 'Remove this entry — the game is gone from disk'
-          : 'Remove this entry from the catalogue'
+          : 'Remove this entry from the catalog'
       }
-      aria-label={`Remove ${game.title} from the catalogue`}
+      aria-label={`Remove ${game.title} from the catalog`}
       className="text-ink-500 rounded p-2 transition-colors hover:bg-red-950/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
       disabled={remove.isPending}
       onClick={() => {
         const question = game.isMissing
-          ? `Remove "${game.title}" from the catalogue? It is already gone from disk, and its playtime and achievements go with it.`
+          ? `Remove "${game.title}" from the catalog? It is already gone from disk, and its playtime and achievements go with it.`
           : `"${game.title}" is still on disk, so the next scan will add it back without its metadata. Remove the entry anyway?`;
         if (!confirm(question)) return;
         remove.mutate(!game.isMissing);

@@ -184,7 +184,7 @@ export class SocialService {
       .orderBy(comments.createdAt)
       .all();
 
-    const authors = this.profiles.summariseMany(
+    const authors = this.profiles.summarizeMany(
       rows.map((r) => r.authorId),
       viewerId,
     );
@@ -221,7 +221,7 @@ export class SocialService {
     };
     this.db.insert(comments).values(record).run();
 
-    const author = this.profiles.summariseOne(authorId, post.author.userId);
+    const author = this.profiles.summarizeOne(authorId, post.author.userId);
     this.notifications.create({
       userId: post.author.userId,
       kind: 'post-comment',
@@ -231,7 +231,7 @@ export class SocialService {
       link: `social/post/${postId}`,
     });
 
-    const summary = this.profiles.summariseOne(authorId, authorId);
+    const summary = this.profiles.summarizeOne(authorId, authorId);
     return {
       id: record.id,
       postId,
@@ -287,7 +287,7 @@ export class SocialService {
 
     // Only the first reaction notifies; switching from 👍 to 🔥 should not.
     if (!existing) {
-      const actor = this.profiles.summariseOne(userId, post.author.userId);
+      const actor = this.profiles.summarizeOne(userId, post.author.userId);
       this.notifications.create({
         userId: post.author.userId,
         kind: 'post-reaction',
@@ -315,7 +315,7 @@ export class SocialService {
     if (rows.length === 0) return [];
 
     const postIds = rows.map((r) => r.id);
-    const authors = this.profiles.summariseMany(
+    const authors = this.profiles.summarizeMany(
       rows.map((r) => r.authorId),
       viewerId,
     );

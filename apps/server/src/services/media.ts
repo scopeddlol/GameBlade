@@ -47,8 +47,8 @@ export class MediaStore {
 
   assertAcceptable(kind: MediaKind, contentType: string, sizeBytes: number): void {
     const allowed = ALLOWED_TYPES[kind];
-    const normalised = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
-    if (!allowed.includes(normalised)) {
+    const normalized = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
+    if (!allowed.includes(normalized)) {
       throw ApiError.badRequest(`${kind} uploads must be one of: ${allowed.join(', ')}`);
     }
     if (sizeBytes <= 0) {
