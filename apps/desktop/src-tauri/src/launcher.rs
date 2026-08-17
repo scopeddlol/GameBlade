@@ -24,6 +24,17 @@ pub struct RunningGame {
     pub seconds: u64,
 }
 
+/// Everything needed to start one game. Grouped into a struct rather than
+/// passed as seven positional arguments, which is both unreadable at the call
+/// site and easy to get wrong when two of them are `Option<String>`.
+pub struct LaunchRequest {
+    pub game_id: String,
+    pub title: String,
+    pub executable: PathBuf,
+    pub args: Option<String>,
+    pub working_dir: Option<PathBuf>,
+}
+
 #[derive(Debug, Deserialize)]
 struct SessionResponse {
     id: String,
@@ -58,48 +69,49 @@ impl Launcher {
         self: Arc<Self>,
         app: AppHandle,
         client: ApiClient,
-        game_id: String,
-        title: String,
-        executable: PathBuf,
-        args: Option<String>,
-        working_dir: Option<PathBuf>,
+        request: LaunchRequest,
     ) -> AppResult<RunningGame> {
         if self.current().await.is_some() {
             return Err(AppError::Other(
                 "Another game is already running. Quit it first.".to_string(),
             ));
         }
-        if !executable.exists() {
+        if !request.executable.exists() {
             return Err(AppError::Other(format!(
                 "Could not find {}. Try reinstalling the game.",
-                executable.display()
+                request.executable.display()
             )));
         }
 
+        let game_id = request.game_id;
         let session: SessionResponse = client
             .post_json("/play/sessions", &serde_json::json!({ "gameId": game_id }))
             .await
             .and_then(|value| serde_json::from_value(value).map_err(AppError::from))?;
 
-        let directory = working_dir
+        let directory = request
+            .working_dir
             .filter(|dir| dir.exists())
-            .or_else(|| executable.parent().map(Path::to_path_buf));
+            .or_else(|| request.executable.parent().map(Path::to_path_buf));
 
-        let mut command = tokio::process::Command::new(&executable);
+        let mut command = tokio::process::Command::new(&request.executable);
         if let Some(dir) = &directory {
             command.current_dir(dir);
         }
-        for arg in split_args(args.as_deref()) {
+        for arg in split_args(request.args.as_deref()) {
             command.arg(arg);
         }
 
         let child = command.spawn().map_err(|err| {
-            AppError::Other(format!("Could not start {}: {err}", executable.display()))
+            AppError::Other(format!(
+                "Could not start {}: {err}",
+                request.executable.display()
+            ))
         })?;
 
         let running = RunningGame {
             game_id: game_id.clone(),
-            title,
+            title: request.title,
             session_id: session.id.clone(),
             started_at: session.started_at,
             seconds: 0,

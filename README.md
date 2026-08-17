@@ -1,18 +1,36 @@
 # GameBlade
 
-A self-hosted archive for portable PC games, with a Jellyfin-style library, rich
-metadata from IGDB and SteamGridDB, invite-only multi-user access, and a Windows
-desktop client built for downloads that actually finish.
+A self-hosted platform for preserving free-to-play and DRM-free games: a Docker
+server that holds the archive, and a Windows desktop client that makes playing
+from it feel like a modern game launcher.
 
+- **Server, not a web app.** The server hosts the files, a public landing page
+  and an admin panel. Everything a player does — browsing, installing, playing,
+  achievements, friends — happens in the desktop client.
+- **Cloud saves.** Save files sync after every session, with version history and
+  an explicit conflict prompt when two machines disagree.
+- **Achievements.** Sets are imported from public sources and tracked per
+  account, so a DRM-free copy still earns something.
+- **Friends and activity.** Live presence, a shared feed, screenshots and clips.
 - **Read-only by design.** Your library is mounted `:ro`. GameBlade indexes and
   serves it; it never writes to it.
-- **Handles mixed layouts.** A game can be a folder of loose files or a single
-  archive. Both are scanned, and both are downloadable.
-- **Invite-only.** Self-registration is off by default. Accounts are created from
-  invite codes an administrator generates.
-- **Built for a reverse proxy.** Sub-path hosting, `X-Forwarded-*` awareness and
-  proxy-aware secure cookies all work without rebuilding anything.
+- **Invite-only.** Self-registration is off by default. Accounts come from invite
+  codes an administrator generates.
 - **Small.** One Alpine container, SQLite, no external database or cache.
+
+---
+
+## How the pieces fit
+
+| Piece                        | Who uses it   | What it does                                                            |
+| ---------------------------- | ------------- | ----------------------------------------------------------------------- |
+| **Server** (Docker)          | You           | Reads the library from disk, serves the API, stores saves and profiles  |
+| **Landing page** (`/`)       | Everyone      | Explains the archive and links the Windows client download              |
+| **Admin panel** (`/admin`)   | Administrator | Invites, users, catalogue, metadata editor, featured games, settings    |
+| **Desktop client** (Windows) | Players       | Home, Library, Store, Social and Settings — the whole player experience |
+
+There is deliberately no web library browser. A player who signs in on the web
+is sent back to the landing page to download the client.
 
 ---
 
@@ -33,6 +51,9 @@ docker compose up -d
 
 Open `http://<host>:8080` and create the first administrator account. That
 first-run screen is only available while the database has no users.
+
+Once the library has scanned, publish a client build (or point
+`CLIENT_DOWNLOAD_URL` at one) and invite people from **Admin → Invites**.
 
 > **If it fails to start with a database error**, the `data` folder is almost
 > certainly owned by root while the container runs as uid 1000. SQLite is built
@@ -135,18 +156,101 @@ what the desktop client is for — see below.
 ## Users and invites
 
 Registration is invite-only unless an administrator turns on self-registration
-in **Admin → Metadata → Server**.
+in **Admin → Settings**.
 
 To add someone: **Admin → Invites → Create an invite**, then send them the
 copied link. Invites carry a role, a use count and an optional expiry, and can be
-revoked at any time.
+revoked at any time. After registering they download the Windows client and sign
+in there — the web surface has nothing else for them.
 
 Changing a password signs out every other session and revokes every desktop
 device for that account.
 
 ---
 
+## The admin panel
+
+Everything an operator needs, at `/admin`:
+
+- **Overview** — catalogue health, connected clients, scan progress, and a
+  broadcast announcement box that pushes a notification to every account.
+- **Catalogue** — a worklist of every game, filterable by match status. Opening
+  one gives a full metadata editor: fields, artwork slots (each fetched and
+  cached locally), Steam achievement import, and the launch and save rules the
+  desktop client needs to actually run and back up that game.
+- **Featured** — curates the carousel on the client's Home tab, in order.
+- **Libraries**, **Users**, **Invites**, **Settings** — as before, plus the
+  landing-page copy and the client download URL.
+
+### Launch and save rules
+
+These are what turn an archived folder into something playable:
+
+- A **launch rule** names the executable relative to the install folder. Leave it
+  blank and the client picks the largest `.exe` that is not obviously an
+  installer or uninstaller.
+- A **save rule** says where the game keeps its saves, using placeholders that
+  resolve on each machine: `{userprofile}`, `{appdata}`, `{localappdata}`,
+  `{documents}`, `{savedgames}`, `{public}` and `{install}`. Optional include and
+  exclude globs narrow it further.
+
+---
+
+## Cloud saves
+
+The client hashes the save folder, zips it, and uploads it as an immutable
+version. Ten versions are kept per slot, so a bad sync is always recoverable.
+
+Conflicts are detected rather than guessed at. The client remembers the digest it
+last synced; when the cloud has moved on from that digest _and_ the local copy
+has changed too, both sides hold edits and the client asks instead of picking a
+winner. Launching a game pulls a newer cloud save first, but deliberately does
+**not** resolve a conflict — starting a game is the wrong moment to make someone
+choose which save to destroy.
+
+Restoring moves the existing save folder aside rather than deleting it, so the
+previous state stays on disk even if the archive turns out to be wrong.
+
+---
+
+## Achievements
+
+Games here have no achievement runtime of their own, so definitions are imported
+and unlocks are reported by the client.
+
+Import a set from **Admin → Catalogue → (a game) → Achievements** with a Steam
+app id. This reads Steam's _published_ achievement schema — no player data is
+requested and no Steam account is linked — which is what makes it usable for a
+DRM-free copy of a game that also ships there. Global unlock rates come along
+with it and set each achievement's point value.
+
+Because the client is the only thing that can observe progress, unlocks are
+self-reported and therefore not cheat-proof. The server keeps them idempotent
+and well-formed; it does not adjudicate them.
+
+---
+
 ## The desktop client
+
+The client is where players spend all their time. Five tabs down the left:
+
+| Tab          | What is there                                                                        |
+| ------------ | ------------------------------------------------------------------------------------ |
+| **Home**     | Featured carousel, jump back in, friends playing right now, activity, recent unlocks |
+| **Library**  | Games you own — install, launch, playtime, achievements and save sync                |
+| **Store**    | The whole archive, filterable, one click to add to your library                      |
+| **Social**   | Feed with screenshots and clips, comments, reactions, friends and requests           |
+| **Settings** | Profile, install location, save sync, presence, devices                              |
+
+Installing, launching and playtime tracking are handled in Rust: the client
+extracts the archive, resolves the executable, watches the game process and
+banks playtime as it goes, so a crash mid-session still keeps most of it.
+
+Presence, friend activity and notifications arrive over a WebSocket that
+reconnects with backoff. Everything it carries is also readable over REST, so a
+dropped socket costs freshness, never correctness.
+
+### Downloads
 
 A browser download of a 60 GB folder is a single connection that has to survive
 from start to finish; if it drops at 90%, it starts over. The desktop client
@@ -188,7 +292,7 @@ and change them later without touching the stack.
 | Variable                                | Default            | Purpose                                                    |
 | --------------------------------------- | ------------------ | ---------------------------------------------------------- |
 | `LIBRARY_PATHS`                         | —                  | Comma-separated library roots **inside the container**     |
-| `DATA_DIR`                              | `/data`            | Database and cached artwork                                |
+| `DATA_DIR`                              | `/data`            | Database, artwork, user uploads and cloud saves            |
 | `PORT` / `HOST`                         | `8080` / `0.0.0.0` | Listen address                                             |
 | `BASE_PATH`                             | —                  | Sub-path to host under, e.g. `/gameblade`                  |
 | `TRUST_PROXY`                           | `false`            | `true`, a hop count, or a CIDR list                        |
@@ -197,6 +301,10 @@ and change them later without touching the stack.
 | `ALLOW_SELF_REGISTRATION`               | `false`            | Invite-only when false                                     |
 | `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` | —                  | Twitch application credentials                             |
 | `STEAMGRIDDB_API_KEY`                   | —                  | SteamGridDB API key                                        |
+| `STEAM_API_KEY`                         | —                  | Reads published achievement schemas; no player data        |
+| `CLIENT_DOWNLOAD_URL`                   | —                  | Where the landing page's download button points            |
+| `MEDIA_QUOTA_MB`                        | `20480`            | Per-account ceiling for avatars, screenshots and clips     |
+| `SAVE_QUOTA_MB`                         | `10240`            | Per-account ceiling for cloud saves                        |
 | `SCAN_ON_START`                         | `true`             | Scan shortly after boot                                    |
 | `SCAN_INTERVAL_MINUTES`                 | `360`              | Scheduled rescan interval; `0` disables                    |
 | `LOG_LEVEL`                             | `info`             | `fatal` … `trace`                                          |
@@ -212,24 +320,34 @@ Requires Node 22 and pnpm 10.
 pnpm install
 pnpm --filter @gameblade/shared build
 
-# API on :8080 and the web client on :5173 with proxying
+# API on :8080, landing page and admin panel on :5173 with proxying
 pnpm dev
+
+# The desktop client (needs the Rust toolchain and, on Linux, GTK/WebKit dev packages)
+pnpm dev:desktop
 ```
 
 ```bash
 pnpm -r typecheck
 pnpm -r test
 pnpm format
+
+# Rust side of the desktop client
+cd apps/desktop/src-tauri && cargo test && cargo clippy --all-targets -- -D warnings
 ```
 
 ### Layout
 
 ```
-apps/server     Fastify API, scanner, metadata providers, download engine
-apps/web        React 19 + Vite + Tailwind client
-apps/desktop    Tauri v2 shell with a Rust download engine
+apps/server     Fastify API, scanner, metadata, social, saves, achievements
+apps/web        Public landing page and the admin panel (React 19 + Tailwind)
+apps/desktop    Tauri v2 client: five-tab UI plus Rust install/launch/sync
 packages/shared Types, zod schemas and constants used by all three
 ```
+
+Server services live in `apps/server/src/services` and are wired in dependency
+order in `context.ts`. On the Rust side, `install.rs`, `launcher.rs`, `saves.rs`
+and `realtime.rs` hold everything the browser cannot do.
 
 The database schema lives in `apps/server/src/db/schema.ts`, with plain-SQL
 migrations applied at boot from `apps/server/src/db/migrations.ts`. Append a new
@@ -246,6 +364,13 @@ migration rather than editing an applied one.
 - Every download path is re-resolved against its library root and symlink-checked
   before any bytes are served, so a crafted path cannot escape the mount.
 - The container runs as a non-root user and the library is mounted read-only.
+- Archive entries are attacker-controlled, so both the game installer and the
+  save restorer rebuild every path from its normal components and reject
+  anything containing `..` or a root — the zip-slip escape.
+- Uploaded saves are verified against the digest the client declared before the
+  version is accepted, so a truncated transfer never becomes the copy others pull.
+- Profile visibility is applied when a summary is built, per viewer, so a
+  friends-only profile never leaks its current game to a stranger.
 
 ## Licence
 

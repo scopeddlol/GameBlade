@@ -13,7 +13,7 @@ use credentials::StoredSession;
 use downloader::{DownloadManager, DownloadState};
 use error::{AppError, AppResult};
 use install::{InstallManager, InstalledGame};
-use launcher::{Launcher, RunningGame};
+use launcher::{LaunchRequest, Launcher, RunningGame};
 use realtime::RealtimeClient;
 use saves::{LocalSave, SaveRule};
 use serde::Serialize;
@@ -387,11 +387,13 @@ async fn launch_game(
         .launch(
             app,
             client,
-            game_id,
-            installed.title,
-            executable,
-            args,
-            working,
+            LaunchRequest {
+                game_id,
+                title: installed.title,
+                executable,
+                args,
+                working_dir: working,
+            },
         )
         .await
 }

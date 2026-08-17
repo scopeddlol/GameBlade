@@ -125,6 +125,12 @@ jobs:
           cargo clippy --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      - name: Rust tests
+        working-directory: apps/desktop/src-tauri
+        run: |
+          cargo test
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Build installers
         run: pnpm --filter @gameblade/desktop build
 

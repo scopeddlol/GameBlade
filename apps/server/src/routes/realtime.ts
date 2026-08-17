@@ -4,6 +4,7 @@ import {
   type RealtimeCommand,
 } from '@gameblade/shared';
 import type { FastifyInstance } from 'fastify';
+import { requireUser } from '../auth/middleware.js';
 import { newId } from '../lib/ids.js';
 
 /**
@@ -62,9 +63,16 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
     socket.on('error', () => realtime.remove(connectionId));
   });
 
-  /** Lets a client discover the heartbeat interval instead of hard-coding it. */
-  app.get('/realtime/config', async () => ({
-    heartbeatSeconds: REALTIME_HEARTBEAT_SECONDS,
-    connections: realtime.connectionCount(),
-  }));
+  /**
+   * Lets a client discover the heartbeat interval instead of hard-coding it.
+   * Signed-in only: the connection count is a small signal about who is around,
+   * and there is no reason for an anonymous visitor to have it.
+   */
+  app.get('/realtime/config', async (request) => {
+    requireUser(request);
+    return {
+      heartbeatSeconds: REALTIME_HEARTBEAT_SECONDS,
+      connections: realtime.connectionCount(),
+    };
+  });
 }
