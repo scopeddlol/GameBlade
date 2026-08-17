@@ -336,6 +336,52 @@ describe('platform routes', () => {
     expect(body.stats.games).toBe(1);
   });
 
+  it('serves an upload to a token in the query string', async () => {
+    // An <img> or <video> tag cannot send an Authorization header, so the
+    // desktop client can only load avatars, screenshots and clips this way.
+    const png = Buffer.from(
+      '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6360000002000100' +
+        '05fe02fa0000000049454e44ae426082',
+      'hex',
+    );
+
+    const upload = await app.inject({
+      method: 'POST',
+      url: '/api/media?kind=image',
+      headers: { ...auth(admin), 'content-type': 'image/png' },
+      payload: png,
+    });
+    expect(upload.statusCode).toBe(201);
+    const mediaId = (upload.json() as { id: string }).id;
+
+    const anonymous = await app.inject({ method: 'GET', url: `/api/media/${mediaId}` });
+    expect(anonymous.statusCode).toBe(401);
+
+    const device = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: {
+        username: 'archivist',
+        password: 'a-long-enough-password',
+        deviceName: 'Test PC',
+      },
+    });
+    const token = (device.json() as { token: string }).token;
+
+    const withToken = await app.inject({
+      method: 'GET',
+      url: `/api/media/${mediaId}?token=${token}`,
+    });
+    expect(withToken.statusCode).toBe(200);
+    expect(withToken.rawPayload.equals(png)).toBe(true);
+
+    const badToken = await app.inject({
+      method: 'GET',
+      url: `/api/media/${mediaId}?token=not-a-real-token`,
+    });
+    expect(badToken.statusCode).toBe(401);
+  });
+
   it('refuses to serve the API without a session', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/home' });
     expect(response.statusCode).toBe(401);

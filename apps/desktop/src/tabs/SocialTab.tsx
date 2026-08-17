@@ -2,6 +2,7 @@ import type {
   CommentInfo,
   FriendEntry,
   FriendRequests,
+  MediaInfo,
   PostInfo,
   ProfileSummary,
   ReactionKind,
@@ -13,6 +14,7 @@ import clsx from 'clsx';
 import { Check, ImagePlus, MessageSquare, Search, Send, UserPlus, X } from 'lucide-react';
 import { useState } from 'react';
 import { Avatar, Badge, Empty, ErrorNote, Loading, SectionHeader } from '../components/ui.js';
+import { useArtwork } from '../hooks/useArtwork.js';
 import { formatRelative } from '../lib/format.js';
 import { errorMessage, ipc, queryString } from '../lib/ipc.js';
 
@@ -273,13 +275,9 @@ function PostCard({
 
       {post.media.length > 0 ? (
         <div className={clsx('post-media', post.media.length > 1 && 'multi')}>
-          {post.media.map((media) =>
-            media.kind === 'clip' ? (
-              <video key={media.id} src={media.url} controls preload="metadata" />
-            ) : (
-              <img key={media.id} src={media.url} alt="" loading="lazy" />
-            ),
-          )}
+          {post.media.map((media) => (
+            <Attachment key={media.id} media={media} />
+          ))}
         </div>
       ) : null}
 
@@ -335,6 +333,23 @@ function PostCard({
 
       {showComments ? <Comments postId={post.id} onError={onError} /> : null}
     </article>
+  );
+}
+
+/**
+ * The server hands back a server-relative media path. Inside the webview that
+ * would resolve against the app's own origin, and an `<img>` or `<video>` tag
+ * cannot send the device token either — so both are fixed by resolving the URL
+ * on the Rust side, where the server address and the token live.
+ */
+function Attachment({ media }: { media: MediaInfo }) {
+  const url = useArtwork(media.url);
+  if (!url) return <div className="post-media-pending" aria-hidden />;
+
+  return media.kind === 'clip' ? (
+    <video src={url} controls preload="metadata" />
+  ) : (
+    <img src={url} alt="" loading="lazy" />
   );
 }
 

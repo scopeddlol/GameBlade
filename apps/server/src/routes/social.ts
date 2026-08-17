@@ -264,11 +264,23 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.get('/media/:id', async (request, reply) => {
-    // Uploads are addressed by unguessable id and served to any signed-in
-    // account, which is what lets one <img> tag work for a friend's avatar.
-    requireUser(request);
+  /**
+   * Uploads are addressed by unguessable id and served to any signed-in
+   * account, which is what lets one `<img>` tag work for a friend's avatar.
+   *
+   * A `token` query parameter is accepted alongside normal auth for the same
+   * reason `/images/:id` accepts one: an `<img>` or `<video>` element cannot
+   * send an Authorization header, so the desktop client has no other way to
+   * point one of these at an avatar, a screenshot or a clip.
+   */
+  app.get('/media/:id', { config: { rateLimit: false } }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    const { token } = request.query as { token?: string };
+
+    const authorised =
+      request.auth !== null ||
+      (token ? app.gameblade.auth.resolveDeviceToken(token) !== null : false);
+    if (!authorised) throw ApiError.unauthorized();
 
     const { stream, record } = await media.open(id);
     return (
