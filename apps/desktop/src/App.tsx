@@ -189,6 +189,7 @@ function Shell() {
           onClose={() => setOpenGameId(null)}
           installed={installed.find((game) => game.gameId === openGameId)}
           isRunning={running?.gameId === openGameId}
+          download={downloads.find((d) => d.game_id === openGameId)}
         />
       ) : null}
 

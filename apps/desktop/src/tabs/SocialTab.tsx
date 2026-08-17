@@ -587,7 +587,15 @@ function Friends() {
                 <button
                   type="button"
                   className="icon-btn"
-                  onClick={() => removeMutation.mutate(profile.userId)}
+                  onClick={() => {
+                    // A declined request costs nothing to undo — send another
+                    // one. Losing an established friend is not that casual,
+                    // so this one action out of the two sharing this mutation
+                    // gets a confirmation.
+                    if (confirm(`Remove ${profile.displayName} from your friends?`)) {
+                      removeMutation.mutate(profile.userId);
+                    }
+                  }}
                   aria-label={`Remove ${profile.displayName}`}
                 >
                   <X size={15} aria-hidden />

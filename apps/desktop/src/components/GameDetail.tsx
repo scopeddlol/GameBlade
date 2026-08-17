@@ -5,11 +5,13 @@ import type {
   SaveRule,
 } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { openPath } from '@tauri-apps/plugin-opener';
 import clsx from 'clsx';
 import {
   CloudDownload,
   CloudUpload,
   Download,
+  FolderOpen,
   HardDrive,
   Lock,
   Play,
@@ -19,8 +21,14 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { formatBytes, formatDate, formatPlaytime, formatRelative } from '../lib/format.js';
-import { errorMessage, ipc, type InstalledGame, type SaveRulePayload } from '../lib/ipc.js';
-import { Artwork, Badge, ErrorNote, Loading, ProgressBar } from './ui.js';
+import {
+  errorMessage,
+  ipc,
+  type DownloadState,
+  type InstalledGame,
+  type SaveRulePayload,
+} from '../lib/ipc.js';
+import { Artwork, Badge, ErrorNote, Loading, ProgressBar, Spinner } from './ui.js';
 
 interface Rules {
   save: SaveRule[];
@@ -32,11 +40,20 @@ export function GameDetailPanel({
   onClose,
   installed,
   isRunning,
+  download,
 }: {
   gameId: string;
   onClose: () => void;
   installed: InstalledGame | undefined;
   isRunning: boolean;
+  /**
+   * `installMutation.isPending` only covers the IPC call that starts the
+   * download — the Rust side spawns it and returns immediately, so the
+   * button would flip back to a plain, clickable "Install" seconds into a
+   * transfer that takes minutes. The live download state is what's actually
+   * still running.
+   */
+  download: DownloadState | undefined;
 }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +77,15 @@ export function GameDetailPanel({
   const game = gameQuery.data;
   const saveRule = rulesQuery.data?.save[0];
   const launchRule = rulesQuery.data?.launch[0];
+
+  const isInstalling =
+    download?.status === 'queued' ||
+    download?.status === 'downloading' ||
+    download?.status === 'verifying';
+  const installPercent =
+    download && download.total_bytes > 0
+      ? Math.round((download.downloaded_bytes / download.total_bytes) * 100)
+      : null;
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['games'] });
@@ -158,12 +184,22 @@ export function GameDetailPanel({
                 ) : (
                   <button
                     type="button"
-                    className="btn btn-primary btn-lg"
+                    className={clsx('btn btn-primary btn-lg', isInstalling && 'btn-installing')}
                     onClick={() => installMutation.mutate()}
-                    disabled={installMutation.isPending || game.isMissing}
+                    disabled={installMutation.isPending || isInstalling || game.isMissing}
                   >
-                    <Download size={16} aria-hidden />
-                    {game.isMissing ? 'Unavailable' : 'Install'}
+                    {isInstalling ? (
+                      <Spinner className="h-4 w-4" />
+                    ) : (
+                      <Download size={16} aria-hidden />
+                    )}
+                    {game.isMissing
+                      ? 'Unavailable'
+                      : isInstalling
+                        ? `Installing…${installPercent === null ? '' : ` ${installPercent}%`}`
+                        : installMutation.isPending
+                          ? 'Starting…'
+                          : 'Install'}
                   </button>
                 )}
 
@@ -175,6 +211,21 @@ export function GameDetailPanel({
                     disabled={addMutation.isPending}
                   >
                     Add to library
+                  </button>
+                ) : null}
+
+                {installed ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => {
+                      void openPath(installed.installPath).catch((caught) =>
+                        setError(errorMessage(caught)),
+                      );
+                    }}
+                  >
+                    <FolderOpen size={16} aria-hidden />
+                    Browse files
                   </button>
                 ) : null}
 

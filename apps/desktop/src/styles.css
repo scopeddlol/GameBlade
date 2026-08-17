@@ -368,6 +368,13 @@ button {
   opacity: 0.5;
   cursor: not-allowed;
 }
+/* Disabled here means "already in progress," not "unavailable" — the generic
+   dimming is right for the latter but washes out the percentage text for the
+   former, on a button someone is actively watching. */
+.btn:disabled.btn-installing {
+  opacity: 0.85;
+  cursor: default;
+}
 .btn-lg {
   padding: 10px 20px;
   font-size: 14px;
