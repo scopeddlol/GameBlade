@@ -10,6 +10,9 @@ interface RealtimeContextValue {
   dismissAchievement: () => void;
 }
 
+/** How long a drop must persist before the UI admits to being disconnected. */
+const DISCONNECT_GRACE_MS = 6000;
+
 const RealtimeContext = createContext<RealtimeContextValue>({
   connected: false,
   lastAchievement: null,
@@ -33,9 +36,25 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   > | null>(null);
 
   useEffect(() => {
+    // A reconnect takes a couple of seconds at most, and the socket carries
+    // nothing the UI cannot also fetch over REST. Showing "reconnecting" the
+    // instant a frame drops just makes the indicator flicker, so a short grace
+    // period has to elapse before the user is told anything is wrong.
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const markConnected = () => {
+      clearTimeout(graceTimer);
+      setConnected(true);
+    };
+
+    const markDisconnected = () => {
+      clearTimeout(graceTimer);
+      graceTimer = setTimeout(() => setConnected(false), DISCONNECT_GRACE_MS);
+    };
+
     const unlisteners: Array<Promise<() => void>> = [
-      listen('realtime://connected', () => setConnected(true)),
-      listen('realtime://disconnected', () => setConnected(false)),
+      listen('realtime://connected', markConnected),
+      listen('realtime://disconnected', markDisconnected),
 
       listen<RealtimeEvent>('realtime://event', (event) => {
         const frame = event.payload;
@@ -73,6 +92,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     ];
 
     return () => {
+      clearTimeout(graceTimer);
       for (const pending of unlisteners) {
         void pending.then((off) => off());
       }

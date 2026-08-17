@@ -23,6 +23,18 @@ use std::sync::Arc;
 use tauri::{Manager, State};
 use tokio::sync::RwLock;
 
+/// The only server this client will talk to.
+///
+/// GameBlade is a single-instance archive, so the address is compiled in rather
+/// than typed at sign-in: there is no second server to point at, and a field
+/// asking for one only invites a phishing page that looks like the real client.
+/// A local build can override it for development, but a shipped binary cannot
+/// be repointed at run time.
+pub const SERVER_URL: &str = match option_env!("GAMEBLADE_SERVER_URL") {
+    Some(url) => url,
+    None => "https://archive.scopedd.lol",
+};
+
 /// Everything the commands need. The session is behind a lock because signing
 /// in and out mutates it while downloads may still be reading it.
 struct AppState {
@@ -70,11 +82,10 @@ async fn current_session(state: State<'_, AppState>) -> AppResult<Option<Session
 async fn sign_in(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-    server_url: String,
     username: String,
     password: String,
 ) -> AppResult<UserInfo> {
-    let client = ApiClient::new(&server_url, None)?;
+    let client = ApiClient::new(SERVER_URL, None)?;
     let (token, user) = client.sign_in(&username, &password).await?;
 
     let stored = StoredSession {
@@ -670,8 +681,18 @@ pub fn run() {
             std::fs::create_dir_all(&app_data).ok();
 
             // A previously saved device token means the user stays signed in
-            // across restarts without re-entering a password.
-            let restored = credentials::load().unwrap_or(None);
+            // across restarts without re-entering a password. A credential left
+            // over from a build that pointed somewhere else is discarded rather
+            // than silently used against the wrong host.
+            let restored = credentials::load().unwrap_or(None).filter(|session| {
+                let matches = ApiClient::new(SERVER_URL, None)
+                    .map(|client| client.base_url() == session.server_url)
+                    .unwrap_or(false);
+                if !matches {
+                    let _ = credentials::clear();
+                }
+                matches
+            });
             let loaded = settings::load(&app_data);
 
             app.manage(AppState {
@@ -719,6 +740,14 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_client_is_pinned_to_one_server() {
+        // Repointing a shipped build must not be possible at run time; the only
+        // override is a compile-time env var for local development.
+        let client = ApiClient::new(SERVER_URL, None).expect("client");
+        assert_eq!(client.base_url(), "https://archive.scopedd.lol");
+    }
 
     #[test]
     fn folder_names_drop_characters_windows_rejects() {

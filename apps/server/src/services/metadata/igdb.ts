@@ -31,8 +31,15 @@ export interface IgdbGame {
   involved_companies?: IgdbCompany[];
   screenshots?: Array<{ image_id?: string }>;
   videos?: Array<{ video_id?: string }>;
+  /** Absent once IGDB has rejected the field; see TYPE_FIELD. */
+  game_type?: number;
 }
 
+/**
+ * Fields every query asks for. Deliberately excludes anything IGDB has
+ * deprecated: a single unknown name makes the whole request fail with
+ * "Invalid Field", which takes down search, matching and artwork with it.
+ */
 const GAME_FIELDS = [
   'name',
   'summary',
@@ -50,11 +57,27 @@ const GAME_FIELDS = [
   'videos.video_id',
 ].join(',');
 
+/**
+ * IGDB renamed `category` to `game_type`, and the old name now returns
+ * "Invalid Field" rather than being ignored. Requesting either one is
+ * therefore a gamble on which side of that rename the API is on today, so the
+ * field is probed once and dropped for good if it is rejected.
+ *
+ * Losing it costs only ordering: results are ranked by title similarity
+ * regardless, and a base game beats its own DLC on that measure anyway.
+ */
+const TYPE_FIELD = 'game_type';
+
+/** `game_type` value for a standalone main game. */
+const MAIN_GAME = 0;
+
 export class IgdbClient {
   /** 4 requests/second, 8 concurrent — the documented IGDB ceiling. */
   private readonly limiter = new RateLimiter(4, 8);
   private token: { value: string; expiresAt: number } | null = null;
   private tokenPromise: Promise<string> | null = null;
+  /** Cleared permanently the first time IGDB rejects the optional type field. */
+  private typeFieldUsable = true;
 
   constructor(
     private readonly clientId: string,
@@ -133,29 +156,77 @@ export class IgdbClient {
     return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   }
 
+  /** Field list for this request, minus anything IGDB has already rejected. */
+  private fields(): string {
+    return this.typeFieldUsable ? `${GAME_FIELDS},${TYPE_FIELD}` : GAME_FIELDS;
+  }
+
+  /**
+   * Run a query, retrying once without the optional type field if IGDB says it
+   * does not know it. The rejection is remembered, so the cost is one wasted
+   * request per process rather than one per lookup.
+   */
+  private async queryGames(build: (fields: string) => string): Promise<IgdbGame[]> {
+    try {
+      return await this.query<IgdbGame>('games', build(this.fields()));
+    } catch (error) {
+      if (this.typeFieldUsable && isInvalidFieldError(error)) {
+        this.typeFieldUsable = false;
+        return this.query<IgdbGame>('games', build(this.fields()));
+      }
+      throw error;
+    }
+  }
+
   async search(title: string, limit = 10): Promise<IgdbGame[]> {
-    const query = [
-      `search ${IgdbClient.quote(title)};`,
-      `fields ${GAME_FIELDS};`,
-      // Exclude DLC/expansions/bundles so a base game wins the match.
-      'where category = (0,4,8,9);',
-      `limit ${Math.min(Math.max(limit, 1), 50)};`,
-    ].join(' ');
-    return this.query<IgdbGame>('games', query);
+    const capped = Math.min(Math.max(limit, 1), 50);
+    const results = await this.queryGames(
+      (fields) => `search ${IgdbClient.quote(title)}; fields ${fields}; limit ${capped};`,
+    );
+
+    // Main games first when IGDB told us the type, so a base game outranks its
+    // own DLC at equal title similarity. Nothing is excluded: an archive of
+    // freeware is full of entries IGDB types oddly, and dropping them outright
+    // is how a game ends up with no metadata at all.
+    return results.slice().sort((a, b) => rankByType(a) - rankByType(b));
   }
 
   async getById(id: number): Promise<IgdbGame | null> {
-    const results = await this.query<IgdbGame>(
-      'games',
-      `fields ${GAME_FIELDS}; where id = ${Math.trunc(id)}; limit 1;`,
+    const results = await this.queryGames(
+      (fields) => `fields ${fields}; where id = ${Math.trunc(id)}; limit 1;`,
     );
     return results[0] ?? null;
   }
 
-  /** Cheap call used by the admin UI to confirm the credentials work. */
+  /**
+   * Confirms the credentials work *and* that a real search succeeds.
+   *
+   * A bare `fields id; limit 1;` probe passes even when every search is
+   * failing, which is exactly how a broken query stayed invisible: the admin
+   * panel reported IGDB healthy while nothing could match. The health check
+   * has to exercise the same shape of request the app actually makes.
+   */
   async verify(): Promise<void> {
-    await this.query('games', 'fields id; limit 1;');
+    const results = await this.search('portal', 1);
+    if (results.length === 0) {
+      throw new HttpError(
+        502,
+        'IGDB accepted the credentials but returned no results for a known title',
+      );
+    }
   }
+}
+
+/** True for the 400 IGDB returns when a query names a field it does not have. */
+function isInvalidFieldError(error: unknown): boolean {
+  if (!(error instanceof HttpError)) return false;
+  if (error.status !== 400) return false;
+  return /invalid field|unexpected.*field|no such field/i.test(error.message);
+}
+
+function rankByType(game: IgdbGame): number {
+  if (game.game_type === undefined) return 0;
+  return game.game_type === MAIN_GAME ? 0 : 1;
 }
 
 export function normaliseIgdbGame(game: IgdbGame) {

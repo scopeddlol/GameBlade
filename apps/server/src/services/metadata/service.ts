@@ -166,6 +166,29 @@ export class MetadataService {
   }
 
   /**
+   * Bring one game up to date from whatever providers are available.
+   *
+   * Artwork is deliberately *not* conditional on an IGDB match. SteamGridDB is
+   * searched by title and knows nothing about IGDB, so coupling the two meant a
+   * single broken IGDB query left the entire library with no covers at all —
+   * which is exactly what happened. Each provider now contributes whatever it
+   * can on its own.
+   */
+  async enrich(game: Game): Promise<void> {
+    // Only an unmatched entry is a candidate for automatic identification:
+    // 'manual' is hand-curated and 'skipped' was excluded on purpose.
+    if (game.matchStatus === 'unmatched' && this.hasIgdb) {
+      // A successful match already pulls artwork using the provider's own
+      // title, which is more accurate than the name parsed off disk.
+      if (await this.autoMatch(game)) return;
+    }
+
+    if (!game.coverImageId) {
+      await this.fetchArtwork(game.id, game.searchTitle);
+    }
+  }
+
+  /**
    * Look up a game by its parsed title and apply the result when the match is
    * unambiguous. Games that stay unmatched surface in the admin UI for a manual fix.
    */

@@ -6,6 +6,13 @@ export interface SessionInfo {
   role: string;
 }
 
+/**
+ * The server this build talks to, shown on the sign-in screen. The address
+ * itself is compiled into the Rust side; this is only for display, so a user
+ * can see at a glance which archive they are signing in to.
+ */
+export const SERVER_HOST = 'archive.scopedd.lol';
+
 export interface UserInfo {
   id: string;
   username: string;
@@ -84,8 +91,8 @@ export interface LocalSave {
 export const ipc = {
   currentSession: () => invoke<SessionInfo | null>('current_session'),
 
-  signIn: (serverUrl: string, username: string, password: string) =>
-    invoke<UserInfo>('sign_in', { serverUrl, username, password }),
+  signIn: (username: string, password: string) =>
+    invoke<UserInfo>('sign_in', { username, password }),
 
   signOut: () => invoke<void>('sign_out'),
 

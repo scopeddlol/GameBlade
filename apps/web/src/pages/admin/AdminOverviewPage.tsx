@@ -1,6 +1,6 @@
 import type { ScanProgress } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Megaphone, RefreshCw } from 'lucide-react';
+import { Image as ImageIcon, Megaphone, RefreshCw } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
@@ -37,6 +37,14 @@ export function AdminOverviewPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'stats'] }),
   });
 
+  // Artwork comes from a different provider than metadata, so a game can be
+  // matched and still have no cover — after adding a SteamGridDB key, or after
+  // the provider was unreachable during the first scan.
+  const enrichMutation = useMutation({
+    mutationFn: () => api.post('/admin/scan/match-pending'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'stats'] }),
+  });
+
   if (statsQuery.isLoading) return <PageLoader label="Loading overview" />;
   const stats = statsQuery.data;
   const scanning = stats?.scan.state === 'scanning' || stats?.scan.state === 'matching';
@@ -47,7 +55,22 @@ export function AdminOverviewPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
         <button
           type="button"
-          className="gb-btn-primary ml-auto"
+          className="gb-btn-ghost ml-auto"
+          onClick={() => enrichMutation.mutate()}
+          disabled={scanning || enrichMutation.isPending}
+          title="Fetch metadata and artwork for anything still missing it, without re-walking the disk"
+        >
+          {enrichMutation.isPending ? (
+            <Spinner className="h-4 w-4" />
+          ) : (
+            <ImageIcon className="h-4 w-4" />
+          )}
+          Fetch missing artwork
+        </button>
+
+        <button
+          type="button"
+          className="gb-btn-primary"
           onClick={() => scanMutation.mutate()}
           disabled={scanning}
         >

@@ -102,11 +102,20 @@ async fn connect(
     let _ = app.emit("realtime://connected", ());
 
     let mut ping = tokio::time::interval(PING_INTERVAL);
+    // After a laptop resumes from sleep the interval would otherwise fire once
+    // per missed tick in a burst, spraying pings the moment the link returns.
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     ping.tick().await;
 
     loop {
         tokio::select! {
             _ = ping.tick() => {
+                // A protocol-level ping is what keeps a reverse proxy from
+                // treating the socket as idle; the JSON one only refreshes
+                // presence on the server.
+                if write.send(Message::Ping(Vec::new())).await.is_err() {
+                    break;
+                }
                 if write.send(Message::Text(r#"{"type":"ping"}"#.to_string())).await.is_err() {
                     break;
                 }
@@ -118,6 +127,16 @@ async fn connect(
                         // parsing them twice would only add a place to drift.
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
                             let _ = app.emit("realtime://event", value);
+                        }
+                    }
+                    Some(Ok(Message::Ping(_))) => {
+                        // Tungstenite queues the pong itself, but on a split
+                        // stream that queued frame sits in the write half and is
+                        // never sent unless it is flushed. Without this the
+                        // server sees an unresponsive client and hangs up — the
+                        // random "reconnecting" the UI kept showing.
+                        if write.flush().await.is_err() {
+                            break;
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => break,

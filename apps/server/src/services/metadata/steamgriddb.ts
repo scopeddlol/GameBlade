@@ -85,9 +85,20 @@ export class SteamGridDbClient {
     return (data ?? []).slice().sort((a, b) => b.score - a.score);
   }
 
-  /** Vertical 600x900 / 342x482 style poster used by the library grid. */
-  grids(gameId: number) {
-    return this.assets('grids', gameId, { dimensions: '600x900,342x482' });
+  /**
+   * Poster art for the library grid.
+   *
+   * The exact Steam poster dimensions are preferred, but a game whose only
+   * artwork is, say, 660x930 should still get a cover rather than none — so a
+   * miss falls back to every grid, portrait first. Filtering on dimensions
+   * alone silently returns an empty list, which reads as "no artwork exists".
+   */
+  async grids(gameId: number): Promise<SgdbAsset[]> {
+    const posters = await this.assets('grids', gameId, { dimensions: '600x900,342x482' });
+    if (posters.length > 0) return posters;
+
+    const all = await this.assets('grids', gameId);
+    return all.slice().sort((a, b) => portraitRank(a) - portraitRank(b) || b.score - a.score);
   }
 
   /** Wide banner behind the game detail page. */
@@ -106,4 +117,9 @@ export class SteamGridDbClient {
   async verify(): Promise<void> {
     await this.search('portal');
   }
+}
+
+/** Taller-than-wide art sorts first; a wide capsule in a poster slot looks wrong. */
+function portraitRank(asset: SgdbAsset): number {
+  return asset.height > asset.width ? 0 : 1;
 }
