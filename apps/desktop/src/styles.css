@@ -334,11 +334,17 @@ button {
 }
 
 .tab-content {
+  /* Below 1500px this fills the available width like any block element; past
+     it, the centering is what stops every tab from pinning to the left edge
+     with the rest of a wide window sitting empty. */
+  width: 100%;
+  margin: 0 auto;
   padding: 20px 24px 40px;
   display: flex;
   flex-direction: column;
   gap: 26px;
   max-width: 1500px;
+  box-sizing: border-box;
 }
 
 /* ---------------------------------------------------------------- controls */
