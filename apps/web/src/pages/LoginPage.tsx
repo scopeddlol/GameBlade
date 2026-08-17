@@ -33,7 +33,7 @@ export function AuthShell({
 }
 
 export function LoginPage() {
-  const { user, status, refresh, isLoading } = useSession();
+  const { user, isAdmin, status, refresh, isLoading } = useSession();
   const navigate = useNavigate();
   const location = useLocation();
   const [username, setUsername] = useState('');
@@ -46,7 +46,9 @@ export function LoginPage() {
   }
   if (user) {
     const from = (location.state as { from?: string } | null)?.from;
-    return <Navigate to={from ?? '/'} replace />;
+    // Only administrators have anywhere to go on the web; everyone else plays
+    // from the desktop client, so they land back on the public page.
+    return <Navigate to={from ?? (isAdmin ? '/admin' : '/')} replace />;
   }
 
   const handleSubmit = async (event: FormEvent) => {
@@ -58,7 +60,7 @@ export function LoginPage() {
       setCsrfToken(session.csrfToken);
       await refresh();
       const from = (location.state as { from?: string } | null)?.from;
-      navigate(from ?? '/', { replace: true });
+      navigate(from ?? (session.user.role === 'admin' ? '/admin' : '/'), { replace: true });
     } catch (caught) {
       setError(caught instanceof ApiRequestError ? caught.message : 'Could not reach the server.');
     } finally {
@@ -69,7 +71,7 @@ export function LoginPage() {
   return (
     <AuthShell
       title={status?.serverName ?? 'GameBlade'}
-      subtitle="Sign in to browse the library"
+      subtitle="Sign in to manage this server"
       footer={
         status?.allowSelfRegistration ? (
           <>

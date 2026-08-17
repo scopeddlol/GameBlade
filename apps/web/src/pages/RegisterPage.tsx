@@ -66,7 +66,9 @@ export function RegisterPage() {
       });
       setCsrfToken(session.csrfToken);
       await refresh();
-      navigate('/', { replace: true });
+      // A new account has nothing to do on the web. The landing page is where
+      // the Windows client download lives, which is the actual next step.
+      navigate(session.user.role === 'admin' ? '/admin' : '/', { replace: true });
     } catch (caught) {
       setError(caught instanceof ApiRequestError ? caught.message : 'Could not reach the server.');
     } finally {
