@@ -354,9 +354,14 @@ async fn download_file(
     let already: u64 = part.segments.iter().map(|s| s.done).sum();
     downloaded.fetch_add(already, Ordering::Relaxed);
 
+    // truncate(false) is load-bearing on a resume: the bytes already on disk are
+    // exactly what the .gbpart journal accounts for, and discarding them here
+    // would restart every segment from zero. set_len only sizes the file so the
+    // segments can seek and write at their own offsets.
     let handle = tokio::fs::OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(false)
         .open(&dest)
         .await?;
     handle.set_len(file.size_bytes).await?;
