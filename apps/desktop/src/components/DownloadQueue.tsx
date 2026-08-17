@@ -1,116 +1,117 @@
-import { formatBytes, formatEta, formatRate, type DownloadState } from '../lib/ipc.js';
-
-const STATUS_LABEL: Record<DownloadState['status'], string> = {
-  queued: 'Queued',
-  downloading: 'Downloading',
-  verifying: 'Verifying',
-  completed: 'Completed',
-  failed: 'Failed',
-  cancelled: 'Paused',
-};
-
-function badgeClass(status: DownloadState['status']): string {
-  if (status === 'completed') return 'badge badge-success';
-  if (status === 'failed') return 'badge badge-danger';
-  if (status === 'downloading' || status === 'verifying') return 'badge badge-info';
-  return 'badge';
-}
+import clsx from 'clsx';
+import { X } from 'lucide-react';
+import { formatBytes, formatEta, formatRate } from '../lib/format.js';
+import type { DownloadState } from '../lib/ipc.js';
+import { Badge, Empty, ProgressBar } from './ui.js';
 
 export function DownloadQueue({
   downloads,
   onCancel,
   onClear,
+  onClose,
 }: {
   downloads: DownloadState[];
   onCancel: (gameId: string) => void;
   onClear: (gameId: string) => void;
+  onClose: () => void;
 }) {
-  if (downloads.length === 0) {
-    return (
-      <div className="empty">
-        <p>No downloads yet.</p>
-        <p className="tile-sub">
-          Pick a game from the library. Transfers resume automatically if the connection drops.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="queue">
-      {downloads.map((download) => {
-        const percent =
-          download.total_bytes > 0
-            ? Math.min(100, (download.downloaded_bytes / download.total_bytes) * 100)
-            : 0;
-        const active = download.status === 'downloading' || download.status === 'queued';
-        const remaining = Math.max(0, download.total_bytes - download.downloaded_bytes);
+    <div className="drawer-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="drawer narrow" onClick={(e) => e.stopPropagation()}>
+        <header className="drawer-head">
+          <h2>Downloads</h2>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
+            <X size={18} aria-hidden />
+          </button>
+        </header>
 
-        return (
-          <div className="card queue-item" key={download.game_id}>
-            <div className="queue-head">
-              <span className="queue-title" title={download.title}>
-                {download.title}
-              </span>
-              <span className={badgeClass(download.status)}>{STATUS_LABEL[download.status]}</span>
-              {active ? (
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => onCancel(download.game_id)}
-                >
-                  Pause
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => onClear(download.game_id)}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
+        <div className="drawer-body">
+          {downloads.length === 0 ? (
+            <Empty
+              title="Nothing downloading"
+              message="Installs you start from the Store or Library show up here."
+            />
+          ) : (
+            downloads.map((download) => {
+              const percent =
+                download.total_bytes > 0
+                  ? (download.downloaded_bytes / download.total_bytes) * 100
+                  : 0;
+              const active = download.status === 'downloading' || download.status === 'queued';
 
-            <div className="progress">
-              <div className="progress-bar" style={{ width: `${percent}%` }} />
-            </div>
+              return (
+                <div key={download.game_id} className="download">
+                  <div className="download-head">
+                    <strong>{download.title}</strong>
+                    <Badge
+                      tone={
+                        download.status === 'failed'
+                          ? 'danger'
+                          : download.status === 'completed'
+                            ? 'success'
+                            : download.status === 'cancelled'
+                              ? 'neutral'
+                              : 'info'
+                      }
+                    >
+                      {download.status}
+                    </Badge>
+                  </div>
 
-            <div className="queue-meta">
-              <span>
-                {formatBytes(download.downloaded_bytes)} / {formatBytes(download.total_bytes)} (
-                {percent.toFixed(1)}%)
-              </span>
-              {download.status === 'downloading' ? (
-                <>
-                  <span>{formatRate(download.bytes_per_second)}</span>
-                  <span>{formatEta(remaining, download.bytes_per_second)} left</span>
-                </>
-              ) : null}
-              {download.files_total > 1 ? (
-                <span>
-                  {download.files_completed} / {download.files_total} files
-                </span>
-              ) : null}
-              {download.current_file && download.status === 'downloading' ? (
-                <span title={download.current_file}>{download.current_file}</span>
-              ) : null}
-            </div>
+                  <ProgressBar value={percent} />
 
-            {download.error ? (
-              <div className="error" style={{ marginTop: 10, marginBottom: 0 }}>
-                {download.error}
-              </div>
-            ) : null}
+                  <p className="muted small">
+                    {formatBytes(download.downloaded_bytes)} of {formatBytes(download.total_bytes)}
+                    {active ? (
+                      <>
+                        {' '}
+                        · {formatRate(download.bytes_per_second)} ·{' '}
+                        {formatEta(
+                          download.total_bytes - download.downloaded_bytes,
+                          download.bytes_per_second,
+                        )}{' '}
+                        left
+                      </>
+                    ) : null}
+                    {download.files_total > 1 ? (
+                      <>
+                        {' '}
+                        · {download.files_completed}/{download.files_total} files
+                      </>
+                    ) : null}
+                  </p>
 
-            {download.status === 'completed' ? (
-              <div className="queue-meta">
-                <span title={download.destination}>Saved to {download.destination}</span>
-              </div>
-            ) : null}
-          </div>
-        );
-      })}
+                  {download.current_file && active ? (
+                    <p className={clsx('muted', 'small', 'truncate')}>{download.current_file}</p>
+                  ) : null}
+
+                  {download.error ? <p className="error small">{download.error}</p> : null}
+
+                  <div className="download-actions">
+                    {active ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => onCancel(download.game_id)}
+                      >
+                        Cancel
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => onClear(download.game_id)}
+                      >
+                        Dismiss
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
     </div>
   );
 }

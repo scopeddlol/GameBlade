@@ -164,6 +164,19 @@ async fn api_put(
 }
 
 #[tauri::command]
+async fn api_patch(
+    state: State<'_, AppState>,
+    path: String,
+    body: Option<serde_json::Value>,
+) -> AppResult<serde_json::Value> {
+    state
+        .client()
+        .await?
+        .patch_json(&path, &body.unwrap_or(serde_json::Value::Null))
+        .await
+}
+
+#[tauri::command]
 async fn api_delete(state: State<'_, AppState>, path: String) -> AppResult<serde_json::Value> {
     state.client().await?.delete_json(&path).await
 }
@@ -678,6 +691,7 @@ pub fn run() {
             api_get,
             api_post,
             api_put,
+            api_patch,
             api_delete,
             image_url,
             get_settings,

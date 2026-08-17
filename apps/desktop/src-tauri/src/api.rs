@@ -156,6 +156,20 @@ impl ApiClient {
         Ok(serde_json::from_str(&text)?)
     }
 
+    pub async fn patch_json(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> AppResult<serde_json::Value> {
+        let request = self.authorised(self.http.patch(self.endpoint(path)).json(body))?;
+        let response = check_status(request.send().await?).await?;
+        let text = response.text().await?;
+        if text.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
     pub async fn delete_json(&self, path: &str) -> AppResult<serde_json::Value> {
         let request = self.authorised(self.http.delete(self.endpoint(path)))?;
         let response = check_status(request.send().await?).await?;

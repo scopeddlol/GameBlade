@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@gameblade/shared": "workspace:*",
+    "@tanstack/react-query": "^5.101.4",
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-dialog": "^2.2.0",
     "@tauri-apps/plugin-opener": "^2.2.5",
