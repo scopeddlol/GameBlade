@@ -40,6 +40,16 @@ services:
       IGDB_CLIENT_ID: ${IGDB_CLIENT_ID:-}
       IGDB_CLIENT_SECRET: ${IGDB_CLIENT_SECRET:-}
       STEAMGRIDDB_API_KEY: ${STEAMGRIDDB_API_KEY:-}
+      # Reads published achievement lists only; no player data is requested.
+      STEAM_API_KEY: ${STEAM_API_KEY:-}
+
+      # --- Desktop client ---
+      # Where the landing page's download button points.
+      CLIENT_DOWNLOAD_URL: ${CLIENT_DOWNLOAD_URL:-}
+
+      # --- Per-account storage quotas, in megabytes (0 disables) ---
+      MEDIA_QUOTA_MB: ${MEDIA_QUOTA_MB:-20480}
+      SAVE_QUOTA_MB: ${SAVE_QUOTA_MB:-10240}
 
       # --- Scanning ---
       SCAN_ON_START: ${SCAN_ON_START:-true}
@@ -52,7 +62,8 @@ services:
     # user: '1000:1000'
 
     volumes:
-      # Database and cached artwork.
+      # Database, cached artwork, user uploads and cloud saves. Back this up:
+      # the game files can be re-scanned, but saves and profiles cannot.
       - ./data:/data
       # Your archive. Read-only: GameBlade never needs to modify these files,
       # and :ro means a bug or a compromise cannot damage the collection.

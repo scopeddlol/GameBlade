@@ -1,137 +1,44 @@
 import {
+  editGameSchema,
   gameQuerySchema,
+  launchRuleSchema,
   matchGameSchema,
+  saveRuleSchema,
+  setArtworkSchema,
   type DownloadManifest,
   type GameFileEntry,
-  type Paginated,
 } from '@gameblade/shared';
-import { and, asc, desc, eq, isNull, like, or, sql, type SQL } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { requireAdmin, requireUser } from '../auth/middleware.js';
-import { gameFiles, games, libraries, userGameState } from '../db/schema.js';
+import {
+  gameFiles,
+  gameLaunchRules,
+  games,
+  gameSaveRules,
+  libraries,
+  userGameState,
+} from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
-import { toGameDetail, toGameSummary } from './mappers.js';
+import { newId } from '../lib/ids.js';
+import { isoNow } from '../lib/time.js';
+import { toGameDetail, toLaunchRule, toSaveRule } from './mappers.js';
 
 export async function gameRoutes(app: FastifyInstance): Promise<void> {
-  const { db, config, metadata, downloadTokens } = app.gameblade;
+  const { db, config, metadata, downloadTokens, catalog, achievements, images } = app.gameblade;
   const basePath = config.basePath;
-
-  /** Favourite flags are per-user, so they are fetched alongside every listing. */
-  function favouriteIds(userId: string, gameIds: string[]): Set<string> {
-    if (gameIds.length === 0) return new Set();
-    const rows = db
-      .select({ gameId: userGameState.gameId })
-      .from(userGameState)
-      .where(and(eq(userGameState.userId, userId), eq(userGameState.isFavorite, true)))
-      .all();
-    const favourites = new Set(rows.map((r) => r.gameId));
-    return new Set(gameIds.filter((id) => favourites.has(id)));
-  }
 
   app.get('/games', async (request) => {
     const context = requireUser(request);
-    const query = gameQuerySchema.parse(request.query);
-
-    const conditions: SQL[] = [];
-
-    if (!query.includeMissing) {
-      conditions.push(isNull(games.missingAt));
-    }
-    if (query.search) {
-      const term = `%${query.search.replace(/[%_]/g, '')}%`;
-      const searchCondition = or(like(games.title, term), like(games.searchTitle, term));
-      if (searchCondition) conditions.push(searchCondition);
-    }
-    if (query.libraryId) {
-      conditions.push(eq(games.libraryId, query.libraryId));
-    }
-    if (query.matchStatus) {
-      conditions.push(eq(games.matchStatus, query.matchStatus));
-    }
-    // Genres and platforms are JSON arrays; matching the quoted value avoids
-    // "Action" also matching "Action-Adventure".
-    if (query.genre) {
-      conditions.push(sql`${games.genres} LIKE ${`%"${query.genre}"%`}`);
-    }
-    if (query.platform) {
-      conditions.push(sql`${games.platforms} LIKE ${`%"${query.platform}"%`}`);
-    }
-    if (query.favoritesOnly) {
-      conditions.push(
-        sql`EXISTS (SELECT 1 FROM user_game_state ugs
-              WHERE ugs.game_id = ${games.id}
-                AND ugs.user_id = ${context.user.id}
-                AND ugs.is_favorite = 1)`,
-      );
-    }
-
-    const where = conditions.length > 0 ? and(...conditions) : undefined;
-
-    const sortColumn = {
-      title: games.sortTitle,
-      added: games.addedAt,
-      released: games.releaseDate,
-      size: games.sizeBytes,
-      rating: games.rating,
-    }[query.sort];
-
-    const direction = query.order === 'desc' ? desc : asc;
-
-    const rows = db
-      .select()
-      .from(games)
-      .where(where)
-      // Secondary sort keeps pagination stable when the primary key ties or is null.
-      .orderBy(direction(sortColumn), asc(games.sortTitle))
-      .limit(query.limit)
-      .offset(query.offset)
-      .all();
-
-    const totalRow = db
-      .select({ count: sql<number>`count(*)` })
-      .from(games)
-      .where(where)
-      .get();
-
-    const favourites = favouriteIds(
-      context.user.id,
-      rows.map((r) => r.id),
-    );
-
-    const body: Paginated<ReturnType<typeof toGameSummary>> = {
-      items: rows.map((game) =>
-        toGameSummary(game, { basePath, isFavorite: favourites.has(game.id) }),
-      ),
-      total: totalRow?.count ?? 0,
-      offset: query.offset,
-      limit: query.limit,
-    };
-    return body;
+    return catalog.search(context.user.id, gameQuerySchema.parse(request.query));
   });
 
-  /** Distinct genres and platforms present in the library, for filter menus. */
+  /** Distinct genres, platforms and developers, for the Store filter rail. */
   app.get('/games/filters', async (request) => {
     requireUser(request);
-    const rows = db
-      .select({ genres: games.genres, platforms: games.platforms })
-      .from(games)
-      .where(isNull(games.missingAt))
-      .all();
-
-    const genres = new Set<string>();
-    const platforms = new Set<string>();
-    for (const row of rows) {
-      for (const g of row.genres ?? []) genres.add(g);
-      for (const p of row.platforms ?? []) platforms.add(p);
-    }
-
+    const facets = catalog.facets();
     const libraryRows = db.select().from(libraries).all();
-
-    return {
-      genres: [...genres].sort((a, b) => a.localeCompare(b)),
-      platforms: [...platforms].sort((a, b) => a.localeCompare(b)),
-      libraries: libraryRows.map((l) => ({ id: l.id, name: l.name })),
-    };
+    return { ...facets, libraries: libraryRows.map((l) => ({ id: l.id, name: l.name })) };
   });
 
   app.get('/games/:id', async (request) => {
@@ -147,17 +54,10 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
 
     if (!row) throw ApiError.notFound('Game not found');
 
-    const favourite = db
-      .select()
-      .from(userGameState)
-      .where(and(eq(userGameState.userId, context.user.id), eq(userGameState.gameId, id)))
-      .get();
+    const [summary] = catalog.decorate([row.game], context.user.id);
+    if (!summary) throw ApiError.notFound('Game not found');
 
-    return toGameDetail(row.game, {
-      basePath,
-      libraryName: row.libraryName,
-      isFavorite: favourite?.isFavorite ?? false,
-    });
+    return toGameDetail(row.game, summary, { basePath, libraryName: row.libraryName });
   });
 
   app.get('/games/:id/files', async (request) => {
@@ -193,6 +93,9 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     const files = db.select().from(gameFiles).where(eq(gameFiles.gameId, id)).all();
     const issued = downloadTokens.issue({ userId: context.user.id, gameId: id });
 
+    // Installing implies wanting it in the library, so the two never drift.
+    catalog.addToLibrary(context.user.id, id);
+
     const body: DownloadManifest = {
       gameId: game.id,
       title: game.title,
@@ -209,6 +112,36 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
       expiresAt: issued.expiresAt,
     };
     return body;
+  });
+
+  app.get('/games/:id/achievements', async (request) => {
+    const context = requireUser(request);
+    const { id } = request.params as { id: string };
+    return achievements.listForGame(id, context.user.id);
+  });
+
+  /**
+   * The rules the desktop client needs to actually run and back up a game:
+   * where its executable lives and where it keeps its saves.
+   */
+  app.get('/games/:id/rules', async (request) => {
+    requireUser(request);
+    const { id } = request.params as { id: string };
+
+    return {
+      save: db
+        .select()
+        .from(gameSaveRules)
+        .where(eq(gameSaveRules.gameId, id))
+        .all()
+        .map(toSaveRule),
+      launch: db
+        .select()
+        .from(gameLaunchRules)
+        .where(eq(gameLaunchRules.gameId, id))
+        .all()
+        .map(toLaunchRule),
+    };
   });
 
   app.post('/games/:id/favorite', async (request) => {
@@ -262,6 +195,73 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true, matchStatus: 'manual' };
   });
 
+  /**
+   * Hand edits to a game's metadata. Saving marks the entry `manual`, which is
+   * what stops the next library scan from overwriting the curation.
+   */
+  app.patch('/games/:id', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const input = editGameSchema.parse(request.body);
+
+    const game = db.select().from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    const patch: Partial<typeof games.$inferInsert> = { updatedAt: isoNow() };
+
+    if (input.title !== undefined) patch.title = input.title;
+    if (input.sortTitle !== undefined)
+      patch.sortTitle = input.sortTitle ?? input.title ?? game.title;
+    if (input.summary !== undefined) patch.summary = input.summary;
+    if (input.storyline !== undefined) patch.storyline = input.storyline;
+    if (input.releaseDate !== undefined) patch.releaseDate = input.releaseDate;
+    if (input.rating !== undefined) patch.rating = input.rating;
+    if (input.developers !== undefined) patch.developers = input.developers;
+    if (input.publishers !== undefined) patch.publishers = input.publishers;
+    if (input.genres !== undefined) patch.genres = input.genres;
+    if (input.platforms !== undefined) patch.platforms = input.platforms;
+    if (input.videos !== undefined) patch.videos = input.videos;
+    if (input.steamAppId !== undefined) patch.steamAppId = input.steamAppId;
+
+    // Supplied screenshot URLs are downloaded into the local cache first, so
+    // the client keeps loading them even if the origin disappears.
+    if (input.screenshots !== undefined) {
+      patch.screenshots = input.screenshots
+        ? await images.cacheMany(input.screenshots, 'screenshot')
+        : null;
+    }
+
+    patch.matchStatus = input.matchStatus ?? 'manual';
+
+    db.update(games).set(patch).where(eq(games.id, id)).run();
+    return { ok: true };
+  });
+
+  /** Replaces one artwork slot with an operator-supplied image. */
+  app.put('/games/:id/artwork', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const input = setArtworkSchema.parse(request.body);
+
+    const game = db.select().from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    const imageId = input.url ? await images.cache(input.url, input.kind) : null;
+    const column = {
+      cover: 'coverImageId',
+      hero: 'heroImageId',
+      logo: 'logoImageId',
+      icon: 'iconImageId',
+    }[input.kind] as 'coverImageId' | 'heroImageId' | 'logoImageId' | 'iconImageId';
+
+    db.update(games)
+      .set({ [column]: imageId, updatedAt: isoNow() })
+      .where(eq(games.id, id))
+      .run();
+
+    return { ok: true, imageId };
+  });
+
   app.post('/games/:id/refresh-artwork', async (request) => {
     requireAdmin(request);
     const { id } = request.params as { id: string };
@@ -270,6 +270,68 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     if (!game) throw ApiError.notFound('Game not found');
 
     await metadata.fetchArtwork(id, game.searchTitle);
+    return { ok: true };
+  });
+
+  // ---- Launch and save rules (administrators only) ----
+
+  app.put('/games/:id/save-rule', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const input = saveRuleSchema.parse(request.body);
+
+    const game = db.select({ id: games.id }).from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    // One rule per game keeps the client's job unambiguous, so a save replaces
+    // whatever was there rather than accumulating.
+    db.delete(gameSaveRules).where(eq(gameSaveRules.gameId, id)).run();
+    const record = {
+      id: newId('svr'),
+      gameId: id,
+      pathTemplate: input.pathTemplate,
+      include: input.include ?? null,
+      exclude: input.exclude ?? null,
+      note: input.note ?? null,
+      createdAt: isoNow(),
+    };
+    db.insert(gameSaveRules).values(record).run();
+    return toSaveRule(record);
+  });
+
+  app.delete('/games/:id/save-rule', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    db.delete(gameSaveRules).where(eq(gameSaveRules.gameId, id)).run();
+    return { ok: true };
+  });
+
+  app.put('/games/:id/launch-rule', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const input = launchRuleSchema.parse(request.body);
+
+    const game = db.select({ id: games.id }).from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    db.delete(gameLaunchRules).where(eq(gameLaunchRules.gameId, id)).run();
+    const record = {
+      id: newId('lnr'),
+      gameId: id,
+      executable: input.executable ?? null,
+      args: input.args ?? null,
+      workingDir: input.workingDir ?? null,
+      note: input.note ?? null,
+      createdAt: isoNow(),
+    };
+    db.insert(gameLaunchRules).values(record).run();
+    return toLaunchRule(record);
+  });
+
+  app.delete('/games/:id/launch-rule', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    db.delete(gameLaunchRules).where(eq(gameLaunchRules.gameId, id)).run();
     return { ok: true };
   });
 
@@ -306,6 +368,21 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     requireAdmin(request);
     const { id } = request.params as { id: string };
     db.update(games).set({ matchStatus: 'skipped' }).where(eq(games.id, id)).run();
+    return { ok: true };
+  });
+
+  /** Removes a game from the caller's library without touching the archive. */
+  app.delete('/games/:id/library', async (request) => {
+    const context = requireUser(request);
+    const { id } = request.params as { id: string };
+    catalog.removeFromLibrary(context.user.id, id);
+    return { ok: true };
+  });
+
+  app.post('/games/:id/library', async (request) => {
+    const context = requireUser(request);
+    const { id } = request.params as { id: string };
+    catalog.addToLibrary(context.user.id, id);
     return { ok: true };
   });
 }

@@ -22,7 +22,7 @@ function isSecureRequest(request: FastifyRequest): boolean {
 }
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
-  const { auth, settings, config } = app.gameblade;
+  const { auth, settings, config, profiles } = app.gameblade;
 
   /** Tells the web client whether to show first-run setup or a login form. */
   app.get('/auth/status', async () => {
@@ -53,6 +53,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         email: input.email || null,
         role: 'admin',
       });
+      profiles.ensure(user.id, user.username);
 
       const session = auth.createSession(user.id, {
         userAgent: request.headers['user-agent'],
@@ -123,6 +124,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         email: input.email || null,
         role,
       });
+      profiles.ensure(user.id, user.username);
 
       const session = auth.createSession(user.id, {
         userAgent: request.headers['user-agent'],

@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { GameDetail, GameSummary, Paginated } from '@gameblade/shared';
 
 export interface SessionInfo {
   server_url: string;
@@ -31,6 +30,57 @@ export interface DownloadState {
   error: string | null;
 }
 
+export interface InstalledGame {
+  gameId: string;
+  title: string;
+  installPath: string;
+  executable: string | null;
+  sizeBytes: number;
+  installedAt: string;
+  saveBaseSha256: string | null;
+}
+
+export interface RunningGame {
+  gameId: string;
+  title: string;
+  sessionId: string;
+  startedAt: string;
+  seconds: number;
+}
+
+export interface ClientSettings {
+  installDir: string;
+  syncSaves: boolean;
+  promptOnSaveConflict: boolean;
+  shareActivity: boolean;
+  minimiseOnLaunch: boolean;
+  downloadConcurrency: number;
+  verifyDownloads: boolean;
+}
+
+export interface SaveRulePayload {
+  pathTemplate: string;
+  include: string | null;
+  exclude: string | null;
+}
+
+export interface LocalSave {
+  root: string;
+  fileCount: number;
+  sizeBytes: number;
+  sha256: string;
+  capturedAt: string;
+}
+
+/**
+ * The bridge to the Rust side.
+ *
+ * HTTP calls go through generic pass-throughs rather than one command per
+ * endpoint: the server already owns validation and response shapes, so
+ * mirroring each route in Rust would only create somewhere for the two to
+ * drift apart. Anything that touches the filesystem, a process or the
+ * credential store gets a real command, because only Rust can do it.
+ */
 export const ipc = {
   currentSession: () => invoke<SessionInfo | null>('current_session'),
 
@@ -41,41 +91,97 @@ export const ipc = {
 
   verifySession: () => invoke<UserInfo>('verify_session'),
 
-  fetchGames: (query: string) => invoke<Paginated<GameSummary>>('fetch_games', { query }),
+  /* ------------------------------------------------------------------ api */
 
-  fetchGame: (gameId: string) => invoke<GameDetail>('fetch_game', { gameId }),
+  get: <T>(path: string) => invoke<T>('api_get', { path }),
+  post: <T>(path: string, body?: unknown) => invoke<T>('api_post', { path, body }),
+  put: <T>(path: string, body?: unknown) => invoke<T>('api_put', { path, body }),
+  patch: <T>(path: string, body?: unknown) => invoke<T>('api_patch', { path, body }),
+  del: <T>(path: string) => invoke<T>('api_delete', { path }),
 
   /** Artwork paths need the device token appended before an <img> can load them. */
   imageUrl: (path: string) => invoke<string>('image_url', { path }),
 
-  startDownload: (gameId: string, destination: string) =>
+  /* ------------------------------------------------------------- settings */
+
+  getSettings: () => invoke<ClientSettings>('get_settings'),
+  updateSettings: (patch: ClientSettings) => invoke<ClientSettings>('update_settings', { patch }),
+
+  /* ------------------------------------------------------------ downloads */
+
+  startDownload: (gameId: string, destination?: string) =>
     invoke<void>('start_download', { gameId, destination }),
-
   cancelDownload: (gameId: string) => invoke<boolean>('cancel_download', { gameId }),
-
   clearDownload: (gameId: string) => invoke<void>('clear_download', { gameId }),
-
   listDownloads: () => invoke<DownloadState[]>('list_downloads'),
+
+  /* ------------------------------------------------------------- installs */
+
+  listInstalled: () => invoke<InstalledGame[]>('list_installed'),
+  finishInstall: (gameId: string, title: string, downloadedPath: string) =>
+    invoke<InstalledGame>('finish_install', { gameId, title, downloadedPath }),
+  uninstall: (gameId: string) => invoke<void>('uninstall_game', { gameId }),
+
+  /* -------------------------------------------------------------- playing */
+
+  launch: (
+    gameId: string,
+    options?: { executableOverride?: string; args?: string; workingDir?: string },
+  ) =>
+    invoke<RunningGame>('launch_game', {
+      gameId,
+      executableOverride: options?.executableOverride,
+      args: options?.args,
+      workingDir: options?.workingDir,
+    }),
+  runningGame: () => invoke<RunningGame | null>('running_game'),
+
+  /* ---------------------------------------------------------- cloud saves */
+
+  saveStatus: (gameId: string, rule: SaveRulePayload) =>
+    invoke<{ remote: SaveSyncStatusPayload; local: LocalSave | null }>('save_status', {
+      gameId,
+      rule,
+    }),
+  pushSave: (gameId: string, rule: SaveRulePayload, force = false) =>
+    invoke<unknown>('push_save', { gameId, rule, force }),
+  pullSave: (gameId: string, rule: SaveRulePayload, slotId: string, versionId?: string) =>
+    invoke<string>('pull_save', { gameId, rule, slotId, versionId }),
+
+  uploadMedia: (filePath: string, kind: 'image' | 'clip' | 'avatar' | 'banner') =>
+    invoke<{ id: string; url: string; kind: string }>('upload_media', { filePath, kind }),
 };
 
-export function formatBytes(bytes: number, decimals = 1): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : decimals)} ${units[index]}`;
+/** The server's own sync verdict, echoed back through the Rust side. */
+export interface SaveSyncStatusPayload {
+  slotId: string | null;
+  gameId: string;
+  state: 'in-sync' | 'local-newer' | 'remote-newer' | 'conflict' | 'no-remote' | 'no-local';
+  remote: {
+    id: string;
+    sizeBytes: number;
+    fileCount: number;
+    sha256: string;
+    deviceName: string | null;
+    createdAt: string;
+    capturedAt: string;
+  } | null;
 }
 
-export function formatRate(bytesPerSecond: number): string {
-  if (bytesPerSecond <= 0) return '—';
-  return `${formatBytes(bytesPerSecond)}/s`;
+/** Builds a query string, omitting empty values so URLs stay readable. */
+export function queryString(params: Record<string, unknown>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '' || value === false) continue;
+    search.set(key, String(value));
+  }
+  const rendered = search.toString();
+  return rendered ? `?${rendered}` : '';
 }
 
-export function formatEta(remainingBytes: number, bytesPerSecond: number): string {
-  if (bytesPerSecond <= 0 || remainingBytes <= 0) return '—';
-  const seconds = Math.round(remainingBytes / bytesPerSecond);
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.round((seconds % 3600) / 60);
-  return `${hours}h ${minutes}m`;
+/** Tauri rejects with a plain string; surface it rather than "[object Object]". */
+export function errorMessage(caught: unknown): string {
+  if (typeof caught === 'string') return caught;
+  if (caught instanceof Error) return caught.message;
+  return 'Something went wrong.';
 }

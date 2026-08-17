@@ -1,5 +1,7 @@
+import { Swords } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { ipc, type SessionInfo } from './lib/ipc.js';
+import { ErrorNote, Spinner } from './components/ui.js';
+import { errorMessage, ipc, type SessionInfo } from './lib/ipc.js';
 
 export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionInfo) => void }) {
   const [serverUrl, setServerUrl] = useState('');
@@ -17,7 +19,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionInfo) => v
       const session = await ipc.currentSession();
       if (session) onSignedIn(session);
     } catch (caught) {
-      setError(String(caught));
+      setError(errorMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -26,20 +28,18 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionInfo) => v
   return (
     <div className="signin">
       <div className="signin-card">
-        <h1 style={{ textAlign: 'center', fontSize: 22, marginBottom: 4 }}>GameBlade</h1>
-        <p className="muted" style={{ textAlign: 'center', marginTop: 0, marginBottom: 20 }}>
-          Sign in to your server
-        </p>
+        <div className="signin-brand">
+          <Swords size={34} aria-hidden />
+          <h1>GameBlade</h1>
+          <p className="muted small">Sign in to your server</p>
+        </div>
 
         <form className="card" onSubmit={handleSubmit}>
-          {error ? <div className="error">{error}</div> : null}
+          <ErrorNote message={error} />
 
-          <div className="field">
-            <label className="label" htmlFor="server">
-              Server address
-            </label>
+          <label className="field">
+            <span>Server address</span>
             <input
-              id="server"
               className="input"
               value={serverUrl}
               onChange={(e) => setServerUrl(e.target.value)}
@@ -47,31 +47,25 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionInfo) => v
               autoFocus
               required
             />
-            <p className="tile-sub" style={{ marginTop: 6 }}>
-              https:// is assumed unless you type http://
-            </p>
-          </div>
+            <span className="muted small">
+              https:// is assumed unless you type http:// yourself.
+            </span>
+          </label>
 
-          <div className="field">
-            <label className="label" htmlFor="username">
-              Username
-            </label>
+          <label className="field">
+            <span>Username</span>
             <input
-              id="username"
               className="input"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
               required
             />
-          </div>
+          </label>
 
-          <div className="field">
-            <label className="label" htmlFor="password">
-              Password
-            </label>
+          <label className="field">
+            <span>Password</span>
             <input
-              id="password"
               type="password"
               className="input"
               value={password}
@@ -79,19 +73,16 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionInfo) => v
               autoComplete="current-password"
               required
             />
-          </div>
+          </label>
 
-          <button
-            type="submit"
-            className="btn btn-primary"
-            style={{ width: '100%' }}
-            disabled={busy}
-          >
+          <button type="submit" className="btn btn-primary btn-lg" disabled={busy}>
+            {busy ? <Spinner /> : null}
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
 
-          <p className="tile-sub" style={{ marginTop: 12, textAlign: 'center' }}>
-            This device is registered separately and can be revoked from the web UI.
+          <p className="muted small" style={{ textAlign: 'center', margin: 0 }}>
+            This device gets its own token, revocable from Settings without affecting your other
+            machines.
           </p>
         </form>
       </div>

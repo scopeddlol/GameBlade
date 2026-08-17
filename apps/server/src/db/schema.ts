@@ -122,6 +122,8 @@ export const games = sqliteTable(
       .default('unmatched'),
     igdbId: integer('igdb_id'),
     sgdbId: integer('sgdb_id'),
+    /** Enables importing the public Steam achievement schema for this game. */
+    steamAppId: integer('steam_app_id'),
 
     summary: text('summary'),
     storyline: text('storyline'),
@@ -230,6 +232,427 @@ export const settings = sqliteTable('settings', {
   updatedAt: text('updated_at').notNull().default(now),
 });
 
+/* ------------------------------------------------------------------ profiles */
+
+/**
+ * One row per account, created alongside the user. Split from `users` so the
+ * social surface can be read without touching password hashes.
+ */
+export const userProfiles = sqliteTable(
+  'user_profiles',
+  {
+    userId: text('user_id')
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    displayName: text('display_name').notNull(),
+    bio: text('bio'),
+    accentColor: text('accent_color').notNull().default('#7c5cff'),
+    country: text('country'),
+    avatarMediaId: text('avatar_media_id'),
+    bannerMediaId: text('banner_media_id'),
+    visibility: text('visibility', { enum: ['public', 'friends', 'private'] })
+      .notNull()
+      .default('friends'),
+    /** When false, friends see the profile but never what is being played. */
+    showActivity: integer('show_activity', { mode: 'boolean' }).notNull().default(true),
+    /** Persisted so an offline friend still shows "last seen 2h ago". */
+    lastSeenAt: text('last_seen_at'),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => [index('user_profiles_display_name_idx').on(t.displayName)],
+);
+
+/**
+ * Directional request that becomes a symmetric friendship once accepted. The
+ * pair is stored with the lower id first so the unique index rejects duplicate
+ * requests sent in opposite directions.
+ */
+export const friendships = sqliteTable(
+  'friendships',
+  {
+    id: text('id').primaryKey(),
+    /** Lower of the two user ids; keeps the pair index canonical. */
+    userAId: text('user_a_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    userBId: text('user_b_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Which side sent the request, since the pair itself is order-free. */
+    requestedBy: text('requested_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: text('status', { enum: ['pending', 'accepted', 'blocked'] })
+      .notNull()
+      .default('pending'),
+    createdAt: text('created_at').notNull().default(now),
+    respondedAt: text('responded_at'),
+  },
+  (t) => [
+    uniqueIndex('friendships_pair_idx').on(t.userAId, t.userBId),
+    index('friendships_user_a_idx').on(t.userAId),
+    index('friendships_user_b_idx').on(t.userBId),
+    index('friendships_status_idx').on(t.status),
+  ],
+);
+
+/* ------------------------------------------------------- library and playtime */
+
+/** Games a user has added from the Store. The Store is everything else. */
+export const userLibrary = sqliteTable(
+  'user_library',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    addedAt: text('added_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('user_library_pk').on(t.userId, t.gameId),
+    index('user_library_user_idx').on(t.userId),
+  ],
+);
+
+export const playSessions = sqliteTable(
+  'play_sessions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    deviceId: text('device_id'),
+    startedAt: text('started_at').notNull().default(now),
+    endedAt: text('ended_at'),
+    seconds: integer('seconds').notNull().default(0),
+  },
+  (t) => [
+    index('play_sessions_user_idx').on(t.userId),
+    index('play_sessions_game_idx').on(t.gameId),
+    index('play_sessions_open_idx').on(t.userId, t.endedAt),
+  ],
+);
+
+/**
+ * Rolling totals maintained as sessions close. Denormalised on purpose: Home
+ * and Library sort by playtime on every render and must not aggregate live.
+ */
+export const userGameStats = sqliteTable(
+  'user_game_stats',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    totalSeconds: integer('total_seconds').notNull().default(0),
+    launchCount: integer('launch_count').notNull().default(0),
+    lastPlayedAt: text('last_played_at'),
+  },
+  (t) => [
+    uniqueIndex('user_game_stats_pk').on(t.userId, t.gameId),
+    index('user_game_stats_last_played_idx').on(t.userId, t.lastPlayedAt),
+  ],
+);
+
+/* -------------------------------------------------------------- achievements */
+
+export const achievements = sqliteTable(
+  'achievements',
+  {
+    id: text('id').primaryKey(),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    /** Provider-stable identifier; re-imports match on this rather than name. */
+    key: text('key').notNull(),
+    name: text('name').notNull(),
+    description: text('description'),
+    iconUrl: text('icon_url'),
+    points: integer('points').notNull().default(10),
+    hidden: integer('hidden', { mode: 'boolean' }).notNull().default(false),
+    globalPercent: integer('global_percent'),
+    source: text('source', { enum: ['steam', 'retroachievements', 'manual'] })
+      .notNull()
+      .default('manual'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('achievements_game_key_idx').on(t.gameId, t.key),
+    index('achievements_game_idx').on(t.gameId),
+  ],
+);
+
+export const userAchievements = sqliteTable(
+  'user_achievements',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    achievementId: text('achievement_id')
+      .notNull()
+      .references(() => achievements.id, { onDelete: 'cascade' }),
+    /** Null while only partial progress has been reported. */
+    unlockedAt: text('unlocked_at'),
+    progress: integer('progress'),
+  },
+  (t) => [
+    uniqueIndex('user_achievements_pk').on(t.userId, t.achievementId),
+    index('user_achievements_user_idx').on(t.userId, t.unlockedAt),
+  ],
+);
+
+/* --------------------------------------------------------------- cloud saves */
+
+export const saveSlots = sqliteTable(
+  'save_slots',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    name: text('name').notNull().default('default'),
+    currentVersionId: text('current_version_id'),
+    createdAt: text('created_at').notNull().default(now),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('save_slots_user_game_name_idx').on(t.userId, t.gameId, t.name),
+    index('save_slots_user_idx').on(t.userId),
+  ],
+);
+
+/**
+ * Each upload is an immutable zip on disk. Keeping history is what makes a bad
+ * sync recoverable, so versions are pruned by count rather than overwritten.
+ */
+export const saveVersions = sqliteTable(
+  'save_versions',
+  {
+    id: text('id').primaryKey(),
+    slotId: text('slot_id')
+      .notNull()
+      .references(() => saveSlots.id, { onDelete: 'cascade' }),
+    sha256: text('sha256').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    fileCount: integer('file_count').notNull().default(0),
+    deviceId: text('device_id'),
+    /** Newest mtime inside the archive, which orders local against remote. */
+    capturedAt: text('captured_at').notNull(),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    index('save_versions_slot_idx').on(t.slotId, t.createdAt),
+    index('save_versions_sha_idx').on(t.sha256),
+  ],
+);
+
+/** Admin-authored hint for where a game keeps its saves on Windows. */
+export const gameSaveRules = sqliteTable(
+  'game_save_rules',
+  {
+    id: text('id').primaryKey(),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    pathTemplate: text('path_template').notNull(),
+    include: text('include'),
+    exclude: text('exclude'),
+    note: text('note'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('game_save_rules_game_idx').on(t.gameId)],
+);
+
+/** Admin-authored hint for what to run once a game is installed. */
+export const gameLaunchRules = sqliteTable(
+  'game_launch_rules',
+  {
+    id: text('id').primaryKey(),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    executable: text('executable'),
+    args: text('args'),
+    workingDir: text('working_dir'),
+    note: text('note'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('game_launch_rules_game_idx').on(t.gameId)],
+);
+
+/* ------------------------------------------------------------ social content */
+
+/** User-uploaded avatars, banners, screenshots and clips. */
+export const media = sqliteTable(
+  'media',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['avatar', 'banner', 'image', 'clip'] }).notNull(),
+    contentType: text('content_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    width: integer('width'),
+    height: integer('height'),
+    durationMs: integer('duration_ms'),
+    sha256: text('sha256').notNull(),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('media_owner_idx').on(t.ownerId), index('media_sha_idx').on(t.sha256)],
+);
+
+export const posts = sqliteTable(
+  'posts',
+  {
+    id: text('id').primaryKey(),
+    authorId: text('author_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['text', 'image', 'clip'] })
+      .notNull()
+      .default('text'),
+    title: text('title'),
+    body: text('body'),
+    gameId: text('game_id').references(() => games.id, { onDelete: 'set null' }),
+    visibility: text('visibility', { enum: ['public', 'friends', 'private'] })
+      .notNull()
+      .default('friends'),
+    createdAt: text('created_at').notNull().default(now),
+    editedAt: text('edited_at'),
+  },
+  (t) => [
+    index('posts_author_idx').on(t.authorId),
+    index('posts_created_idx').on(t.createdAt),
+    index('posts_game_idx').on(t.gameId),
+  ],
+);
+
+export const postMedia = sqliteTable(
+  'post_media',
+  {
+    postId: text('post_id')
+      .notNull()
+      .references(() => posts.id, { onDelete: 'cascade' }),
+    mediaId: text('media_id')
+      .notNull()
+      .references(() => media.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull().default(0),
+  },
+  (t) => [uniqueIndex('post_media_pk').on(t.postId, t.mediaId)],
+);
+
+export const comments = sqliteTable(
+  'comments',
+  {
+    id: text('id').primaryKey(),
+    postId: text('post_id')
+      .notNull()
+      .references(() => posts.id, { onDelete: 'cascade' }),
+    authorId: text('author_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    body: text('body').notNull(),
+    createdAt: text('created_at').notNull().default(now),
+    editedAt: text('edited_at'),
+  },
+  (t) => [index('comments_post_idx').on(t.postId, t.createdAt)],
+);
+
+export const reactions = sqliteTable(
+  'reactions',
+  {
+    postId: text('post_id')
+      .notNull()
+      .references(() => posts.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    reaction: text('reaction').notNull(),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [uniqueIndex('reactions_pk').on(t.postId, t.userId)],
+);
+
+/* ------------------------------------------------------- discovery and alerts */
+
+export const featuredGames = sqliteTable(
+  'featured_games',
+  {
+    id: text('id').primaryKey(),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    headline: text('headline'),
+    blurb: text('blurb'),
+    heroImageId: text('hero_image_id'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('featured_games_game_idx').on(t.gameId),
+    index('featured_games_order_idx').on(t.active, t.sortOrder),
+  ],
+);
+
+/**
+ * Append-only feed rows. Written once and read by friends, which is far cheaper
+ * than deriving a feed by unioning play sessions, unlocks and posts per request.
+ */
+export const activityEvents = sqliteTable(
+  'activity_events',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind', {
+      enum: ['played', 'added-game', 'unlocked-achievement', 'posted', 'friended'],
+    }).notNull(),
+    gameId: text('game_id').references(() => games.id, { onDelete: 'cascade' }),
+    achievementId: text('achievement_id').references(() => achievements.id, {
+      onDelete: 'cascade',
+    }),
+    postId: text('post_id').references(() => posts.id, { onDelete: 'cascade' }),
+    seconds: integer('seconds'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    index('activity_events_user_idx').on(t.userId, t.createdAt),
+    index('activity_events_created_idx').on(t.createdAt),
+  ],
+);
+
+export const notifications = sqliteTable(
+  'notifications',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    actorId: text('actor_id').references(() => users.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    body: text('body'),
+    link: text('link'),
+    readAt: text('read_at'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('notifications_user_idx').on(t.userId, t.readAt, t.createdAt)],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
@@ -240,3 +663,16 @@ export type Game = typeof games.$inferSelect;
 export type NewGame = typeof games.$inferInsert;
 export type GameFile = typeof gameFiles.$inferSelect;
 export type ImageRecord = typeof images.$inferSelect;
+export type UserProfile = typeof userProfiles.$inferSelect;
+export type Friendship = typeof friendships.$inferSelect;
+export type Achievement = typeof achievements.$inferSelect;
+export type UserAchievement = typeof userAchievements.$inferSelect;
+export type SaveSlot = typeof saveSlots.$inferSelect;
+export type SaveVersion = typeof saveVersions.$inferSelect;
+export type MediaRecord = typeof media.$inferSelect;
+export type Post = typeof posts.$inferSelect;
+export type Comment = typeof comments.$inferSelect;
+export type FeaturedGame = typeof featuredGames.$inferSelect;
+export type ActivityEvent = typeof activityEvents.$inferSelect;
+export type NotificationRow = typeof notifications.$inferSelect;
+export type PlaySession = typeof playSessions.$inferSelect;

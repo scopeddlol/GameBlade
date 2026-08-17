@@ -55,6 +55,13 @@ const envSchema = z.object({
   IGDB_CLIENT_ID: z.string().optional(),
   IGDB_CLIENT_SECRET: z.string().optional(),
   STEAMGRIDDB_API_KEY: z.string().optional(),
+  STEAM_API_KEY: z.string().optional(),
+
+  CLIENT_DOWNLOAD_URL: z.string().optional(),
+
+  /** Ceiling on user uploads (avatars, screenshots, clips, saves) on disk. */
+  MEDIA_QUOTA_MB: z.coerce.number().int().min(0).default(20_480),
+  SAVE_QUOTA_MB: z.coerce.number().int().min(0).default(10_240),
 
   SCAN_ON_START: booleanish.default(true),
   SCAN_INTERVAL_MINUTES: z.coerce.number().int().min(0).max(10080).default(360),
@@ -92,7 +99,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     dataDir,
     databasePath: path.join(dataDir, 'gameblade.db'),
     imageCacheDir: path.join(dataDir, 'images'),
+    /** User uploads: avatars, banners, screenshots and clips. */
+    mediaDir: path.join(dataDir, 'media'),
+    /** Cloud save archives, one immutable zip per version. */
+    savesDir: path.join(dataDir, 'saves'),
     libraryPaths,
+
+    mediaQuotaBytes: e.MEDIA_QUOTA_MB * 1024 * 1024,
+    saveQuotaBytes: e.SAVE_QUOTA_MB * 1024 * 1024,
 
     basePath: normaliseBasePath(e.BASE_PATH),
     trustProxy: parseTrustProxy(e.TRUST_PROXY),
@@ -113,6 +127,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
         ? { clientId: e.IGDB_CLIENT_ID, clientSecret: e.IGDB_CLIENT_SECRET }
         : null,
     steamGridDbKey: e.STEAMGRIDDB_API_KEY ?? null,
+    steamApiKey: e.STEAM_API_KEY ?? null,
+    clientDownloadUrl: e.CLIENT_DOWNLOAD_URL?.trim() ? e.CLIENT_DOWNLOAD_URL.trim() : null,
 
     scanOnStart: e.SCAN_ON_START,
     scanIntervalMinutes: e.SCAN_INTERVAL_MINUTES,

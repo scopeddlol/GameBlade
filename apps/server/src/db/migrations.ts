@@ -168,4 +168,248 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    // Turns the catalogue into a platform: profiles, friends, per-user
+    // libraries, playtime, achievements, cloud saves and the social feed.
+    id: '0002_platform',
+    sql: /* sql */ `
+      ALTER TABLE games ADD COLUMN steam_app_id INTEGER;
+
+      CREATE TABLE user_profiles (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        display_name TEXT NOT NULL,
+        bio TEXT,
+        accent_color TEXT NOT NULL DEFAULT '#7c5cff',
+        country TEXT,
+        avatar_media_id TEXT,
+        banner_media_id TEXT,
+        visibility TEXT NOT NULL DEFAULT 'friends',
+        show_activity INTEGER NOT NULL DEFAULT 1,
+        last_seen_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX user_profiles_display_name_idx ON user_profiles(display_name);
+
+      -- Backfill a profile for every account that predates this migration.
+      INSERT INTO user_profiles (user_id, display_name)
+        SELECT id, username FROM users;
+
+      CREATE TABLE friendships (
+        id TEXT PRIMARY KEY,
+        user_a_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_b_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        requested_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        responded_at TEXT
+      );
+      CREATE UNIQUE INDEX friendships_pair_idx ON friendships(user_a_id, user_b_id);
+      CREATE INDEX friendships_user_a_idx ON friendships(user_a_id);
+      CREATE INDEX friendships_user_b_idx ON friendships(user_b_id);
+      CREATE INDEX friendships_status_idx ON friendships(status);
+
+      CREATE TABLE user_library (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        added_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX user_library_pk ON user_library(user_id, game_id);
+      CREATE INDEX user_library_user_idx ON user_library(user_id);
+
+      -- Anything a user favourited or downloaded before now counts as owned.
+      INSERT OR IGNORE INTO user_library (user_id, game_id)
+        SELECT user_id, game_id FROM user_game_state
+        WHERE is_favorite = 1 OR last_downloaded_at IS NOT NULL;
+
+      CREATE TABLE play_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        device_id TEXT,
+        started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        ended_at TEXT,
+        seconds INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX play_sessions_user_idx ON play_sessions(user_id);
+      CREATE INDEX play_sessions_game_idx ON play_sessions(game_id);
+      CREATE INDEX play_sessions_open_idx ON play_sessions(user_id, ended_at);
+
+      CREATE TABLE user_game_stats (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        total_seconds INTEGER NOT NULL DEFAULT 0,
+        launch_count INTEGER NOT NULL DEFAULT 0,
+        last_played_at TEXT
+      );
+      CREATE UNIQUE INDEX user_game_stats_pk ON user_game_stats(user_id, game_id);
+      CREATE INDEX user_game_stats_last_played_idx ON user_game_stats(user_id, last_played_at);
+
+      CREATE TABLE achievements (
+        id TEXT PRIMARY KEY,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        icon_url TEXT,
+        points INTEGER NOT NULL DEFAULT 10,
+        hidden INTEGER NOT NULL DEFAULT 0,
+        global_percent INTEGER,
+        source TEXT NOT NULL DEFAULT 'manual',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX achievements_game_key_idx ON achievements(game_id, key);
+      CREATE INDEX achievements_game_idx ON achievements(game_id);
+
+      CREATE TABLE user_achievements (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        achievement_id TEXT NOT NULL REFERENCES achievements(id) ON DELETE CASCADE,
+        unlocked_at TEXT,
+        progress INTEGER
+      );
+      CREATE UNIQUE INDEX user_achievements_pk ON user_achievements(user_id, achievement_id);
+      CREATE INDEX user_achievements_user_idx ON user_achievements(user_id, unlocked_at);
+
+      CREATE TABLE save_slots (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        name TEXT NOT NULL DEFAULT 'default',
+        current_version_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX save_slots_user_game_name_idx ON save_slots(user_id, game_id, name);
+      CREATE INDEX save_slots_user_idx ON save_slots(user_id);
+
+      CREATE TABLE save_versions (
+        id TEXT PRIMARY KEY,
+        slot_id TEXT NOT NULL REFERENCES save_slots(id) ON DELETE CASCADE,
+        sha256 TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        file_count INTEGER NOT NULL DEFAULT 0,
+        device_id TEXT,
+        captured_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX save_versions_slot_idx ON save_versions(slot_id, created_at);
+      CREATE INDEX save_versions_sha_idx ON save_versions(sha256);
+
+      CREATE TABLE game_save_rules (
+        id TEXT PRIMARY KEY,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        path_template TEXT NOT NULL,
+        include TEXT,
+        exclude TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX game_save_rules_game_idx ON game_save_rules(game_id);
+
+      CREATE TABLE game_launch_rules (
+        id TEXT PRIMARY KEY,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        executable TEXT,
+        args TEXT,
+        working_dir TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX game_launch_rules_game_idx ON game_launch_rules(game_id);
+
+      CREATE TABLE media (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        width INTEGER,
+        height INTEGER,
+        duration_ms INTEGER,
+        sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX media_owner_idx ON media(owner_id);
+      CREATE INDEX media_sha_idx ON media(sha256);
+
+      CREATE TABLE posts (
+        id TEXT PRIMARY KEY,
+        author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL DEFAULT 'text',
+        title TEXT,
+        body TEXT,
+        game_id TEXT REFERENCES games(id) ON DELETE SET NULL,
+        visibility TEXT NOT NULL DEFAULT 'friends',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        edited_at TEXT
+      );
+      CREATE INDEX posts_author_idx ON posts(author_id);
+      CREATE INDEX posts_created_idx ON posts(created_at);
+      CREATE INDEX posts_game_idx ON posts(game_id);
+
+      CREATE TABLE post_media (
+        post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+        media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE UNIQUE INDEX post_media_pk ON post_media(post_id, media_id);
+
+      CREATE TABLE comments (
+        id TEXT PRIMARY KEY,
+        post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+        author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        edited_at TEXT
+      );
+      CREATE INDEX comments_post_idx ON comments(post_id, created_at);
+
+      CREATE TABLE reactions (
+        post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        reaction TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX reactions_pk ON reactions(post_id, user_id);
+
+      CREATE TABLE featured_games (
+        id TEXT PRIMARY KEY,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        headline TEXT,
+        blurb TEXT,
+        hero_image_id TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX featured_games_game_idx ON featured_games(game_id);
+      CREATE INDEX featured_games_order_idx ON featured_games(active, sort_order);
+
+      CREATE TABLE activity_events (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        game_id TEXT REFERENCES games(id) ON DELETE CASCADE,
+        achievement_id TEXT REFERENCES achievements(id) ON DELETE CASCADE,
+        post_id TEXT REFERENCES posts(id) ON DELETE CASCADE,
+        seconds INTEGER,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX activity_events_user_idx ON activity_events(user_id, created_at);
+      CREATE INDEX activity_events_created_idx ON activity_events(created_at);
+
+      CREATE TABLE notifications (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        actor_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        body TEXT,
+        link TEXT,
+        read_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX notifications_user_idx ON notifications(user_id, read_at, created_at);
+    `,
+  },
 ];

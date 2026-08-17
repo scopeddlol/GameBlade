@@ -5,11 +5,19 @@ import { settings } from '../db/schema.js';
 
 export interface RuntimeSettings {
   serverName: string;
+  tagline: string;
   allowSelfRegistration: boolean;
+  /** Where the landing page sends visitors to get the Windows client. */
+  downloadUrl: string | null;
+  clientVersion: string | null;
   igdbClientId: string | null;
   igdbClientSecret: string | null;
   steamGridDbKey: string | null;
+  /** Reads the public Steam achievement schema; no user data is involved. */
+  steamApiKey: string | null;
 }
+
+const DEFAULT_TAGLINE = 'A private home for free-to-play and DRM-free games worth keeping.';
 
 type SettingKey = keyof RuntimeSettings;
 
@@ -48,10 +56,14 @@ export class SettingsService {
 
     this.cache = {
       serverName: asString('serverName', 'GameBlade') ?? 'GameBlade',
+      tagline: asString('tagline', DEFAULT_TAGLINE) ?? DEFAULT_TAGLINE,
       allowSelfRegistration: asBoolean('allowSelfRegistration', this.config.allowSelfRegistration),
+      downloadUrl: asString('downloadUrl', this.config.clientDownloadUrl),
+      clientVersion: asString('clientVersion', null),
       igdbClientId: asString('igdbClientId', this.config.igdb?.clientId ?? null),
       igdbClientSecret: asString('igdbClientSecret', this.config.igdb?.clientSecret ?? null),
       steamGridDbKey: asString('steamGridDbKey', this.config.steamGridDbKey),
+      steamApiKey: asString('steamApiKey', this.config.steamApiKey),
     };
     return this.cache;
   }
