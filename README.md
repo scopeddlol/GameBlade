@@ -34,6 +34,21 @@ is sent back to the landing page to download the client.
 
 ---
 
+## Where to get it
+
+Both halves are published together by CI — an image without a matching client
+leaves you nothing to connect with.
+
+| Artefact           | Where                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------- |
+| **Server image**   | `ghcr.io/scopeddlol/gameblade` — `latest`, plus a tag per release                           |
+| **Windows client** | The `.exe` on the [latest release](https://github.com/scopeddlol/GameBlade/releases/latest) |
+
+The image is built for `linux/amd64` and `linux/arm64`. The release also carries
+an `.msi` for deployment tooling; the `.exe` is what most people want.
+
+---
+
 ## Quick start
 
 ```bash
@@ -271,8 +286,11 @@ exists to remove that failure mode.
 - Signs in with a **device token stored in the Windows Credential Manager**, never
   a password on disk. Each device is listed and revocable from **Settings**.
 
-Installers are built by CI and attached to each tagged release. To build locally
-you need the [Rust toolchain](https://rustup.rs):
+Installers are built by CI on every push to `main` and attached to each tagged
+release. Once you have published one, set **Admin → Settings → Windows client
+download URL** so the landing page links it.
+
+To build locally you need the [Rust toolchain](https://rustup.rs):
 
 ```bash
 pnpm --filter @gameblade/desktop build
