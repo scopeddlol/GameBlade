@@ -1,4 +1,8 @@
-# syntax=docker/dockerfile:1.7
+# No "# syntax=" directive on purpose. Pinning an external frontend makes every
+# build depend on Docker Hub being reachable (one CI run already failed on a 502
+# from it) and counts against its anonymous pull limits. Everything used here —
+# multi-stage builds and RUN --mount=type=cache — is supported by BuildKit's
+# built-in frontend.
 
 # ---------------------------------------------------------------------------
 # Build stage: install the whole workspace, build shared -> server -> web, then
