@@ -1,7 +1,12 @@
 import {
+  achievementDefinitionSchema,
+  announcementSchema,
   createInviteSchema,
   createLibrarySchema,
+  featuredSchema,
+  importAchievementsSchema,
   providerSettingsSchema,
+  reorderFeaturedSchema,
   scanRequestSchema,
   updateLibrarySchema,
   updateUserSchema,
@@ -21,7 +26,19 @@ import { ApiError } from '../lib/errors.js';
 import { newId, newInviteCode } from '../lib/ids.js';
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
-  const { db, auth, settings, metadata, scanner, config } = app.gameblade;
+  const {
+    db,
+    auth,
+    settings,
+    metadata,
+    scanner,
+    config,
+    catalog,
+    achievements,
+    notifications,
+    profiles,
+    presence,
+  } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
     requireAdmin(request);
@@ -356,6 +373,104 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           .get()?.count ?? 0,
       basePath: config.basePath,
       scan: scanner.getProgress(),
+      online: presence.onlineCount(),
     };
+  });
+
+  // ---- Featured games (the Home carousel) ----
+
+  app.get('/admin/featured', async (request) => {
+    const context = requireAdmin(request);
+    // Admins see inactive entries too, so a slot can be staged before going live.
+    return catalog.listFeatured(context.user.id, false);
+  });
+
+  app.put('/admin/featured', async (request) => {
+    const context = requireAdmin(request);
+    const input = featuredSchema.parse(request.body);
+    catalog.upsertFeatured(input);
+    return catalog.listFeatured(context.user.id, false);
+  });
+
+  app.post('/admin/featured/reorder', async (request) => {
+    const context = requireAdmin(request);
+    const input = reorderFeaturedSchema.parse(request.body);
+    catalog.reorderFeatured(input.ids);
+    return catalog.listFeatured(context.user.id, false);
+  });
+
+  app.delete('/admin/featured/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    catalog.removeFeatured(id);
+    return { ok: true };
+  });
+
+  // ---- Achievement definitions ----
+
+  app.get('/admin/games/:id/achievements', async (request) => {
+    const { id } = request.params as { id: string };
+    return achievements.definitionsForGame(id);
+  });
+
+  app.put('/admin/games/:id/achievements', async (request) => {
+    const { id } = request.params as { id: string };
+    const input = achievementDefinitionSchema.parse(request.body);
+
+    const game = db.select({ id: games.id }).from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    return achievements.upsertDefinition(id, input);
+  });
+
+  app.delete('/admin/games/:id/achievements/:achievementId', async (request) => {
+    const { id, achievementId } = request.params as { id: string; achievementId: string };
+    achievements.deleteDefinition(id, achievementId);
+    return { ok: true };
+  });
+
+  /**
+   * Pulls a game's achievement list from Steam's public schema endpoint. This
+   * reads published game metadata only — no player data, no account linking —
+   * which is what makes it usable for a DRM-free copy of a game that also
+   * happens to ship on Steam.
+   */
+  app.post('/admin/games/:id/achievements/import', async (request) => {
+    const { id } = request.params as { id: string };
+    const input = importAchievementsSchema.parse(request.body);
+    return achievements.importFromSteam(id, input.steamAppId, input.replace);
+  });
+
+  // ---- Announcements ----
+
+  app.post('/admin/announcements', async (request) => {
+    const context = requireAdmin(request);
+    const input = announcementSchema.parse(request.body);
+
+    // An empty target list means everyone with an active account.
+    const targets =
+      input.userIds.length > 0
+        ? input.userIds
+        : db
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.isActive, true))
+            .all()
+            .map((r) => r.id);
+
+    const sent = notifications.createMany(targets, {
+      kind: 'announcement',
+      title: input.title,
+      body: input.body ?? null,
+      actorId: context.user.id,
+    });
+
+    return { sent };
+  });
+
+  /** Profile moderation: an admin can reset a display name or hide a profile. */
+  app.get('/admin/profiles/:id', async (request) => {
+    const context = requireAdmin(request);
+    const { id } = request.params as { id: string };
+    return profiles.detail(id, context.user.id);
   });
 }

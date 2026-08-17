@@ -113,11 +113,7 @@ export class SaveService {
       .get();
 
     const remote = slot?.currentVersionId
-      ? this.db
-          .select()
-          .from(saveVersions)
-          .where(eq(saveVersions.id, slot.currentVersionId))
-          .get()
+      ? this.db.select().from(saveVersions).where(eq(saveVersions.id, slot.currentVersionId)).get()
       : undefined;
 
     const remoteInfo = remote ? this.describeVersion(remote) : null;
@@ -153,8 +149,7 @@ export class SaveService {
     }
 
     // Digests differ but neither side reports an edit: fall back to timestamps.
-    const localNewer =
-      local.capturedAt !== null && local.capturedAt > remoteInfo.capturedAt;
+    const localNewer = local.capturedAt !== null && local.capturedAt > remoteInfo.capturedAt;
     return { ...base, state: localNewer ? 'local-newer' : 'remote-newer' };
   }
 
@@ -385,11 +380,7 @@ export class SaveService {
 
   private describeSlot(slot: typeof saveSlots.$inferSelect): SaveSlotInfo {
     const current = slot.currentVersionId
-      ? this.db
-          .select()
-          .from(saveVersions)
-          .where(eq(saveVersions.id, slot.currentVersionId))
-          .get()
+      ? this.db.select().from(saveVersions).where(eq(saveVersions.id, slot.currentVersionId)).get()
       : undefined;
 
     const count = this.db

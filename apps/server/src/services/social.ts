@@ -93,8 +93,8 @@ export class SocialService {
     this.db
       .update(posts)
       .set({
-        title: input.title !== undefined ? (input.title?.trim() || null) : post.title,
-        body: input.body !== undefined ? (input.body?.trim() || null) : post.body,
+        title: input.title !== undefined ? input.title?.trim() || null : post.title,
+        body: input.body !== undefined ? input.body?.trim() || null : post.body,
         visibility: input.visibility ?? post.visibility,
         editedAt: isoNow(),
       })

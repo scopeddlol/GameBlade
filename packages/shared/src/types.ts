@@ -490,8 +490,7 @@ export type RealtimeEvent =
 
 /** Frames the client sends. */
 export type RealtimeCommand =
-  | { type: 'ping' }
-  | { type: 'presence'; status: PresenceStatus; gameId?: string | null };
+  { type: 'ping' } | { type: 'presence'; status: PresenceStatus; gameId?: string | null };
 
 export interface Paginated<T> {
   items: T[];

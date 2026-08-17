@@ -194,9 +194,7 @@ export class ActivityService {
           achievement: achievement
             ? { id: achievement.id, name: achievement.name, iconUrl: achievement.iconUrl }
             : null,
-          post: post
-            ? { id: post.id, title: post.title, excerpt: excerpt(post.body) }
-            : null,
+          post: post ? { id: post.id, title: post.title, excerpt: excerpt(post.body) } : null,
           seconds: row.seconds,
         },
       ];

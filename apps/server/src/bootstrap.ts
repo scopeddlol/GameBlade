@@ -12,7 +12,7 @@ import { newId } from './lib/ids.js';
  * library or resets an account an administrator has since changed.
  */
 export async function bootstrap(app: FastifyInstance): Promise<void> {
-  const { config, auth, db } = app.gameblade;
+  const { config, auth, profiles } = app.gameblade;
 
   await seedLibraries(app);
 
@@ -20,11 +20,12 @@ export async function bootstrap(app: FastifyInstance): Promise<void> {
     const existing = auth.findByUsername(config.bootstrapAdmin.username);
     if (!existing) {
       if (auth.countUsers() === 0) {
-        await auth.createUser({
+        const admin = await auth.createUser({
           username: config.bootstrapAdmin.username,
           password: config.bootstrapAdmin.password,
           role: 'admin',
         });
+        profiles.ensure(admin.id, admin.username);
         app.log.info(
           { username: config.bootstrapAdmin.username },
           'created the initial administrator from ADMIN_USERNAME/ADMIN_PASSWORD',
@@ -74,9 +75,16 @@ async function seedLibraries(app: FastifyInstance): Promise<void> {
   }
 }
 
+/** Retention for feed rows and read notifications, in days. */
+const ACTIVITY_RETENTION_DAYS = 120;
+const NOTIFICATION_RETENTION_DAYS = 60;
+
+/** Grace period before an unattached upload is treated as an abandoned draft. */
+const ORPHAN_MEDIA_GRACE_HOURS = 6;
+
 /** Periodic background work: rescans plus expiry cleanup. */
 export function startSchedules(app: FastifyInstance): () => void {
-  const { config, scanner, auth } = app.gameblade;
+  const { config, scanner, auth, activity, notifications, media, playtime } = app.gameblade;
   const timers: NodeJS.Timeout[] = [];
 
   if (config.scanOnStart) {
@@ -102,8 +110,28 @@ export function startSchedules(app: FastifyInstance): () => void {
   const cleanup = setInterval(() => {
     try {
       auth.pruneExpired();
+
+      const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+
+      activity.prune(daysAgo(ACTIVITY_RETENTION_DAYS));
+      notifications.prune(daysAgo(NOTIFICATION_RETENTION_DAYS));
+
+      // A client that died mid-game would otherwise leave its owner showing as
+      // in-game forever, and its session credited with no time at all.
+      const closed = playtime.closeAbandoned();
+      if (closed > 0) {
+        app.log.info({ closed }, 'closed abandoned play sessions');
+      }
+
+      // The desktop client uploads attachments before the post is submitted,
+      // so an abandoned composer leaves a file with nothing pointing at it.
+      void media
+        .collectOrphans(new Date(Date.now() - ORPHAN_MEDIA_GRACE_HOURS * 3_600_000).toISOString())
+        .catch((error: unknown) => {
+          app.log.warn({ err: error }, 'failed to collect orphaned uploads');
+        });
     } catch (error) {
-      app.log.warn({ err: error }, 'failed to prune expired sessions');
+      app.log.warn({ err: error }, 'periodic cleanup failed');
     }
   }, 60 * 60_000);
   cleanup.unref();

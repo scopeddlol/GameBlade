@@ -392,10 +392,7 @@ export class CatalogService {
   reorderFeatured(ids: string[]): void {
     this.db.transaction((tx) => {
       ids.forEach((id, index) => {
-        tx.update(featuredGames)
-          .set({ sortOrder: index })
-          .where(eq(featuredGames.id, id))
-          .run();
+        tx.update(featuredGames).set({ sortOrder: index }).where(eq(featuredGames.id, id)).run();
       });
     });
   }

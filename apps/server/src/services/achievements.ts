@@ -96,10 +96,7 @@ export class AchievementService {
   }
 
   /** Unlock counts for a batch of games, so a listing needs one query. */
-  countsFor(
-    userId: string,
-    gameIds: string[],
-  ): Map<string, { total: number; unlocked: number }> {
+  countsFor(userId: string, gameIds: string[]): Map<string, { total: number; unlocked: number }> {
     if (gameIds.length === 0) return new Map();
 
     const rows = this.db
@@ -132,7 +129,9 @@ export class AchievementService {
       })
       .from(userAchievements)
       .innerJoin(achievements, eq(achievements.id, userAchievements.achievementId))
-      .where(and(eq(userAchievements.userId, userId), sql`${userAchievements.unlockedAt} IS NOT NULL`))
+      .where(
+        and(eq(userAchievements.userId, userId), sql`${userAchievements.unlockedAt} IS NOT NULL`),
+      )
       .orderBy(desc(userAchievements.unlockedAt))
       .limit(limit)
       .all();
@@ -166,10 +165,7 @@ export class AchievementService {
       .select()
       .from(userAchievements)
       .where(
-        and(
-          eq(userAchievements.userId, userId),
-          eq(userAchievements.achievementId, definition.id),
-        ),
+        and(eq(userAchievements.userId, userId), eq(userAchievements.achievementId, definition.id)),
       )
       .get();
 

@@ -1,15 +1,18 @@
+import type { IncomingMessage } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
+import websocket from '@fastify/websocket';
 import type { ApiErrorBody } from '@gameblade/shared';
 import Fastify, {
   LogController,
   type FastifyError,
   type FastifyInstance,
   type FastifyReply,
+  type FastifyRequest,
 } from 'fastify';
 import { ZodError } from 'zod';
 import { createAuthHook } from './auth/middleware.js';
@@ -22,7 +25,11 @@ import { authRoutes } from './routes/auth.js';
 import { downloadRoutes } from './routes/downloads.js';
 import { gameRoutes } from './routes/games.js';
 import { healthRoutes } from './routes/health.js';
+import { homeRoutes } from './routes/home.js';
 import { imageRoutes } from './routes/images.js';
+import { playRoutes } from './routes/play.js';
+import { realtimeRoutes } from './routes/realtime.js';
+import { socialRoutes } from './routes/social.js';
 
 export async function buildApp(config: Config): Promise<FastifyInstance> {
   const app = Fastify({
@@ -55,8 +62,22 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
   const context = createContext(config, db, app.log);
   app.decorate('gameblade', context);
   await context.images.init();
+  await context.media.init();
+  await context.saves.init();
+  context.realtime.start();
+
+  app.addHook('onClose', async () => {
+    context.realtime.stop();
+  });
 
   await app.register(cookie);
+  await app.register(websocket, {
+    options: {
+      // Presence frames are tiny; anything larger is a client bug or an abuse
+      // attempt, and rejecting it early keeps the socket cheap.
+      maxPayload: 16 * 1024,
+    },
+  });
 
   await app.register(helmet, {
     // The SPA is same-origin; artwork and media come from this server only.
@@ -91,6 +112,8 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
       error: { code: 'too_many_requests', message: 'Too many requests. Please slow down.' },
     }),
   });
+
+  registerBinaryUploads(app);
 
   app.decorateRequest('auth', null);
   app.addHook('onRequest', createAuthHook(context.auth));
@@ -139,9 +162,13 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
     async (api) => {
       await healthRoutes(api);
       await authRoutes(api);
+      await homeRoutes(api);
       await gameRoutes(api);
       await imageRoutes(api);
       await downloadRoutes(api);
+      await socialRoutes(api);
+      await playRoutes(api);
+      await realtimeRoutes(api);
       await api.register(async (adminScope) => {
         await adminRoutes(adminScope);
       });
@@ -152,6 +179,27 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
   await registerWebClient(app, config);
 
   return app;
+}
+
+/**
+ * Lets save archives, screenshots and clips be posted as a raw body.
+ *
+ * Fastify answers 415 for any content type it has no parser for, and its
+ * built-in parsers all buffer the whole body first. These hand the untouched
+ * stream to the route instead, which is what allows a half-gigabyte clip to be
+ * hashed and written to disk without ever being held in memory. Every one of
+ * these routes enforces its own byte ceiling while streaming.
+ */
+function registerBinaryUploads(app: FastifyInstance): void {
+  const passthrough = (
+    _request: FastifyRequest,
+    payload: IncomingMessage,
+    done: (error: Error | null, body?: unknown) => void,
+  ) => done(null, payload);
+
+  app.addContentTypeParser(['application/zip', 'application/octet-stream'], passthrough);
+  app.addContentTypeParser(/^image\//, passthrough);
+  app.addContentTypeParser(/^video\//, passthrough);
 }
 
 /**

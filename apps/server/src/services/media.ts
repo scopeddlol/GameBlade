@@ -49,9 +49,7 @@ export class MediaStore {
     const allowed = ALLOWED_TYPES[kind];
     const normalised = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
     if (!allowed.includes(normalised)) {
-      throw ApiError.badRequest(
-        `${kind} uploads must be one of: ${allowed.join(', ')}`,
-      );
+      throw ApiError.badRequest(`${kind} uploads must be one of: ${allowed.join(', ')}`);
     }
     if (sizeBytes <= 0) {
       throw ApiError.badRequest('That file is empty');

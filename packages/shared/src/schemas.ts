@@ -269,7 +269,10 @@ export type SaveSlotInput = z.infer<typeof saveSlotSchema>;
 export const saveUploadSchema = z.object({
   gameId: z.string().trim().min(1).max(64),
   slotName: z.string().trim().min(1).max(64).default('default'),
-  sha256: z.string().trim().regex(/^[0-9a-f]{64}$/, 'Expected a hex SHA-256 digest'),
+  sha256: z
+    .string()
+    .trim()
+    .regex(/^[0-9a-f]{64}$/, 'Expected a hex SHA-256 digest'),
   sizeBytes: z.number().int().min(1),
   fileCount: z.number().int().min(1).max(100_000),
   capturedAt: z.string().trim().min(1).max(40),

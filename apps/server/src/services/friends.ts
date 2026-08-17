@@ -220,28 +220,28 @@ export class FriendService {
     const profiles = this.profiles.summariseMany(friendIds, userId);
     const shared = this.sharedGameCounts(userId, friendIds);
 
-    return rows
-      .flatMap((row) => {
-        const friendId = row.a === userId ? row.b : row.a;
-        const profile = profiles.get(friendId);
-        if (!profile) return [];
-        return [
-          {
-            profile,
-            friendsSince: row.since ?? row.createdAt,
-            sharedGameCount: shared.get(friendId) ?? 0,
-          },
-        ];
-      })
-      // Online first, then in-game, then alphabetical — the order a player
-      // actually scans the list in.
-      .sort((x, y) => {
-        const rank = (entry: FriendEntry) =>
-          entry.profile.presence === 'in-game' ? 0 : entry.profile.presence === 'online' ? 1 : 2;
-        return (
-          rank(x) - rank(y) || x.profile.displayName.localeCompare(y.profile.displayName)
-        );
-      });
+    return (
+      rows
+        .flatMap((row) => {
+          const friendId = row.a === userId ? row.b : row.a;
+          const profile = profiles.get(friendId);
+          if (!profile) return [];
+          return [
+            {
+              profile,
+              friendsSince: row.since ?? row.createdAt,
+              sharedGameCount: shared.get(friendId) ?? 0,
+            },
+          ];
+        })
+        // Online first, then in-game, then alphabetical — the order a player
+        // actually scans the list in.
+        .sort((x, y) => {
+          const rank = (entry: FriendEntry) =>
+            entry.profile.presence === 'in-game' ? 0 : entry.profile.presence === 'online' ? 1 : 2;
+          return rank(x) - rank(y) || x.profile.displayName.localeCompare(y.profile.displayName);
+        })
+    );
   }
 
   requests(userId: string): FriendRequests {

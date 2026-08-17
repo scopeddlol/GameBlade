@@ -129,7 +129,12 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
 
     return {
-      save: db.select().from(gameSaveRules).where(eq(gameSaveRules.gameId, id)).all().map(toSaveRule),
+      save: db
+        .select()
+        .from(gameSaveRules)
+        .where(eq(gameSaveRules.gameId, id))
+        .all()
+        .map(toSaveRule),
       launch: db
         .select()
         .from(gameLaunchRules)
@@ -205,7 +210,8 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     const patch: Partial<typeof games.$inferInsert> = { updatedAt: isoNow() };
 
     if (input.title !== undefined) patch.title = input.title;
-    if (input.sortTitle !== undefined) patch.sortTitle = input.sortTitle ?? input.title ?? game.title;
+    if (input.sortTitle !== undefined)
+      patch.sortTitle = input.sortTitle ?? input.title ?? game.title;
     if (input.summary !== undefined) patch.summary = input.summary;
     if (input.storyline !== undefined) patch.storyline = input.storyline;
     if (input.releaseDate !== undefined) patch.releaseDate = input.releaseDate;

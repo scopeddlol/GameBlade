@@ -269,15 +269,17 @@ export class ProfileService {
       .all();
 
     const friends = this.friendIds(viewerId);
-    return rows
-      .filter((row) => row.userId !== viewerId)
-      // A private account is unlisted: it can only be added by exact username.
-      .filter(
-        (row) =>
-          row.visibility !== 'private' ||
-          row.username.toLowerCase() === term.trim().toLowerCase(),
-      )
-      .map((row) => this.summarise(row, { viewerId, areFriends: friends.has(row.userId) }));
+    return (
+      rows
+        .filter((row) => row.userId !== viewerId)
+        // A private account is unlisted: it can only be added by exact username.
+        .filter(
+          (row) =>
+            row.visibility !== 'private' ||
+            row.username.toLowerCase() === term.trim().toLowerCase(),
+        )
+        .map((row) => this.summarise(row, { viewerId, areFriends: friends.has(row.userId) }))
+    );
   }
 
   private friendshipView(viewerId: string, otherId: string): FriendshipView | null {

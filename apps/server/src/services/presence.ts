@@ -91,8 +91,7 @@ export class PresenceService {
       return;
     }
 
-    const unchanged =
-      current && current.status === resolved && current.gameId === (gameId ?? null);
+    const unchanged = current && current.status === resolved && current.gameId === (gameId ?? null);
     if (unchanged) {
       current.updatedAt = isoNow();
       return;

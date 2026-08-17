@@ -78,15 +78,7 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
   const activity = new ActivityService(db, config, profiles, realtime);
   const friends = new FriendService(db, profiles, notifications, activity, realtime);
   const media = new MediaStore(db, config, logger);
-  const social = new SocialService(
-    db,
-    config,
-    profiles,
-    friends,
-    media,
-    notifications,
-    activity,
-  );
+  const social = new SocialService(db, config, profiles, friends, media, notifications, activity);
   const playtime = new PlaytimeService(db, config, presence, activity);
   const achievements = new AchievementService(
     db,

@@ -202,13 +202,12 @@ export class PlaytimeService {
   }
 
   /** Per-game totals for a set of games, used to decorate listings. */
-  statsFor(userId: string, gameIds: string[]): Map<string, { seconds: number; last: string | null }> {
+  statsFor(
+    userId: string,
+    gameIds: string[],
+  ): Map<string, { seconds: number; last: string | null }> {
     if (gameIds.length === 0) return new Map();
-    const rows = this.db
-      .select()
-      .from(userGameStats)
-      .where(eq(userGameStats.userId, userId))
-      .all();
+    const rows = this.db.select().from(userGameStats).where(eq(userGameStats.userId, userId)).all();
     const wanted = new Set(gameIds);
     return new Map(
       rows
