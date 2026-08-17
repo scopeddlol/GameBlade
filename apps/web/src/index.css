@@ -105,6 +105,13 @@
   .gb-label {
     @apply text-ink-300 mb-1.5 block text-xs font-medium tracking-wide uppercase;
   }
+
+  .gb-chip {
+    @apply bg-ink-800 border-ink-700 text-ink-300 hover:border-ink-600 hover:text-ink-100 rounded-full border px-3 py-1 font-mono text-xs transition-colors;
+  }
+  .gb-chip-active {
+    @apply border-blade-500 bg-blade-500/15 text-blade-400;
+  }
 }
 
 /* Fades the hero art into the page background behind the game detail header. */

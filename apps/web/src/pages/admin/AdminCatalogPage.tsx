@@ -2,6 +2,7 @@ import type {
   AchievementDefinition,
   ArtKind,
   ArtworkSearchResult,
+  ExecutableCandidate,
   GameDetail,
   GameSummary,
   LaunchRule,
@@ -943,6 +944,30 @@ function AchievementsTab({ game }: { game: GameDetail }) {
   );
 }
 
+/** Mirrors the placeholders `resolve_template` understands in the desktop client's saves.rs. */
+const SAVE_PLACEHOLDERS: Array<{ token: string; label: string }> = [
+  { token: '{appdata}', label: 'AppData\\Roaming' },
+  { token: '{localappdata}', label: 'AppData\\Local' },
+  { token: '{documents}', label: 'Documents' },
+  { token: '{savedgames}', label: 'Saved Games' },
+  { token: '{userprofile}', label: 'User profile folder' },
+  { token: '{public}', label: 'Public folder' },
+  { token: '{install}', label: 'Game install folder' },
+];
+const DEFAULT_SAVE_BASE = '{appdata}';
+
+/** Splits a stored `{token}\rest\of\path` template back into the picker's two fields. */
+function splitPathTemplate(template: string): { base: string; sub: string } {
+  const match = /^(\{[a-z]+\})\\?(.*)$/.exec(template);
+  const token = match?.[1];
+  if (token && SAVE_PLACEHOLDERS.some((option) => option.token === token)) {
+    return { base: token, sub: match?.[2] ?? '' };
+  }
+  // An unrecognised or hand-edited template still has to go somewhere the
+  // admin can see and fix it, rather than being silently dropped.
+  return { base: DEFAULT_SAVE_BASE, sub: template };
+}
+
 /**
  * Launch and save rules are what let the desktop client actually run a game and
  * back it up. Without them a title still installs, but the client has to guess
@@ -957,8 +982,16 @@ function RulesTab({ gameId }: { gameId: string }) {
     queryFn: () => api.get<{ save: SaveRule[]; launch: LaunchRule[] }>(`/games/${gameId}/rules`),
   });
 
+  const executablesQuery = useQuery({
+    queryKey: ['admin', 'executables', gameId],
+    queryFn: () =>
+      api.get<{ candidates: ExecutableCandidate[] }>(`/admin/games/${gameId}/executables`),
+  });
+
   const [launch, setLaunch] = useState({ executable: '', args: '', workingDir: '' });
-  const [save, setSave] = useState({ pathTemplate: '', include: '', exclude: '' });
+  const [saveBase, setSaveBase] = useState(DEFAULT_SAVE_BASE);
+  const [saveSub, setSaveSub] = useState('');
+  const [save, setSave] = useState({ include: '', exclude: '' });
 
   // Seed the forms once the existing rules arrive.
   useEffect(() => {
@@ -972,9 +1005,15 @@ function RulesTab({ gameId }: { gameId: string }) {
         args: l.args ?? '',
         workingDir: l.workingDir ?? '',
       });
-    if (s)
-      setSave({ pathTemplate: s.pathTemplate, include: s.include ?? '', exclude: s.exclude ?? '' });
+    if (s) {
+      const { base, sub } = splitPathTemplate(s.pathTemplate);
+      setSaveBase(base);
+      setSaveSub(sub);
+      setSave({ include: s.include ?? '', exclude: s.exclude ?? '' });
+    }
   }, [rulesQuery.data]);
+
+  const pathTemplate = saveSub ? `${saveBase}\\${saveSub.replace(/^[\\/]+/, '')}` : saveBase;
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin', 'rules', gameId] });
 
@@ -993,7 +1032,7 @@ function RulesTab({ gameId }: { gameId: string }) {
   const saveSave = useMutation({
     mutationFn: () =>
       api.put(`/games/${gameId}/save-rule`, {
-        pathTemplate: save.pathTemplate,
+        pathTemplate,
         include: save.include || null,
         exclude: save.exclude || null,
       }),
@@ -1023,6 +1062,33 @@ function RulesTab({ gameId }: { gameId: string }) {
             placeholder="bin\\game.exe"
           />
         </Field>
+
+        {executablesQuery.isLoading ? (
+          <p className="text-ink-400 text-xs">Looking for .exe files…</p>
+        ) : (executablesQuery.data?.candidates.length ?? 0) > 0 ? (
+          <div className="space-y-1.5">
+            <p className="text-ink-400 text-xs">
+              Found in this game's files — pick one instead of typing the path:
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {executablesQuery.data?.candidates.map((candidate) => (
+                <button
+                  key={candidate.path}
+                  type="button"
+                  className={
+                    launch.executable === candidate.path ? 'gb-chip gb-chip-active' : 'gb-chip'
+                  }
+                  onClick={() => setLaunch({ ...launch, executable: candidate.path })}
+                  title={formatBytes(candidate.sizeBytes)}
+                >
+                  {candidate.path}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="text-ink-400 text-xs">No .exe found automatically — type the path above.</p>
+        )}
         <Field label="Arguments" htmlFor="rArgs">
           <input
             id="rArgs"
@@ -1047,18 +1113,30 @@ function RulesTab({ gameId }: { gameId: string }) {
 
       <section className="gb-card space-y-4 p-4">
         <h3 className="text-sm font-semibold tracking-wide uppercase">Cloud saves</h3>
-        <Field
-          label="Save location"
-          htmlFor="rSave"
-          hint="Placeholders: {userprofile} {appdata} {localappdata} {documents} {savedgames} {public} {install}"
-        >
-          <input
-            id="rSave"
-            className="gb-input font-mono"
-            value={save.pathTemplate}
-            onChange={(e) => setSave({ ...save, pathTemplate: e.target.value })}
-            placeholder="{appdata}\\MyGame\\Saves"
-          />
+        <Field label="Save location" htmlFor="rSaveBase" hint="Where the game keeps its saves.">
+          <div className="flex gap-2">
+            <select
+              id="rSaveBase"
+              className="gb-input w-auto shrink-0"
+              value={saveBase}
+              onChange={(e) => setSaveBase(e.target.value)}
+            >
+              {SAVE_PLACEHOLDERS.map((option) => (
+                <option key={option.token} value={option.token}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <input
+              id="rSave"
+              className="gb-input font-mono"
+              value={saveSub}
+              onChange={(e) => setSaveSub(e.target.value)}
+              placeholder="MyGame\\Saves"
+              aria-label="Subfolder within that location"
+            />
+          </div>
+          <p className="text-ink-500 mt-1 font-mono text-xs">{pathTemplate}</p>
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Include glob" htmlFor="rInc" hint="Optional. Defaults to everything.">
@@ -1083,7 +1161,7 @@ function RulesTab({ gameId }: { gameId: string }) {
         <button
           type="button"
           className="gb-btn-primary"
-          disabled={!save.pathTemplate}
+          disabled={!pathTemplate}
           onClick={() => saveSave.mutate()}
         >
           Save sync rule

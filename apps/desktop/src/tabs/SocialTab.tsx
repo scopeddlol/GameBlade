@@ -3,6 +3,7 @@ import type {
   FriendEntry,
   FriendRequests,
   MediaInfo,
+  Paginated,
   PostInfo,
   ProfileSummary,
   ReactionKind,
@@ -11,9 +12,28 @@ import { REACTIONS } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { open } from '@tauri-apps/plugin-dialog';
 import clsx from 'clsx';
-import { Check, ImagePlus, MessageSquare, Search, Send, UserPlus, X } from 'lucide-react';
+import {
+  Check,
+  ImagePlus,
+  MessageSquare,
+  Pencil,
+  Search,
+  Send,
+  UserPlus,
+  Users,
+  X,
+} from 'lucide-react';
 import { useState } from 'react';
-import { Avatar, Badge, Empty, ErrorNote, Loading, SectionHeader } from '../components/ui.js';
+import {
+  Avatar,
+  Badge,
+  ConfirmDialog,
+  Empty,
+  ErrorNote,
+  Loading,
+  Modal,
+  SectionHeader,
+} from '../components/ui.js';
 import { useArtwork } from '../hooks/useArtwork.js';
 import { formatRelative } from '../lib/format.js';
 import { errorMessage, ipc, queryString } from '../lib/ipc.js';
@@ -27,9 +47,9 @@ const REACTION_GLYPHS: Record<ReactionKind, string> = {
   sad: '😢',
 };
 
-type Pane = 'feed' | 'friends';
+type Pane = 'feed' | 'friends' | 'members';
 
-export function SocialTab() {
+export function SocialTab({ onOpenProfile }: { onOpenProfile: (userId: string) => void }) {
   const [pane, setPane] = useState<Pane>('feed');
 
   return (
@@ -53,16 +73,31 @@ export function SocialTab() {
         >
           Friends
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === 'members'}
+          className={clsx('segment', pane === 'members' && 'active')}
+          onClick={() => setPane('members')}
+        >
+          Members
+        </button>
       </div>
 
-      {pane === 'feed' ? <Feed /> : <Friends />}
+      {pane === 'feed' ? (
+        <Feed onOpenProfile={onOpenProfile} />
+      ) : pane === 'friends' ? (
+        <Friends onOpenProfile={onOpenProfile} />
+      ) : (
+        <Members onOpenProfile={onOpenProfile} />
+      )}
     </div>
   );
 }
 
 /* --------------------------------------------------------------------- feed */
 
-function Feed() {
+function Feed({ onOpenProfile }: { onOpenProfile: (userId: string) => void }) {
   const queryClient = useQueryClient();
   const [scope, setScope] = useState<'friends' | 'everyone' | 'mine'>('friends');
   const [error, setError] = useState<string | null>(null);
@@ -111,7 +146,13 @@ function Feed() {
       ) : (
         <div className="feed">
           {(feedQuery.data ?? []).map((post) => (
-            <PostCard key={post.id} post={post} onChanged={refresh} onError={setError} />
+            <PostCard
+              key={post.id}
+              post={post}
+              onChanged={refresh}
+              onError={setError}
+              onOpenProfile={onOpenProfile}
+            />
           ))}
         </div>
       )}
@@ -216,16 +257,21 @@ function Composer({
   );
 }
 
-function PostCard({
+export function PostCard({
   post,
   onChanged,
   onError,
+  onOpenProfile,
 }: {
   post: PostInfo;
   onChanged: () => void;
   onError: (message: string) => void;
+  /** Omitted when the card already lives inside that author's own profile. */
+  onOpenProfile?: (userId: string) => void;
 }) {
   const [showComments, setShowComments] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const reactMutation = useMutation({
     mutationFn: (reaction: ReactionKind | null) =>
@@ -236,37 +282,60 @@ function PostCard({
 
   const deleteMutation = useMutation({
     mutationFn: () => ipc.del(`/posts/${post.id}`),
-    onSuccess: onChanged,
-    onError: (caught) => onError(errorMessage(caught)),
+    onSuccess: () => {
+      setConfirmingDelete(false);
+      onChanged();
+    },
+    onError: (caught) => {
+      setConfirmingDelete(false);
+      onError(errorMessage(caught));
+    },
   });
 
   return (
     <article className="post">
       <header>
-        <Avatar
-          url={post.author.avatarUrl}
-          name={post.author.displayName}
-          accent={post.author.accentColor}
-          presence={post.author.presence}
-          size={38}
-        />
-        <div>
-          <strong>{post.author.displayName}</strong>
-          <span className="muted small">
-            {formatRelative(post.createdAt)}
-            {post.editedAt ? ' · edited' : ''}
-            {post.visibility === 'friends' ? ' · friends only' : ''}
+        <button
+          type="button"
+          className="post-author"
+          onClick={() => onOpenProfile?.(post.author.userId)}
+          disabled={!onOpenProfile}
+        >
+          <Avatar
+            url={post.author.avatarUrl}
+            name={post.author.displayName}
+            accent={post.author.accentColor}
+            presence={post.author.presence}
+            size={38}
+          />
+          <span>
+            <strong>{post.author.displayName}</strong>
+            <span className="muted small">
+              {formatRelative(post.createdAt)}
+              {post.editedAt ? ' · edited' : ''}
+              {post.visibility === 'friends' ? ' · friends only' : ''}
+            </span>
           </span>
-        </div>
+        </button>
         {post.canEdit ? (
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={() => deleteMutation.mutate()}
-            aria-label="Delete post"
-          >
-            <X size={15} aria-hidden />
-          </button>
+          <div className="post-owner-actions">
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setEditing(true)}
+              aria-label="Edit post"
+            >
+              <Pencil size={14} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setConfirmingDelete(true)}
+              aria-label="Delete post"
+            >
+              <X size={15} aria-hidden />
+            </button>
+          </div>
         ) : null}
       </header>
 
@@ -332,7 +401,86 @@ function PostCard({
       </footer>
 
       {showComments ? <Comments postId={post.id} onError={onError} /> : null}
+
+      {editing ? (
+        <EditPostDialog
+          post={post}
+          onClose={() => setEditing(false)}
+          onSaved={() => {
+            setEditing(false);
+            onChanged();
+          }}
+          onError={onError}
+        />
+      ) : null}
+
+      {confirmingDelete ? (
+        <ConfirmDialog
+          title="Delete post?"
+          message="This removes it for everyone, along with its comments and reactions. This cannot be undone."
+          confirmLabel="Delete"
+          pending={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate()}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      ) : null}
     </article>
+  );
+}
+
+function EditPostDialog({
+  post,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  post: PostInfo;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (message: string) => void;
+}) {
+  const [body, setBody] = useState(post.body ?? '');
+  const [visibility, setVisibility] = useState<'friends' | 'public'>(
+    post.visibility === 'public' ? 'public' : 'friends',
+  );
+
+  const saveMutation = useMutation({
+    mutationFn: () => ipc.patch(`/posts/${post.id}`, { body, visibility }),
+    onSuccess: onSaved,
+    onError: (caught) => onError(errorMessage(caught)),
+  });
+
+  return (
+    <Modal title="Edit post" onClose={onClose}>
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        rows={4}
+        aria-label="Edit post text"
+      />
+      <select
+        className="select"
+        value={visibility}
+        onChange={(e) => setVisibility(e.target.value as 'friends' | 'public')}
+        aria-label="Who can see this"
+      >
+        <option value="friends">Friends only</option>
+        <option value="public">Everyone</option>
+      </select>
+      <div className="modal-actions">
+        <button type="button" className="btn btn-ghost" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => saveMutation.mutate()}
+          disabled={!body.trim() || saveMutation.isPending}
+        >
+          Save
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -418,7 +566,7 @@ function Comments({ postId, onError }: { postId: string; onError: (message: stri
 
 /* ------------------------------------------------------------------ friends */
 
-function Friends() {
+function Friends({ onOpenProfile }: { onOpenProfile: (userId: string) => void }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -491,16 +639,22 @@ function Friends() {
             <ul className="people">
               {(searchQuery.data ?? []).map((profile) => (
                 <li key={profile.userId}>
-                  <Avatar
-                    url={profile.avatarUrl}
-                    name={profile.displayName}
-                    accent={profile.accentColor}
-                    presence={profile.presence}
-                  />
-                  <span>
-                    <strong>{profile.displayName}</strong>
-                    <span className="muted small">@{profile.username}</span>
-                  </span>
+                  <button
+                    type="button"
+                    className="person-link"
+                    onClick={() => onOpenProfile(profile.userId)}
+                  >
+                    <Avatar
+                      url={profile.avatarUrl}
+                      name={profile.displayName}
+                      accent={profile.accentColor}
+                      presence={profile.presence}
+                    />
+                    <span>
+                      <strong>{profile.displayName}</strong>
+                      <span className="muted small">@{profile.username}</span>
+                    </span>
+                  </button>
                   <button
                     type="button"
                     className="btn btn-ghost"
@@ -522,16 +676,22 @@ function Friends() {
           <ul className="people">
             {incoming.map(({ profile, requestedAt }) => (
               <li key={profile.userId}>
-                <Avatar
-                  url={profile.avatarUrl}
-                  name={profile.displayName}
-                  accent={profile.accentColor}
-                  presence={profile.presence}
-                />
-                <span>
-                  <strong>{profile.displayName}</strong>
-                  <span className="muted small">asked {formatRelative(requestedAt)}</span>
-                </span>
+                <button
+                  type="button"
+                  className="person-link"
+                  onClick={() => onOpenProfile(profile.userId)}
+                >
+                  <Avatar
+                    url={profile.avatarUrl}
+                    name={profile.displayName}
+                    accent={profile.accentColor}
+                    presence={profile.presence}
+                  />
+                  <span>
+                    <strong>{profile.displayName}</strong>
+                    <span className="muted small">asked {formatRelative(requestedAt)}</span>
+                  </span>
+                </button>
                 <button
                   type="button"
                   className="btn btn-primary"
@@ -566,24 +726,30 @@ function Friends() {
           <ul className="people">
             {(friendsQuery.data ?? []).map(({ profile, sharedGameCount }) => (
               <li key={profile.userId}>
-                <Avatar
-                  url={profile.avatarUrl}
-                  name={profile.displayName}
-                  accent={profile.accentColor}
-                  presence={profile.presence}
-                  size={38}
-                />
-                <span>
-                  <strong>{profile.displayName}</strong>
-                  <span className="muted small">
-                    {profile.presence === 'in-game' && profile.playingGameTitle
-                      ? `Playing ${profile.playingGameTitle}`
-                      : profile.presence === 'online'
-                        ? 'Online'
-                        : 'Offline'}
-                    {sharedGameCount > 0 ? ` · ${sharedGameCount} games in common` : ''}
+                <button
+                  type="button"
+                  className="person-link"
+                  onClick={() => onOpenProfile(profile.userId)}
+                >
+                  <Avatar
+                    url={profile.avatarUrl}
+                    name={profile.displayName}
+                    accent={profile.accentColor}
+                    presence={profile.presence}
+                    size={38}
+                  />
+                  <span>
+                    <strong>{profile.displayName}</strong>
+                    <span className="muted small">
+                      {profile.presence === 'in-game' && profile.playingGameTitle
+                        ? `Playing ${profile.playingGameTitle}`
+                        : profile.presence === 'online'
+                          ? 'Online'
+                          : 'Offline'}
+                      {sharedGameCount > 0 ? ` · ${sharedGameCount} games in common` : ''}
+                    </span>
                   </span>
-                </span>
+                </button>
                 <button
                   type="button"
                   className="icon-btn"
@@ -603,6 +769,101 @@ function Friends() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ members */
+
+const MEMBERS_PAGE_SIZE = 30;
+
+function Members({ onOpenProfile }: { onOpenProfile: (userId: string) => void }) {
+  const [search, setSearch] = useState('');
+  const [offset, setOffset] = useState(0);
+
+  const membersQuery = useQuery({
+    queryKey: ['members', search, offset],
+    queryFn: () =>
+      ipc.get<Paginated<ProfileSummary>>(
+        `/members${queryString({ query: search || undefined, offset, limit: MEMBERS_PAGE_SIZE })}`,
+      ),
+    placeholderData: (previous) => previous,
+  });
+
+  const members = membersQuery.data?.items ?? [];
+  const total = membersQuery.data?.total ?? 0;
+  const hasMore = offset + members.length < total;
+
+  return (
+    <>
+      <div className="search-box wide">
+        <Search size={15} aria-hidden />
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setOffset(0);
+          }}
+          placeholder="Find a member by username…"
+          aria-label="Find a member by username"
+        />
+      </div>
+
+      <section>
+        <SectionHeader
+          title="Members"
+          subtitle={total > 0 ? `${total} on this server` : undefined}
+        />
+        {membersQuery.isLoading ? (
+          <Loading label="Loading members" />
+        ) : members.length === 0 ? (
+          <Empty title="Nobody found" message="Try a different search." />
+        ) : (
+          <>
+            <ul className="people">
+              {members.map((profile) => (
+                <li key={profile.userId}>
+                  <button
+                    type="button"
+                    className="person-link"
+                    onClick={() => onOpenProfile(profile.userId)}
+                  >
+                    <Avatar
+                      url={profile.avatarUrl}
+                      name={profile.displayName}
+                      accent={profile.accentColor}
+                      presence={profile.presence}
+                    />
+                    <span>
+                      <strong>{profile.displayName}</strong>
+                      <span className="muted small">
+                        {profile.presence === 'in-game' && profile.playingGameTitle
+                          ? `Playing ${profile.playingGameTitle}`
+                          : profile.presence === 'online'
+                            ? 'Online'
+                            : `@${profile.username}`}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+
+            {hasMore ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setOffset((current) => current + MEMBERS_PAGE_SIZE)}
+                disabled={membersQuery.isFetching}
+              >
+                <Users size={14} aria-hidden />
+                Show more
+              </button>
+            ) : null}
+          </>
         )}
       </section>
     </>

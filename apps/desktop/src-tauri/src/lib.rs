@@ -18,7 +18,7 @@ use realtime::RealtimeClient;
 use saves::{LocalSave, SaveRule};
 use serde::Serialize;
 use settings::Settings;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{Manager, State};
 use tokio::sync::RwLock;
@@ -252,6 +252,11 @@ async fn cancel_download(state: State<'_, AppState>, game_id: String) -> AppResu
 }
 
 #[tauri::command]
+async fn pause_download(state: State<'_, AppState>, game_id: String) -> AppResult<bool> {
+    Ok(state.downloads.pause(&game_id).await)
+}
+
+#[tauri::command]
 async fn clear_download(state: State<'_, AppState>, game_id: String) -> AppResult<()> {
     state.downloads.forget(&game_id).await;
     Ok(())
@@ -260,6 +265,66 @@ async fn clear_download(state: State<'_, AppState>, game_id: String) -> AppResul
 #[tauri::command]
 async fn list_downloads(state: State<'_, AppState>) -> AppResult<Vec<DownloadState>> {
     Ok(state.downloads.snapshot().await)
+}
+
+#[derive(Serialize)]
+struct DiskUsage {
+    available_bytes: u64,
+    total_bytes: u64,
+}
+
+/// Free/total space for the drive a path lives on. Walks up to the nearest
+/// existing ancestor first, so a location that has been configured but never
+/// installed into yet still resolves instead of erroring.
+fn disk_stats_for(dir: &Path) -> AppResult<DiskUsage> {
+    let mut probe = dir;
+    while !probe.exists() {
+        probe = match probe.parent() {
+            Some(parent) => parent,
+            None => break,
+        };
+    }
+    Ok(DiskUsage {
+        available_bytes: fs4::available_space(probe)?,
+        total_bytes: fs4::total_space(probe)?,
+    })
+}
+
+/// Free/total space for the drive the default install directory lives on,
+/// for the downloads panel's disk gauge.
+#[tauri::command]
+async fn disk_usage(state: State<'_, AppState>) -> AppResult<DiskUsage> {
+    disk_stats_for(&state.install_dir().await)
+}
+
+#[derive(Serialize)]
+struct StorageLocation {
+    path: String,
+    is_default: bool,
+    available_bytes: u64,
+    total_bytes: u64,
+}
+
+/// Every configured storage location with its free space, for the in-app
+/// install destination picker.
+#[tauri::command]
+async fn list_storage_locations(state: State<'_, AppState>) -> AppResult<Vec<StorageLocation>> {
+    let settings = state.settings.read().await;
+    let default_dir = settings.install_dir.clone();
+    let dirs = settings.all_install_dirs();
+    drop(settings);
+
+    let mut out = Vec::with_capacity(dirs.len());
+    for dir in dirs {
+        let usage = disk_stats_for(&dir)?;
+        out.push(StorageLocation {
+            is_default: dir == default_dir,
+            path: dir.to_string_lossy().to_string(),
+            available_bytes: usage.available_bytes,
+            total_bytes: usage.total_bytes,
+        });
+    }
+    Ok(out)
 }
 
 /* ----------------------------------------------------------------- installs */
@@ -721,8 +786,11 @@ pub fn run() {
             update_settings,
             start_download,
             cancel_download,
+            pause_download,
             clear_download,
             list_downloads,
+            disk_usage,
+            list_storage_locations,
             list_installed,
             finish_install,
             uninstall_game,

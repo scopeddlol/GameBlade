@@ -1,6 +1,6 @@
 [package]
 name = "gameblade-desktop"
-version = "0.3.2"
+version = "0.3.3"
 description = "GameBlade desktop client"
 authors = ["GameBlade"]
 edition = "2021"
@@ -51,6 +51,8 @@ globset = "0.4"
 
 # Resolving {appdata}, {documents} and friends when a save rule is applied.
 dirs = "5"
+# Free/total space on the install drive, for the downloads panel's disk gauge.
+fs4 = "0.9"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 # Presence, friend activity and notifications arrive over a WebSocket.

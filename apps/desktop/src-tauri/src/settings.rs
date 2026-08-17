@@ -8,8 +8,15 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
-    /// Where games are installed. Defaults to `<documents>/GameBlade/Games`.
+    /// Where games are installed by default. Defaults to `<documents>/GameBlade/Games`.
     pub install_dir: PathBuf,
+
+    /// Additional locations a game may be installed to instead, offered
+    /// alongside `install_dir` in the in-app storage picker. Absent from a
+    /// settings file saved before multi-location support existed, hence the
+    /// default rather than aliasing — there is nothing to alias from.
+    #[serde(default)]
+    pub extra_install_dirs: Vec<PathBuf>,
 
     /// Pull the cloud save before launching and push it after quitting.
     pub sync_saves: bool,
@@ -44,6 +51,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             install_dir: default_install_dir(),
+            extra_install_dirs: Vec::new(),
             sync_saves: true,
             prompt_on_save_conflict: true,
             share_activity: true,
@@ -61,7 +69,20 @@ impl Settings {
         if self.install_dir.as_os_str().is_empty() {
             self.install_dir = default_install_dir();
         }
+        // The default location is always offered on its own, and each extra
+        // one only once — otherwise it would appear twice in the picker.
+        let mut seen = std::collections::HashSet::new();
+        self.extra_install_dirs.retain(|dir| {
+            !dir.as_os_str().is_empty() && *dir != self.install_dir && seen.insert(dir.clone())
+        });
         self
+    }
+
+    /// Every configured storage location, default first.
+    pub fn all_install_dirs(&self) -> Vec<PathBuf> {
+        let mut all = vec![self.install_dir.clone()];
+        all.extend(self.extra_install_dirs.iter().cloned());
+        all
     }
 }
 
@@ -95,4 +116,66 @@ pub fn save(app_data: &std::path::Path, settings: &Settings) -> AppResult<()> {
     let payload = serde_json::to_string_pretty(settings)?;
     std::fs::write(settings_path(app_data), payload)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitised_drops_the_default_dir_and_duplicates_from_the_extra_list() {
+        let settings = Settings {
+            install_dir: PathBuf::from("/games/default"),
+            extra_install_dirs: vec![
+                PathBuf::from("/games/default"),
+                PathBuf::from("/games/second"),
+                PathBuf::from("/games/second"),
+                PathBuf::from(""),
+            ],
+            ..Settings::default()
+        };
+
+        let sanitised = settings.sanitised();
+
+        assert_eq!(
+            sanitised.extra_install_dirs,
+            vec![PathBuf::from("/games/second")]
+        );
+    }
+
+    #[test]
+    fn all_install_dirs_lists_the_default_first() {
+        let settings = Settings {
+            install_dir: PathBuf::from("/games/default"),
+            extra_install_dirs: vec![PathBuf::from("/games/second")],
+            ..Settings::default()
+        };
+
+        assert_eq!(
+            settings.all_install_dirs(),
+            vec![
+                PathBuf::from("/games/default"),
+                PathBuf::from("/games/second")
+            ],
+        );
+    }
+
+    #[test]
+    fn a_settings_file_saved_before_multi_location_support_still_loads() {
+        let dir =
+            std::env::temp_dir().join(format!("gameblade-settings-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            settings_path(&dir),
+            r#"{"installDir":"/games","syncSaves":true,"promptOnSaveConflict":true,"shareActivity":true,"minimizeOnLaunch":true,"downloadConcurrency":4,"verifyDownloads":true}"#,
+        )
+        .unwrap();
+
+        let loaded = load(&dir);
+
+        assert_eq!(loaded.install_dir, PathBuf::from("/games"));
+        assert!(loaded.extra_install_dirs.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

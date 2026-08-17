@@ -32,6 +32,7 @@ pub enum DownloadStatus {
     Completed,
     Failed,
     Canceled,
+    Paused,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -76,6 +77,11 @@ impl Segment {
 
 struct Handle {
     cancel: Arc<AtomicBool>,
+    /// Set by `pause`, never by `cancel` — both stop the same in-flight
+    /// segments, but this is what tells the finalizer to report `Paused`
+    /// (and leave the `.gbpart` sidecars alone for a later resume) instead
+    /// of `Canceled`.
+    paused: Arc<AtomicBool>,
     state: Arc<Mutex<DownloadState>>,
 }
 
@@ -99,6 +105,21 @@ impl DownloadManager {
         let downloads = self.downloads.lock().await;
         match downloads.get(game_id) {
             Some(handle) => {
+                handle.cancel.store(true, Ordering::SeqCst);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Stops the transfer without discarding progress. The same `.gbpart`
+    /// resume machinery that lets a failed download pick up where it left
+    /// off makes "resume" nothing more than starting the same game again.
+    pub async fn pause(&self, game_id: &str) -> bool {
+        let downloads = self.downloads.lock().await;
+        match downloads.get(game_id) {
+            Some(handle) => {
+                handle.paused.store(true, Ordering::SeqCst);
                 handle.cancel.store(true, Ordering::SeqCst);
                 true
             }
@@ -161,10 +182,12 @@ impl DownloadManager {
         }));
 
         let cancel = Arc::new(AtomicBool::new(false));
+        let paused = Arc::new(AtomicBool::new(false));
         self.downloads.lock().await.insert(
             game_id.clone(),
             Handle {
                 cancel: cancel.clone(),
+                paused: paused.clone(),
                 state: state.clone(),
             },
         );
@@ -183,6 +206,7 @@ impl DownloadManager {
 
             let mut guard = state.lock().await;
             guard.status = match result {
+                Ok(()) if paused.load(Ordering::SeqCst) => DownloadStatus::Paused,
                 Ok(()) if cancel.load(Ordering::SeqCst) => DownloadStatus::Canceled,
                 Ok(()) => DownloadStatus::Completed,
                 Err(err) => {

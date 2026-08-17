@@ -15,6 +15,8 @@ export interface CreateNotification {
   /** Client-side route, e.g. `profile/usr_x` or `social/post/pst_y`. */
   link?: string | null;
   actorId?: string | null;
+  /** Custom emoji on an admin announcement; other kinds leave this unset. */
+  icon?: string | null;
 }
 
 export class NotificationService {
@@ -38,6 +40,7 @@ export class NotificationService {
           title: input.title,
           body: input.body ?? null,
           link: input.link ?? null,
+          icon: input.icon ?? null,
           readAt: isoNow(),
           createdAt: isoNow(),
         },
@@ -53,6 +56,7 @@ export class NotificationService {
       title: input.title,
       body: input.body ?? null,
       link: input.link ?? null,
+      icon: input.icon ?? null,
       readAt: null,
       createdAt: isoNow(),
     };
@@ -114,6 +118,14 @@ export class NotificationService {
       .run();
   }
 
+  /** Scoped to the owner, same as markRead — one account can never touch another's list. */
+  delete(userId: string, id: string): void {
+    this.db
+      .delete(notifications)
+      .where(and(eq(notifications.id, id), eq(notifications.userId, userId)))
+      .run();
+  }
+
   /** Read notifications older than the cutoff are noise; drop them. */
   prune(olderThanIso: string): void {
     this.db
@@ -130,6 +142,7 @@ export class NotificationService {
       title: string;
       body: string | null;
       link: string | null;
+      icon: string | null;
       readAt: string | null;
       createdAt: string;
     },
@@ -142,6 +155,7 @@ export class NotificationService {
       title: row.title,
       body: row.body,
       link: row.link,
+      icon: row.icon ?? null,
       readAt: row.readAt,
       createdAt: row.createdAt,
     };

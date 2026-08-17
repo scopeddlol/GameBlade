@@ -282,6 +282,14 @@ export interface FriendshipView {
   since: string;
 }
 
+/** The public-facing view of a profile: detail plus a slice of their activity. */
+export interface ProfileShowcase {
+  profile: ProfileDetail;
+  posts: PostInfo[];
+  topGames: PlaytimeEntry[];
+  recentAchievements: AchievementProgress[];
+}
+
 export interface FriendEntry {
   profile: ProfileSummary;
   friendsSince: string;
@@ -389,6 +397,12 @@ export interface LaunchRule {
   note: string | null;
 }
 
+/** An .exe found inside a game's files, offered as a launch-rule pick instead of free-typed. */
+export interface ExecutableCandidate {
+  path: string;
+  sizeBytes: number;
+}
+
 /* --------------------------------------------------------------- social feed */
 
 export interface MediaInfo {
@@ -451,6 +465,8 @@ export interface NotificationInfo {
   body: string | null;
   /** Client route to open, e.g. `social/post/<id>` or `profile/<id>`. */
   link: string | null;
+  /** Custom emoji on an admin announcement; null falls back to a per-kind icon. */
+  icon: string | null;
   readAt: string | null;
   createdAt: string;
 }

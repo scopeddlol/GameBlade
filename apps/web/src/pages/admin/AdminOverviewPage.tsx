@@ -151,16 +151,23 @@ function StatCard({ label, value, hint }: { label: string; value: string; hint?:
 function Announcements() {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [icon, setIcon] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const sendMutation = useMutation({
-    mutationFn: () => api.post<{ sent: number }>('/admin/announcements', { title, body }),
+    mutationFn: () =>
+      api.post<{ sent: number }>('/admin/announcements', {
+        title,
+        body,
+        icon: icon.trim() || undefined,
+      }),
     onSuccess: (result) => {
       setNotice(`Sent to ${result.sent} ${result.sent === 1 ? 'account' : 'accounts'}.`);
       setError(null);
       setTitle('');
       setBody('');
+      setIcon('');
     },
     onError: (caught) =>
       setError(caught instanceof ApiRequestError ? caught.message : 'Could not send.'),
@@ -187,16 +194,32 @@ function Announcements() {
           sendMutation.mutate();
         }}
       >
-        <Field label="Title" htmlFor="annTitle">
-          <input
-            id="annTitle"
-            className="gb-input"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Server maintenance on Sunday"
-            required
-          />
-        </Field>
+        <div className="flex gap-3">
+          <div className="w-20 shrink-0">
+            <Field label="Icon" htmlFor="annIcon">
+              <input
+                id="annIcon"
+                className="gb-input text-center text-lg"
+                value={icon}
+                onChange={(e) => setIcon(e.target.value)}
+                placeholder="🎉"
+                maxLength={8}
+              />
+            </Field>
+          </div>
+          <div className="flex-1">
+            <Field label="Title" htmlFor="annTitle">
+              <input
+                id="annTitle"
+                className="gb-input"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Server maintenance on Sunday"
+                required
+              />
+            </Field>
+          </div>
+        </div>
         <Field label="Message (optional)" htmlFor="annBody">
           <textarea
             id="annBody"

@@ -20,7 +20,7 @@ export interface UserInfo {
 }
 
 export type DownloadStatus =
-  'queued' | 'downloading' | 'verifying' | 'completed' | 'failed' | 'canceled';
+  'queued' | 'downloading' | 'verifying' | 'completed' | 'failed' | 'canceled' | 'paused';
 
 /** Mirrors the Rust `DownloadState` struct, which serialises with snake_case. */
 export interface DownloadState {
@@ -57,12 +57,21 @@ export interface RunningGame {
 
 export interface ClientSettings {
   installDir: string;
+  extraInstallDirs: string[];
   syncSaves: boolean;
   promptOnSaveConflict: boolean;
   shareActivity: boolean;
   minimizeOnLaunch: boolean;
   downloadConcurrency: number;
   verifyDownloads: boolean;
+}
+
+/** Mirrors the Rust `StorageLocation` struct, which serialises with snake_case. */
+export interface StorageLocation {
+  path: string;
+  is_default: boolean;
+  available_bytes: number;
+  total_bytes: number;
 }
 
 export interface SaveRulePayload {
@@ -77,6 +86,11 @@ export interface LocalSave {
   sizeBytes: number;
   sha256: string;
   capturedAt: string;
+}
+
+export interface DiskUsage {
+  available_bytes: number;
+  total_bytes: number;
 }
 
 /**
@@ -119,8 +133,11 @@ export const ipc = {
   startDownload: (gameId: string, destination?: string) =>
     invoke<void>('start_download', { gameId, destination }),
   cancelDownload: (gameId: string) => invoke<boolean>('cancel_download', { gameId }),
+  pauseDownload: (gameId: string) => invoke<boolean>('pause_download', { gameId }),
   clearDownload: (gameId: string) => invoke<void>('clear_download', { gameId }),
   listDownloads: () => invoke<DownloadState[]>('list_downloads'),
+  diskUsage: () => invoke<DiskUsage>('disk_usage'),
+  listStorageLocations: () => invoke<StorageLocation[]>('list_storage_locations'),
 
   /* ------------------------------------------------------------- installs */
 

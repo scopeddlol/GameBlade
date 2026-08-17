@@ -5,12 +5,13 @@ import type {
   SaveRule,
 } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { openPath } from '@tauri-apps/plugin-opener';
+import { openPath, openUrl } from '@tauri-apps/plugin-opener';
 import clsx from 'clsx';
 import {
   CloudDownload,
   CloudUpload,
   Download,
+  Film,
   FolderOpen,
   HardDrive,
   Lock,
@@ -27,8 +28,9 @@ import {
   type DownloadState,
   type InstalledGame,
   type SaveRulePayload,
+  type StorageLocation,
 } from '../lib/ipc.js';
-import { Artwork, Badge, ErrorNote, Loading, ProgressBar, Spinner } from './ui.js';
+import { Artwork, Badge, ErrorNote, Loading, Modal, ProgressBar, Spinner } from './ui.js';
 
 interface Rules {
   save: SaveRule[];
@@ -58,6 +60,12 @@ export function GameDetailPanel({
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [showStoragePicker, setShowStoragePicker] = useState(false);
+
+  const locationsQuery = useQuery({
+    queryKey: ['storage-locations'],
+    queryFn: () => ipc.listStorageLocations(),
+  });
 
   const gameQuery = useQuery({
     queryKey: ['games', gameId],
@@ -94,14 +102,25 @@ export function GameDetailPanel({
   };
 
   const installMutation = useMutation({
-    mutationFn: () => ipc.startDownload(gameId),
+    mutationFn: (destination?: string) => ipc.startDownload(gameId, destination),
     onSuccess: () => {
+      setShowStoragePicker(false);
       setNotice('Download started — track it from the Downloads panel.');
       setError(null);
       void queryClient.invalidateQueries({ queryKey: ['downloads'] });
     },
     onError: (caught) => setError(errorMessage(caught)),
   });
+
+  const locations = locationsQuery.data ?? [];
+
+  const startInstall = () => {
+    if (locations.length > 1) {
+      setShowStoragePicker(true);
+    } else {
+      installMutation.mutate(undefined);
+    }
+  };
 
   const launchMutation = useMutation({
     mutationFn: async () => {
@@ -185,7 +204,7 @@ export function GameDetailPanel({
                   <button
                     type="button"
                     className={clsx('btn btn-primary btn-lg', isInstalling && 'btn-installing')}
-                    onClick={() => installMutation.mutate()}
+                    onClick={startInstall}
                     disabled={installMutation.isPending || isInstalling || game.isMissing}
                   >
                     {isInstalling ? (
@@ -199,7 +218,9 @@ export function GameDetailPanel({
                         ? `Installing…${installPercent === null ? '' : ` ${installPercent}%`}`
                         : installMutation.isPending
                           ? 'Starting…'
-                          : 'Install'}
+                          : download?.status === 'paused'
+                            ? `Resume${installPercent === null ? '' : ` (${installPercent}%)`}`
+                            : 'Install'}
                   </button>
                 )}
 
@@ -257,6 +278,9 @@ export function GameDetailPanel({
               </div>
 
               {game.summary ? <p className="detail-summary">{game.summary}</p> : null}
+              {game.storyline && game.storyline !== game.summary ? (
+                <p className="detail-summary">{game.storyline}</p>
+              ) : null}
 
               {game.genres.length > 0 ? (
                 <div className="tag-row">
@@ -265,6 +289,12 @@ export function GameDetailPanel({
                   ))}
                 </div>
               ) : null}
+
+              {game.screenshots.length > 0 ? (
+                <ScreenshotGallery screenshots={game.screenshots} title={game.title} />
+              ) : null}
+
+              {game.videos.length > 0 ? <TrailerList videoIds={game.videos} /> : null}
 
               {installed && saveRule ? (
                 <SaveSyncSection gameId={gameId} rule={saveRule} onError={setError} />
@@ -296,7 +326,138 @@ export function GameDetailPanel({
           </>
         )}
       </div>
+
+      {showStoragePicker ? (
+        <StoragePickerModal
+          locations={locations}
+          pending={installMutation.isPending}
+          onChoose={(path) => installMutation.mutate(path)}
+          onClose={() => setShowStoragePicker(false)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function StoragePickerModal({
+  locations,
+  pending,
+  onChoose,
+  onClose,
+}: {
+  locations: StorageLocation[];
+  pending: boolean;
+  onChoose: (path: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title="Install to…" onClose={onClose}>
+      <div className="storage-locations">
+        {locations.map((location) => {
+          const usedPercent =
+            location.total_bytes > 0
+              ? ((location.total_bytes - location.available_bytes) / location.total_bytes) * 100
+              : 0;
+          return (
+            <button
+              key={location.path}
+              type="button"
+              className="storage-location storage-location-pick"
+              onClick={() => onChoose(location.path)}
+              disabled={pending}
+            >
+              <div className="storage-location-head">
+                <span className="path">{location.path}</span>
+                {location.is_default ? <Badge tone="info">Default</Badge> : null}
+              </div>
+              <ProgressBar value={usedPercent} />
+              <span className="muted small">
+                {formatBytes(location.available_bytes)} free of {formatBytes(location.total_bytes)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
+function ScreenshotGallery({ screenshots, title }: { screenshots: string[]; title: string }) {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+
+  return (
+    <section className="detail-section">
+      <h3>Screenshots</h3>
+      <div className="screenshot-strip">
+        {screenshots.map((path, index) => (
+          <button
+            key={path}
+            type="button"
+            className="screenshot-thumb"
+            onClick={() => setOpenIndex(index)}
+          >
+            <Artwork path={path} alt={`${title} screenshot ${index + 1}`} />
+          </button>
+        ))}
+      </div>
+
+      {openIndex !== null ? (
+        <Modal
+          title={`${title} — screenshot ${openIndex + 1} of ${screenshots.length}`}
+          onClose={() => setOpenIndex(null)}
+        >
+          <div className="screenshot-lightbox">
+            <Artwork path={screenshots[openIndex]} alt="" />
+          </div>
+          {screenshots.length > 1 ? (
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() =>
+                  setOpenIndex((openIndex - 1 + screenshots.length) % screenshots.length)
+                }
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setOpenIndex((openIndex + 1) % screenshots.length)}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
+        </Modal>
+      ) : null}
+    </section>
+  );
+}
+
+function TrailerList({ videoIds }: { videoIds: string[] }) {
+  return (
+    <section className="detail-section">
+      <h3>
+        <Film size={16} aria-hidden /> Trailers
+      </h3>
+      <div className="trailer-strip">
+        {videoIds.map((id) => (
+          <button
+            key={id}
+            type="button"
+            className="trailer-card"
+            onClick={() => void openUrl(`https://www.youtube.com/watch?v=${id}`)}
+            title="Watch on YouTube"
+          >
+            <img src={`https://img.youtube.com/vi/${id}/hqdefault.jpg`} alt="" loading="lazy" />
+            <span className="trailer-play">
+              <Play size={20} aria-hidden />
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 

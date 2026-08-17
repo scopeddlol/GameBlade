@@ -647,6 +647,8 @@ export const notifications = sqliteTable(
     title: text('title').notNull(),
     body: text('body'),
     link: text('link'),
+    /** An admin-sent announcement's custom icon (an emoji); other kinds are null. */
+    icon: text('icon'),
     readAt: text('read_at'),
     createdAt: text('created_at').notNull().default(now),
   },

@@ -412,4 +412,14 @@ export const migrations: Migration[] = [
       CREATE INDEX notifications_user_idx ON notifications(user_id, read_at, created_at);
     `,
   },
+  {
+    id: '0003_notification_icons',
+    sql: `
+      -- An admin-sent announcement can carry a custom icon (an emoji, kept as
+      -- plain text rather than an upload — no media pipeline needed for
+      -- something this small). Other kinds leave it null and the client falls
+      -- back to a per-kind icon.
+      ALTER TABLE notifications ADD COLUMN icon TEXT;
+    `,
+  },
 ];
