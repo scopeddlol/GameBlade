@@ -114,6 +114,17 @@ export class SteamGridDbClient {
     return this.assets('icons', gameId);
   }
 
+  /**
+   * Every asset of a kind, unfiltered, for the admin picker.
+   *
+   * Distinct from `grids()` on purpose: the automatic path wants one sensible
+   * poster, whereas someone choosing by hand wants to see everything on offer,
+   * including the wide capsules a poster slot would normally reject.
+   */
+  browse(kind: 'grids' | 'heroes' | 'logos' | 'icons', gameId: number): Promise<SgdbAsset[]> {
+    return this.assets(kind, gameId);
+  }
+
   async verify(): Promise<void> {
     await this.search('portal');
   }

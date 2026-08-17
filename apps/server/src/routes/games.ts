@@ -1,4 +1,5 @@
 import {
+  artworkSearchSchema,
   editGameSchema,
   gameQuerySchema,
   launchRuleSchema,
@@ -235,6 +236,22 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
 
     db.update(games).set(patch).where(eq(games.id, id)).run();
     return { ok: true };
+  });
+
+  /**
+   * Every image both providers have for a title, so an administrator can pick
+   * one by eye rather than accepting whatever the automatic pass chose.
+   */
+  app.get('/games/:id/artwork/search', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const { kind, q } = request.query as { kind?: string; q?: string };
+
+    const game = db.select().from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    const parsed = artworkSearchSchema.parse({ kind, query: q?.trim() || game.searchTitle });
+    return metadata.searchArtwork(parsed.kind, parsed.query);
   });
 
   /** Replaces one artwork slot with an operator-supplied image. */

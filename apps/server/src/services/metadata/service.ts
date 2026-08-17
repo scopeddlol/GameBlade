@@ -1,11 +1,17 @@
-import type { MetadataCandidate, ProviderStatus } from '@gameblade/shared';
+import type {
+  ArtKind,
+  ArtworkCandidate,
+  ArtworkSearchResult,
+  MetadataCandidate,
+  ProviderStatus,
+} from '@gameblade/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../../db/index.js';
 import { games, type Game } from '../../db/schema.js';
 import { ApiError } from '../../lib/errors.js';
 import { matchKey } from '../../lib/titles.js';
 import type { SettingsService } from '../settings.js';
-import { IgdbClient, normaliseIgdbGame } from './igdb.js';
+import { IgdbClient, igdbImageUrl, normaliseIgdbGame } from './igdb.js';
 import { ImageCache } from './images.js';
 import { SteamGridDbClient } from './steamgriddb.js';
 
@@ -346,6 +352,107 @@ export class MetadataService {
         lastCheckedAt: new Date().toISOString(),
       };
     }
+  }
+
+  /**
+   * Collect every image both providers offer for a title, so an administrator
+   * can pick one by eye instead of trusting whatever the automatic pass chose.
+   *
+   * A provider that fails is reported rather than dropped: a picker showing
+   * only half the results should say why, not look like the other provider had
+   * nothing.
+   */
+  async searchArtwork(kind: ArtKind, query: string, limit = 40): Promise<ArtworkSearchResult> {
+    const candidates: ArtworkCandidate[] = [];
+    const errors: ArtworkSearchResult['errors'] = [];
+
+    const sgdb = this.getSgdb();
+    if (sgdb) {
+      try {
+        candidates.push(...(await this.steamGridCandidates(sgdb, kind, query)));
+      } catch (error) {
+        errors.push({
+          provider: 'steamgriddb',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // IGDB has no logos or icons, so it is only consulted for the two kinds it
+    // can actually answer.
+    const igdb = this.getIgdb();
+    if (igdb && (kind === 'cover' || kind === 'hero')) {
+      try {
+        candidates.push(...(await this.igdbCandidates(igdb, kind, query)));
+      } catch (error) {
+        errors.push({
+          provider: 'igdb',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return {
+      kind,
+      query,
+      // Highest community score first; unscored IGDB images fall in behind
+      // SteamGridDB's ranked art rather than displacing it.
+      candidates: candidates.sort((a, b) => (b.score ?? -1) - (a.score ?? -1)).slice(0, limit),
+      errors,
+    };
+  }
+
+  private async steamGridCandidates(
+    sgdb: SteamGridDbClient,
+    kind: ArtKind,
+    query: string,
+  ): Promise<ArtworkCandidate[]> {
+    const matches = await sgdb.search(query);
+    if (matches.length === 0) return [];
+
+    // Only the best title match is browsed; pulling art for every near-miss
+    // fills the picker with images from unrelated games.
+    const best =
+      matches.find((m) => matchKey(m.name) === matchKey(query)) ??
+      matches.slice().sort((a, b) => similarity(query, b.name) - similarity(query, a.name))[0];
+    if (!best) return [];
+
+    const bucket = { cover: 'grids', hero: 'heroes', logo: 'logos', icon: 'icons' } as const;
+    const assets = await sgdb.browse(bucket[kind], best.id);
+
+    return assets.map((asset) => ({
+      provider: 'steamgriddb' as const,
+      url: asset.url,
+      thumbnailUrl: asset.thumb || asset.url,
+      width: asset.width,
+      height: asset.height,
+      label: asset.style ?? null,
+      score: asset.score,
+    }));
+  }
+
+  private async igdbCandidates(
+    igdb: IgdbClient,
+    kind: 'cover' | 'hero',
+    query: string,
+  ): Promise<ArtworkCandidate[]> {
+    const images = await igdb.images(query);
+
+    // A cover slot wants portrait cover art; a hero wants the wide artwork and
+    // screenshots. Offering the wrong shape just makes the picker noisier.
+    const wanted = kind === 'cover' ? ['cover'] : ['artwork', 'screenshot'];
+
+    return images
+      .filter((image) => wanted.includes(image.source))
+      .map((image) => ({
+        provider: 'igdb' as const,
+        url: igdbImageUrl(image.imageId, kind === 'cover' ? 'cover_big' : '1080p'),
+        thumbnailUrl: igdbImageUrl(image.imageId, kind === 'cover' ? 'cover_small' : 'thumb'),
+        width: null,
+        height: null,
+        label: `${image.source} · ${image.gameName}`,
+        score: null,
+      }));
   }
 
   /** Detach provider metadata, leaving the scanned files untouched. */

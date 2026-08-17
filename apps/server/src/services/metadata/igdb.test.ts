@@ -115,3 +115,41 @@ describe('IgdbClient', () => {
     await expect(new IgdbClient('id', 'secret').search('x')).rejects.toThrow(/403/);
   });
 });
+
+describe('IgdbClient.images', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('collects covers, artworks and screenshots without duplicates', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        if (String(input).includes('id.twitch.tv')) {
+          return new Response(JSON.stringify({ access_token: 't', expires_in: 3600 }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response(
+          JSON.stringify([
+            {
+              id: 1,
+              name: 'Portal',
+              cover: { image_id: 'cov1' },
+              artworks: [{ image_id: 'art1' }, { image_id: 'art2' }],
+              screenshots: [{ image_id: 'art1' }, { image_id: 'shot1' }],
+            },
+          ]),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+
+    const images = await new IgdbClient('id', 'secret').images('portal');
+
+    // art1 appears as both an artwork and a screenshot; it must be offered once.
+    expect(images.map((i) => i.imageId)).toEqual(['cov1', 'art1', 'art2', 'shot1']);
+    expect(images[0]?.source).toBe('cover');
+  });
+});

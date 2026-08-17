@@ -346,6 +346,13 @@ export const editGameSchema = z.object({
 });
 export type EditGameInput = z.infer<typeof editGameSchema>;
 
+/** Browses provider artwork for one slot before anything is applied. */
+export const artworkSearchSchema = z.object({
+  kind: z.enum(['cover', 'hero', 'logo', 'icon']),
+  query: z.string().trim().min(1).max(200),
+});
+export type ArtworkSearchInput = z.infer<typeof artworkSearchSchema>;
+
 /** Replaces one artwork slot with an arbitrary URL the admin supplies. */
 export const setArtworkSchema = z.object({
   kind: z.enum(['cover', 'hero', 'logo', 'icon']),

@@ -192,6 +192,32 @@ export interface PublicServerInfo {
   gameCount: number;
 }
 
+/** One image an admin can choose for a game, from either provider. */
+export interface ArtworkCandidate {
+  provider: 'igdb' | 'steamgriddb';
+  /** Full-size image, downloaded and cached locally when chosen. */
+  url: string;
+  /** Smaller preview so a picker grid does not pull megabytes per thumbnail. */
+  thumbnailUrl: string;
+  width: number | null;
+  height: number | null;
+  /** SteamGridDB style, or which IGDB asset this came from. */
+  label: string | null;
+  /** Community score where the provider publishes one; higher is better. */
+  score: number | null;
+}
+
+export interface ArtworkSearchResult {
+  kind: ArtKind;
+  query: string;
+  candidates: ArtworkCandidate[];
+  /**
+   * Providers that failed. Surfaced rather than swallowed so a half-empty
+   * picker reads as "SteamGridDB is down" instead of "no artwork exists".
+   */
+  errors: Array<{ provider: 'igdb' | 'steamgriddb'; message: string }>;
+}
+
 export interface MetadataCandidate {
   provider: 'igdb';
   id: number;

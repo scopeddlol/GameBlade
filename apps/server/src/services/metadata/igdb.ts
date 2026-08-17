@@ -6,9 +6,17 @@ const API_URL = 'https://api.igdb.com/v4';
 /** IGDB serves every asset from one CDN; `t_*` selects the rendition. */
 export function igdbImageUrl(
   imageId: string,
-  size: 'cover_big' | '1080p' | 'screenshot_big' | 'thumb',
+  size: 'cover_big' | 'cover_small' | '1080p' | '720p' | 'screenshot_big' | 'thumb',
 ): string {
   return `https://images.igdb.com/igdb/image/upload/t_${size}/${imageId}.jpg`;
+}
+
+/** One IGDB image offered to the admin picker. */
+export interface IgdbImage {
+  imageId: string;
+  /** Which field it came from, shown as the candidate's label. */
+  source: 'cover' | 'artwork' | 'screenshot';
+  gameName: string;
 }
 
 interface IgdbCompany {
@@ -189,6 +197,43 @@ export class IgdbClient {
     // freeware is full of entries IGDB types oddly, and dropping them outright
     // is how a game ends up with no metadata at all.
     return results.slice().sort((a, b) => rankByType(a) - rankByType(b));
+  }
+
+  /**
+   * Every image IGDB has for the top matches on a title, for the admin picker.
+   *
+   * Uses its own narrow field list rather than the shared one: `artworks` is
+   * only needed here, and keeping it out of the main list means a change to it
+   * can never take down search and matching the way `category` did.
+   */
+  async images(title: string, limit = 5): Promise<IgdbImage[]> {
+    const capped = Math.min(Math.max(limit, 1), 10);
+    const query =
+      `search ${IgdbClient.quote(title)}; ` +
+      'fields name,cover.image_id,artworks.image_id,screenshots.image_id; ' +
+      `limit ${capped};`;
+
+    const results = await this.query<IgdbGame & { artworks?: Array<{ image_id?: string }> }>(
+      'games',
+      query,
+    );
+
+    const images: IgdbImage[] = [];
+    const seen = new Set<string>();
+
+    const push = (imageId: string | undefined, source: IgdbImage['source'], gameName: string) => {
+      if (!imageId || seen.has(imageId)) return;
+      seen.add(imageId);
+      images.push({ imageId, source, gameName });
+    };
+
+    for (const game of results) {
+      push(game.cover?.image_id, 'cover', game.name);
+      for (const artwork of game.artworks ?? []) push(artwork.image_id, 'artwork', game.name);
+      for (const shot of game.screenshots ?? []) push(shot.image_id, 'screenshot', game.name);
+    }
+
+    return images;
   }
 
   async getById(id: number): Promise<IgdbGame | null> {
