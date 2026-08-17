@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SESSION_COOKIE, CSRF_HEADER } from '@gameblade/shared';
@@ -6,7 +6,8 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
-import { games, libraries } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
+import { games, images, libraries, userLibrary } from '../db/schema.js';
 import { newId } from '../lib/ids.js';
 
 /**
@@ -29,6 +30,7 @@ describe('platform routes', () => {
   let admin: Session;
   let friend: Session;
   let gameId: string;
+  let libraryId: string;
 
   async function signUp(username: string, inviteCode?: string): Promise<Session> {
     const response = await app.inject({
@@ -71,7 +73,7 @@ describe('platform routes', () => {
 
     // A library and a game, inserted directly: the scanner has its own tests
     // and walking a real directory here would only slow this suite down.
-    const libraryId = newId('lib');
+    libraryId = newId('lib');
     app.gameblade.db
       .insert(libraries)
       .values({ id: libraryId, name: 'Test', path: path.join(dataDir, 'library') })
@@ -380,6 +382,139 @@ describe('platform routes', () => {
       url: `/api/media/${mediaId}?token=not-a-real-token`,
     });
     expect(badToken.statusCode).toBe(401);
+
+    // The desktop webview is served from tauri.localhost, so every asset it
+    // loads is cross-origin. Helmet's blanket same-origin CORP made the
+    // browser fetch these bytes and then throw them away, which showed up as
+    // every image in the client being broken while the admin panel — which is
+    // same-origin with the server — looked perfectly fine.
+    expect(withToken.headers['cross-origin-resource-policy']).toBe('cross-origin');
+  });
+
+  it('lets a cross-origin webview embed artwork, but not the rest of the API', async () => {
+    const png = Buffer.from(
+      '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6360000002000100' +
+        '05fe02fa0000000049454e44ae426082',
+      'hex',
+    );
+
+    // The cache only ingests by URL, so seed a row and its file the way a
+    // download would.
+    const imageId = newId('img');
+    const { images: imageCache } = app.gameblade;
+    const filePath = imageCache.filePath(imageId, 'image/png');
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, png);
+    app.gameblade.db
+      .insert(images)
+      .values({
+        id: imageId,
+        kind: 'cover',
+        sourceUrl: `https://example.invalid/${imageId}.png`,
+        contentType: 'image/png',
+        sizeBytes: png.length,
+        createdAt: new Date().toISOString(),
+      })
+      .run();
+
+    const image = await app.inject({
+      method: 'GET',
+      url: `/api/images/${imageId}`,
+      headers: auth(admin),
+    });
+    expect(image.statusCode).toBe(200);
+    expect(image.headers['cross-origin-resource-policy']).toBe('cross-origin');
+
+    // A revalidation must carry the header as well, or a cached cover breaks
+    // on its second load while working on the first.
+    const revalidated = await app.inject({
+      method: 'GET',
+      url: `/api/images/${imageId}`,
+      headers: { ...auth(admin), 'if-none-match': `"${imageId}"` },
+    });
+    expect(revalidated.statusCode).toBe(304);
+    expect(revalidated.headers['cross-origin-resource-policy']).toBe('cross-origin');
+
+    // Everything else keeps helmet's default; only browser-loaded subresources
+    // opt out.
+    const json = await app.inject({ method: 'GET', url: '/api/home', headers: auth(admin) });
+    expect(json.headers['cross-origin-resource-policy']).toBe('same-origin');
+  });
+
+  it('removes games that are gone from disk, and guards the ones that are not', async () => {
+    function insertGame(title: string, missing: boolean): string {
+      const id = newId('gam');
+      app.gameblade.db
+        .insert(games)
+        .values({
+          id,
+          libraryId,
+          relPath: title,
+          kind: 'folder',
+          title,
+          sortTitle: title.toLowerCase(),
+          searchTitle: title.toLowerCase(),
+          missingAt: missing ? new Date().toISOString() : null,
+        })
+        .run();
+      return id;
+    }
+
+    const vanished = insertGame('Vanished', true);
+    const present = insertGame('Still Here', false);
+
+    // A game still on disk would be re-added by the next scan without any of
+    // its metadata, so removing it takes an explicit force.
+    const refused = await app.inject({
+      method: 'DELETE',
+      url: `/api/admin/games/${present}`,
+      headers: auth(admin),
+    });
+    expect(refused.statusCode).toBe(409);
+    expect((refused.json() as { error: { code: string } }).error.code).toBe('game_present');
+
+    const forced = await app.inject({
+      method: 'DELETE',
+      url: `/api/admin/games/${present}?force=true`,
+      headers: auth(admin),
+    });
+    expect(forced.statusCode).toBe(200);
+
+    // A library entry cascades away with the game rather than lingering as a
+    // row pointing at nothing.
+    app.gameblade.db
+      .insert(userLibrary)
+      .values({ userId: admin.userId, gameId: vanished, addedAt: new Date().toISOString() })
+      .run();
+
+    const purge = await app.inject({
+      method: 'POST',
+      url: '/api/admin/games/purge-missing',
+      headers: auth(admin),
+      payload: {},
+    });
+    expect(purge.statusCode).toBe(200);
+    expect((purge.json() as { removed: number }).removed).toBe(1);
+
+    const left = app.gameblade.db.select().from(games).all();
+    expect(left.map((row) => row.id)).not.toContain(vanished);
+    expect(left.map((row) => row.id)).not.toContain(present);
+    // The game the rest of the suite depends on is untouched.
+    expect(left.map((row) => row.id)).toContain(gameId);
+
+    const orphans = app.gameblade.db
+      .select()
+      .from(userLibrary)
+      .where(eq(userLibrary.gameId, vanished))
+      .all();
+    expect(orphans).toHaveLength(0);
+
+    const missingNow = await app.inject({
+      method: 'GET',
+      url: '/api/admin/stats',
+      headers: auth(admin),
+    });
+    expect((missingNow.json() as { missing: number }).missing).toBe(0);
   });
 
   it('refuses to serve the API without a session', async () => {

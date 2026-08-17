@@ -376,3 +376,14 @@ export const scanRequestSchema = z.object({
   fetchMetadata: z.boolean().default(true),
 });
 export type ScanRequestInput = z.infer<typeof scanRequestSchema>;
+
+export const purgeMissingSchema = z.object({
+  /**
+   * Only purge entries missing for at least this long. The default of 0 means
+   * "everything currently flagged", which is what someone clicking a button
+   * called "remove missing" is asking for; a grace period is available for a
+   * scheduled clean-up that should tolerate a share being briefly offline.
+   */
+  olderThanDays: z.coerce.number().int().min(0).max(3650).default(0),
+});
+export type PurgeMissingInput = z.infer<typeof purgeMissingSchema>;

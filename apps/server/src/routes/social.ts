@@ -13,6 +13,7 @@ import {
 } from '@gameblade/shared';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { requireUser } from '../auth/middleware.js';
+import { allowCrossOriginEmbed } from '../lib/assets.js';
 import { ApiError } from '../lib/errors.js';
 
 /** Uploads arrive as a raw body, so the kind is declared in the query string. */
@@ -284,7 +285,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
 
     const { stream, record } = await media.open(id);
     return (
-      reply
+      allowCrossOriginEmbed(reply)
         .header('Content-Type', record.contentType)
         .header('Content-Length', String(record.sizeBytes))
         // Content is immutable once stored, so it can be cached hard.

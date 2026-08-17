@@ -10,7 +10,7 @@ import type {
   SaveRule,
 } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, Image as ImageIcon, Search, Trophy, Wand2, X } from 'lucide-react';
+import { Download, Image as ImageIcon, Search, Trash2, Trophy, Wand2, X } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Badge, EmptyState, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
@@ -61,6 +61,15 @@ export function AdminCatalogPage() {
       ),
   });
 
+  // The server-wide count, not the count on this page: the bulk action clears
+  // every flagged entry regardless of the search and status filters above, so
+  // counting the visible rows would understate what the button actually does.
+  const statsQuery = useQuery({
+    queryKey: ['admin', 'stats'],
+    queryFn: () => api.get<{ missing: number }>('/admin/stats'),
+  });
+  const missingCount = statsQuery.data?.missing ?? 0;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
@@ -68,6 +77,9 @@ export function AdminCatalogPage() {
         <span className="text-ink-400 text-sm">
           {listQuery.data ? `${listQuery.data.total.toLocaleString()} games` : ''}
         </span>
+        <div className="ml-auto">
+          <PurgeMissingButton missing={missingCount} />
+        </div>
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
@@ -125,42 +137,148 @@ export function AdminCatalogPage() {
       ) : (
         <div className="divide-ink-700/70 gb-card divide-y">
           {(listQuery.data?.items ?? []).map((game) => (
-            <button
-              key={game.id}
-              type="button"
-              onClick={() => setSelected(game.id)}
-              className="hover:bg-ink-800/60 flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors"
-            >
-              {game.art.cover ? (
-                <img
-                  src={game.art.cover}
-                  alt=""
-                  className="bg-ink-800 h-12 w-9 shrink-0 rounded object-cover"
-                  loading="lazy"
-                />
-              ) : (
-                <div className="bg-ink-800 text-ink-500 flex h-12 w-9 shrink-0 items-center justify-center rounded">
-                  <ImageIcon className="h-4 w-4" aria-hidden />
+            // A row is a button plus a sibling delete button rather than one
+            // nested inside the other, which is invalid and unreachable by
+            // keyboard.
+            <div key={game.id} className="hover:bg-ink-800/60 flex items-center transition-colors">
+              <button
+                type="button"
+                onClick={() => setSelected(game.id)}
+                className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5 text-left"
+              >
+                {game.art.cover ? (
+                  <img
+                    src={game.art.cover}
+                    alt=""
+                    className="bg-ink-800 h-12 w-9 shrink-0 rounded object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="bg-ink-800 text-ink-500 flex h-12 w-9 shrink-0 items-center justify-center rounded">
+                    <ImageIcon className="h-4 w-4" aria-hidden />
+                  </div>
+                )}
+
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{game.title}</p>
+                  <p className="text-ink-400 text-xs">
+                    {formatBytes(game.sizeBytes)} · {game.fileCount} files
+                    {game.achievementCount > 0 ? ` · ${game.achievementCount} achievements` : ''}
+                  </p>
                 </div>
-              )}
 
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{game.title}</p>
-                <p className="text-ink-400 text-xs">
-                  {formatBytes(game.sizeBytes)} · {game.fileCount} files
-                  {game.achievementCount > 0 ? ` · ${game.achievementCount} achievements` : ''}
-                </p>
+                {game.isMissing ? <Badge tone="danger">Missing</Badge> : null}
+                <MatchBadge status={game.matchStatus} />
+              </button>
+
+              <div className="pr-3 pl-2">
+                <DeleteGameButton game={game} />
               </div>
-
-              {game.isMissing ? <Badge tone="danger">Missing</Badge> : null}
-              <MatchBadge status={game.matchStatus} />
-            </button>
+            </div>
           ))}
         </div>
       )}
 
       {selected ? <GameEditor gameId={selected} onClose={() => setSelected(null)} /> : null}
     </div>
+  );
+}
+
+/**
+ * Removes one catalogue entry.
+ *
+ * Files on disk are never touched, so the wording has to be explicit about
+ * that — "delete" next to a game is otherwise easy to read as "delete the
+ * download". A game still present on disk needs the extra confirmation,
+ * because a scan will simply add it back without its metadata.
+ */
+function DeleteGameButton({ game }: { game: GameSummary }) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+
+  const remove = useMutation({
+    mutationFn: (force: boolean) =>
+      api.delete<{ ok: boolean }>(`/admin/games/${game.id}${force ? '?force=true' : ''}`),
+    onSuccess: () => {
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'stats'] });
+    },
+    onError: (cause: unknown) => {
+      setError(cause instanceof ApiRequestError ? cause.message : 'Could not remove the game');
+    },
+  });
+
+  return (
+    <button
+      type="button"
+      title={
+        game.isMissing
+          ? 'Remove this entry — the game is gone from disk'
+          : 'Remove this entry from the catalogue'
+      }
+      aria-label={`Remove ${game.title} from the catalogue`}
+      className="text-ink-500 rounded p-2 transition-colors hover:bg-red-950/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={remove.isPending}
+      onClick={() => {
+        const question = game.isMissing
+          ? `Remove "${game.title}" from the catalogue? It is already gone from disk, and its playtime and achievements go with it.`
+          : `"${game.title}" is still on disk, so the next scan will add it back without its metadata. Remove the entry anyway?`;
+        if (!confirm(question)) return;
+        remove.mutate(!game.isMissing);
+      }}
+    >
+      {remove.isPending ? (
+        <Spinner className="h-4 w-4" />
+      ) : (
+        <Trash2 className="h-4 w-4" aria-hidden />
+      )}
+      {error ? <span className="sr-only">{error}</span> : null}
+    </button>
+  );
+}
+
+/** Bulk clean-up for everything a scan has flagged as gone. */
+function PurgeMissingButton({ missing }: { missing: number }) {
+  const queryClient = useQueryClient();
+
+  const purge = useMutation({
+    mutationFn: () => api.post<{ removed: number }>('/admin/games/purge-missing', {}),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'stats'] });
+    },
+  });
+
+  if (missing === 0) return null;
+
+  return (
+    <button
+      type="button"
+      className="gb-btn-danger"
+      disabled={purge.isPending}
+      onClick={() => {
+        if (
+          !confirm(
+            `Remove ${missing} game${missing === 1 ? '' : 's'} that ${
+              missing === 1 ? 'is' : 'are'
+            } no longer on disk? Playtime and achievements for ${
+              missing === 1 ? 'it' : 'them'
+            } are removed too. Files on disk are not touched.`,
+          )
+        ) {
+          return;
+        }
+        purge.mutate();
+      }}
+    >
+      {purge.isPending ? (
+        <Spinner className="h-4 w-4" />
+      ) : (
+        <Trash2 className="h-4 w-4" aria-hidden />
+      )}
+      Remove {missing} missing
+    </button>
   );
 }
 

@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
+import { allowCrossOriginEmbed } from '../lib/assets.js';
 import { ApiError } from '../lib/errors.js';
 
 export async function imageRoutes(app: FastifyInstance): Promise<void> {
@@ -32,11 +33,13 @@ export async function imageRoutes(app: FastifyInstance): Promise<void> {
 
     const etag = `"${record.id}"`;
     if (request.headers['if-none-match'] === etag) {
-      return reply.code(304).send();
+      // The 304 needs the header too: without it the revalidated response is
+      // discarded and a cached image breaks on the second load.
+      return allowCrossOriginEmbed(reply).code(304).send();
     }
 
     return (
-      reply
+      allowCrossOriginEmbed(reply)
         .header('Content-Type', record.contentType)
         .header('Content-Length', String(info.size))
         .header('ETag', etag)

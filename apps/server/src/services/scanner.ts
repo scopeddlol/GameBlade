@@ -448,12 +448,18 @@ export class ScannerService {
     }
   }
 
-  /** Permanently delete games flagged missing for longer than the grace period. */
+  /**
+   * Permanently delete games flagged missing for longer than the grace period.
+   *
+   * The comparison is inclusive so that a grace period of zero means "every
+   * entry currently flagged", including one flagged by a scan that finished in
+   * this same millisecond.
+   */
   purgeMissing(olderThanDays = 30): number {
     const cutoff = new Date(Date.now() - olderThanDays * 86_400_000).toISOString();
     const result = this.db
       .delete(games)
-      .where(and(sql`${games.missingAt} IS NOT NULL`, sql`${games.missingAt} < ${cutoff}`))
+      .where(and(sql`${games.missingAt} IS NOT NULL`, sql`${games.missingAt} <= ${cutoff}`))
       .run();
     return result.changes;
   }

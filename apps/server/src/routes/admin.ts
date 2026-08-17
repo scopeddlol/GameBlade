@@ -6,6 +6,7 @@ import {
   featuredSchema,
   importAchievementsSchema,
   providerSettingsSchema,
+  purgeMissingSchema,
   reorderFeaturedSchema,
   scanRequestSchema,
   updateLibrarySchema,
@@ -287,6 +288,46 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/admin/scan/progress', async () => scanner.getProgress());
+
+  // ---- Removing catalogue entries ----
+
+  /**
+   * Forget a game entirely.
+   *
+   * A scan only *flags* a vanished game, because an unmounted share must not
+   * destroy hand-made metadata matches — but that leaves no way to clear out
+   * something deleted on purpose. This is that way. Files on disk are never
+   * touched; only the catalogue row goes, and the foreign keys cascade it out
+   * of libraries, playtime, achievements and the featured shelf.
+   *
+   * Deleting a game that is still on disk is refused unless forced: the next
+   * scan would re-add it as a new row with none of its metadata, which almost
+   * nobody means to do.
+   */
+  app.delete('/admin/games/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    const { force } = request.query as { force?: string };
+
+    const game = db.select().from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    if (game.missingAt === null && force !== 'true') {
+      throw new ApiError(
+        409,
+        'game_present',
+        `"${game.title}" is still on disk, so a scan would add it straight back. Delete the files first, or pass force=true to remove the entry anyway.`,
+      );
+    }
+
+    db.delete(games).where(eq(games.id, id)).run();
+    return { ok: true, title: game.title };
+  });
+
+  /** Clear out everything a scan has flagged as gone from disk. */
+  app.post('/admin/games/purge-missing', async (request) => {
+    const { olderThanDays } = purgeMissingSchema.parse(request.body ?? {});
+    return { removed: scanner.purgeMissing(olderThanDays) };
+  });
 
   app.post('/admin/scan/match-pending', async (request, reply) => {
     if (scanner.isRunning) {
