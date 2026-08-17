@@ -115,14 +115,15 @@ jobs:
 
       - run: pnpm --filter @gameblade/shared build
 
-      # Advisory for now: the compile below is the gate that must pass. Promote
-      # these to blocking once the reported style issues have been cleaned up.
       - name: Rust formatting and lints
-        continue-on-error: true
         working-directory: apps/desktop/src-tauri
+        # This runner uses pwsh, which does not abort on a failing native
+        # command, so each result is checked explicitly.
         run: |
           cargo fmt --check
-          cargo clippy --all-targets
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cargo clippy --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Build installers
         run: pnpm --filter @gameblade/desktop build

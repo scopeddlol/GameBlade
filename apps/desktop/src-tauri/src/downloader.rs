@@ -127,7 +127,9 @@ impl DownloadManager {
                 let status = existing.state.lock().await.status;
                 if matches!(
                     status,
-                    DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Verifying
+                    DownloadStatus::Queued
+                        | DownloadStatus::Downloading
+                        | DownloadStatus::Verifying
                 ) {
                     return Err(AppError::Other(
                         "That game is already downloading".to_string(),
@@ -342,10 +344,7 @@ async fn download_file(
     // device token is not replayed across dozens of parallel connections.
     let url = format!(
         "{}?token={}",
-        client.endpoint(&format!(
-            "/download/{}/files/{}",
-            manifest.game_id, file.id
-        )),
+        client.endpoint(&format!("/download/{}/files/{}", manifest.game_id, file.id)),
         urlencode(&manifest.token)
     );
 
@@ -577,7 +576,11 @@ fn plan_segments(size: u64) -> Vec<Segment> {
     (0..count)
         .map(|i| {
             let start = i * chunk;
-            let end = if i == count - 1 { size - 1 } else { start + chunk - 1 };
+            let end = if i == count - 1 {
+                size - 1
+            } else {
+                start + chunk - 1
+            };
             Segment {
                 start,
                 end,

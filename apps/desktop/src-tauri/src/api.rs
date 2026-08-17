@@ -127,8 +127,10 @@ impl ApiClient {
     }
 
     pub async fn manifest(&self, game_id: &str) -> AppResult<DownloadManifest> {
-        let request =
-            self.authorised(self.http.get(self.endpoint(&format!("/games/{game_id}/manifest"))))?;
+        let request = self.authorised(
+            self.http
+                .get(self.endpoint(&format!("/games/{game_id}/manifest"))),
+        )?;
         let response = check_status(request.send().await?).await?;
         Ok(response.json().await?)
     }
