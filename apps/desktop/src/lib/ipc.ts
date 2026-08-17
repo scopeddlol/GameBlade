@@ -20,7 +20,7 @@ export interface UserInfo {
 }
 
 export type DownloadStatus =
-  'queued' | 'downloading' | 'verifying' | 'completed' | 'failed' | 'canceled';
+  'queued' | 'downloading' | 'verifying' | 'completed' | 'failed' | 'canceled' | 'paused';
 
 /** Mirrors the Rust `DownloadState` struct, which serialises with snake_case. */
 export interface DownloadState {
@@ -119,6 +119,7 @@ export const ipc = {
   startDownload: (gameId: string, destination?: string) =>
     invoke<void>('start_download', { gameId, destination }),
   cancelDownload: (gameId: string) => invoke<boolean>('cancel_download', { gameId }),
+  pauseDownload: (gameId: string) => invoke<boolean>('pause_download', { gameId }),
   clearDownload: (gameId: string) => invoke<void>('clear_download', { gameId }),
   listDownloads: () => invoke<DownloadState[]>('list_downloads'),
 

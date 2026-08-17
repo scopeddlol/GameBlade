@@ -1,16 +1,20 @@
 import clsx from 'clsx';
-import { X } from 'lucide-react';
+import { Pause, Play, X } from 'lucide-react';
 import { formatBytes, formatEta, formatRate } from '../lib/format.js';
 import type { DownloadState } from '../lib/ipc.js';
 import { Badge, Empty, ProgressBar } from './ui.js';
 
 export function DownloadQueue({
   downloads,
+  onPause,
+  onResume,
   onCancel,
   onClear,
   onClose,
 }: {
   downloads: DownloadState[];
+  onPause: (gameId: string) => void;
+  onResume: (gameId: string) => void;
   onCancel: (gameId: string) => void;
   onClear: (gameId: string) => void;
   onClose: () => void;
@@ -38,6 +42,7 @@ export function DownloadQueue({
                   ? (download.downloaded_bytes / download.total_bytes) * 100
                   : 0;
               const active = download.status === 'downloading' || download.status === 'queued';
+              const paused = download.status === 'paused';
 
               return (
                 <div key={download.game_id} className="download">
@@ -49,9 +54,11 @@ export function DownloadQueue({
                           ? 'danger'
                           : download.status === 'completed'
                             ? 'success'
-                            : download.status === 'canceled'
-                              ? 'neutral'
-                              : 'info'
+                            : download.status === 'paused'
+                              ? 'warning'
+                              : download.status === 'canceled'
+                                ? 'neutral'
+                                : 'info'
                       }
                     >
                       {download.status}
@@ -89,13 +96,41 @@ export function DownloadQueue({
 
                   <div className="download-actions">
                     {active ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        onClick={() => onCancel(download.game_id)}
-                      >
-                        Cancel
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => onPause(download.game_id)}
+                        >
+                          <Pause size={14} aria-hidden />
+                          Pause
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => onCancel(download.game_id)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : paused ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => onResume(download.game_id)}
+                        >
+                          <Play size={14} aria-hidden />
+                          Resume
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => onClear(download.game_id)}
+                        >
+                          Dismiss
+                        </button>
+                      </>
                     ) : (
                       <button
                         type="button"

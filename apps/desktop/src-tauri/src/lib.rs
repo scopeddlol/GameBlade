@@ -252,6 +252,11 @@ async fn cancel_download(state: State<'_, AppState>, game_id: String) -> AppResu
 }
 
 #[tauri::command]
+async fn pause_download(state: State<'_, AppState>, game_id: String) -> AppResult<bool> {
+    Ok(state.downloads.pause(&game_id).await)
+}
+
+#[tauri::command]
 async fn clear_download(state: State<'_, AppState>, game_id: String) -> AppResult<()> {
     state.downloads.forget(&game_id).await;
     Ok(())
@@ -721,6 +726,7 @@ pub fn run() {
             update_settings,
             start_download,
             cancel_download,
+            pause_download,
             clear_download,
             list_downloads,
             list_installed,

@@ -235,6 +235,8 @@ function Shell() {
         <DownloadQueue
           downloads={downloads}
           onClose={() => setShowDownloads(false)}
+          onPause={(id) => void ipc.pauseDownload(id)}
+          onResume={(id) => void ipc.startDownload(id)}
           onCancel={(id) => void ipc.cancelDownload(id)}
           onClear={(id) => {
             void ipc.clearDownload(id);

@@ -199,7 +199,9 @@ export function GameDetailPanel({
                         ? `Installing…${installPercent === null ? '' : ` ${installPercent}%`}`
                         : installMutation.isPending
                           ? 'Starting…'
-                          : 'Install'}
+                          : download?.status === 'paused'
+                            ? `Resume${installPercent === null ? '' : ` (${installPercent}%)`}`
+                            : 'Install'}
                   </button>
                 )}
 
