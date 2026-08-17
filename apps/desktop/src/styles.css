@@ -242,6 +242,103 @@ button {
   flex-direction: column;
 }
 
+/* ------------------------------------------------------------ friends rail */
+
+.friends-rail {
+  width: 240px;
+  flex-shrink: 0;
+  background: var(--ink-950);
+  border-left: 1px solid var(--ink-800);
+  display: flex;
+  flex-direction: column;
+}
+.friends-rail.collapsed {
+  width: auto;
+  padding: 10px 8px;
+}
+.friends-rail.collapsed .icon-btn {
+  position: relative;
+}
+
+.friends-rail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px 10px;
+  border-bottom: 1px solid var(--ink-800);
+}
+.friends-rail-head strong {
+  font-size: 13px;
+}
+.friends-rail-head .icon-btn {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+}
+
+.friends-rail-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.friends-rail-empty {
+  border: 1px dashed var(--ink-700);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-400);
+  font-size: 12.5px;
+  text-align: left;
+  padding: 12px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.friends-rail-empty:hover {
+  border-color: var(--ink-600);
+  color: var(--ink-200);
+}
+
+.friends-rail-divider {
+  margin: 8px 4px 2px;
+}
+
+.friend-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.friend-row:hover {
+  background: var(--ink-850);
+}
+.friend-row.dim {
+  opacity: 0.55;
+}
+.friend-row-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.friend-row-text strong,
+.friend-row-text span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.friend-row-text strong {
+  font-size: 13px;
+}
+
 /* --------------------------------------------------- frameless title bar */
 
 /*

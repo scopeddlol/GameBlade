@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { DownloadQueue } from './components/DownloadQueue.js';
+import { FriendsRail } from './components/FriendsRail.js';
 import { TitleBar } from './components/TitleBar.js';
 import { GameDetailPanel } from './components/GameDetail.js';
 import { Avatar, Loading } from './components/ui.js';
@@ -94,6 +95,7 @@ function Shell() {
   const [openGameId, setOpenGameId] = useState<string | null>(null);
   const [showDownloads, setShowDownloads] = useState(false);
   const [downloads, setDownloads] = useState<DownloadState[]>([]);
+  const [friendsCollapsed, setFriendsCollapsed] = useState(false);
 
   const installedQuery = useQuery({
     queryKey: ['installed'],
@@ -205,6 +207,14 @@ function Shell() {
           {tab === 'settings' ? <SettingsTab /> : null}
         </div>
       </div>
+
+      {tab === 'settings' ? null : (
+        <FriendsRail
+          collapsed={friendsCollapsed}
+          onToggle={() => setFriendsCollapsed((current) => !current)}
+          onOpenSocial={() => setTab('social')}
+        />
+      )}
 
       {openGameId ? (
         <GameDetailPanel
