@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { DownloadQueue } from './components/DownloadQueue.js';
+import { TitleBar } from './components/TitleBar.js';
 import { GameDetailPanel } from './components/GameDetail.js';
 import { Avatar, Loading } from './components/ui.js';
 import { RealtimeProvider, useRealtime } from './hooks/useRealtime.js';
@@ -116,8 +117,22 @@ function Shell() {
 
   const openGame = useCallback((game: GameSummary) => setOpenGameId(game.id), []);
 
-  if (isRestoring) return <Loading label="Signing in" />;
-  if (!session) return <SignIn onSignedIn={setSession} />;
+  if (isRestoring) {
+    return (
+      <div className="app frameless">
+        <TitleBar />
+        <Loading label="Signing in" />
+      </div>
+    );
+  }
+  if (!session) {
+    return (
+      <div className="app frameless">
+        <TitleBar />
+        <SignIn onSignedIn={setSession} />
+      </div>
+    );
+  }
 
   const installed = installedQuery.data ?? [];
   const running = runningQuery.data ?? null;
@@ -135,7 +150,9 @@ function Shell() {
       />
 
       <div className="main">
-        <TopBar running={running} />
+        <TitleBar>
+          <TopBar running={running} />
+        </TitleBar>
 
         <div className="scroll">
           {tab === 'home' ? <HomeTab onOpenGame={openGame} /> : null}
@@ -189,7 +206,7 @@ function Sidebar({
 
   return (
     <nav className="sidebar">
-      <div className="brand">
+      <div className="brand" data-tauri-drag-region>
         <Swords size={22} aria-hidden />
         <span>GameBlade</span>
       </div>
@@ -240,7 +257,7 @@ function TopBar({ running }: { running: RunningGame | null }) {
   const unread = notificationsQuery.data?.unreadCount ?? 0;
 
   return (
-    <header className="topbar">
+    <div className="topbar" data-tauri-drag-region>
       {running ? (
         <span className="playing-chip">
           <Gamepad2 size={14} aria-hidden />
@@ -288,7 +305,7 @@ function TopBar({ running }: { running: RunningGame | null }) {
           </div>
         ) : null}
       </div>
-    </header>
+    </div>
   );
 }
 

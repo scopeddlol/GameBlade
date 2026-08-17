@@ -1,5 +1,7 @@
 import type {
   AchievementDefinition,
+  ArtKind,
+  ArtworkSearchResult,
   GameDetail,
   GameSummary,
   LaunchRule,
@@ -468,6 +470,7 @@ function ArtworkTab({ game }: { game: GameDetail }) {
   const queryClient = useQueryClient();
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState<ArtKind | null>(null);
 
   const setMutation = useMutation({
     mutationFn: ({ kind, url }: { kind: string; url: string | null }) =>
@@ -557,6 +560,154 @@ function ArtworkTab({ game }: { game: GameDetail }) {
           </section>
         );
       })}
+
+      {picking ? (
+        <ArtworkPicker
+          game={game}
+          kind={picking}
+          onClose={() => setPicking(null)}
+          onChoose={(url) => {
+            setMutation.mutate({ kind: picking, url });
+            setPicking(null);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Browses every image both providers have for a title so a slot can be filled
+ * by eye. The automatic pass picks the highest-scoring asset, which is usually
+ * right and occasionally very wrong — this is the escape hatch for the latter.
+ */
+function ArtworkPicker({
+  game,
+  kind,
+  onClose,
+  onChoose,
+}: {
+  game: GameDetail;
+  kind: ArtKind;
+  onClose: () => void;
+  onChoose: (url: string) => void;
+}) {
+  const [query, setQuery] = useState(game.title);
+  const [submitted, setSubmitted] = useState(game.title);
+
+  const searchQuery = useQuery({
+    queryKey: ['admin', 'artwork', game.id, kind, submitted],
+    queryFn: () =>
+      api.get<ArtworkSearchResult>(
+        `/games/${game.id}/artwork/search${queryString({ kind, q: submitted })}`,
+      ),
+  });
+
+  const candidates = searchQuery.data?.candidates ?? [];
+  const providerErrors = searchQuery.data?.errors ?? [];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div
+        className="bg-ink-900 border-ink-700 flex h-full max-h-[85vh] w-full max-w-4xl flex-col rounded-xl border shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="border-ink-800 flex items-center gap-3 border-b px-5 py-4">
+          <h2 className="text-lg font-semibold capitalize">{kind} artwork</h2>
+          <button type="button" className="gb-btn-ghost ml-auto" onClick={onClose}>
+            <X className="h-4 w-4" aria-hidden />
+            Close
+          </button>
+        </header>
+
+        <div className="border-ink-800 flex gap-2 border-b px-5 py-3">
+          <input
+            className="gb-input"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') setSubmitted(query.trim() || game.title);
+            }}
+            placeholder="Search both providers…"
+          />
+          <button
+            type="button"
+            className="gb-btn-primary shrink-0"
+            onClick={() => setSubmitted(query.trim() || game.title)}
+          >
+            <Search className="h-4 w-4" aria-hidden />
+            Search
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {/* A provider that failed is named, so a half-empty grid does not
+              read as "there is no artwork for this game". */}
+          {providerErrors.map((failure) => (
+            <p
+              key={failure.provider}
+              className="mb-3 rounded-lg border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-sm text-amber-200"
+            >
+              {failure.provider === 'igdb' ? 'IGDB' : 'SteamGridDB'} could not be reached:{' '}
+              {failure.message}
+            </p>
+          ))}
+
+          {searchQuery.isLoading ? (
+            <PageLoader label="Searching for artwork" />
+          ) : candidates.length === 0 ? (
+            <EmptyState
+              title="Nothing found"
+              message="Try a different search term — the providers match on their own titles, not your filename."
+            />
+          ) : (
+            <div
+              className={
+                kind === 'cover'
+                  ? 'grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3'
+                  : 'grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3'
+              }
+            >
+              {candidates.map((candidate) => (
+                <button
+                  key={`${candidate.provider}-${candidate.url}`}
+                  type="button"
+                  className="group border-ink-700 hover:border-blade-500 overflow-hidden rounded-lg border text-left transition-colors"
+                  onClick={() => onChoose(candidate.url)}
+                  title={candidate.label ?? undefined}
+                >
+                  <img
+                    src={candidate.thumbnailUrl}
+                    alt=""
+                    loading="lazy"
+                    className={
+                      kind === 'cover'
+                        ? 'bg-ink-800 aspect-[2/3] w-full object-cover'
+                        : 'bg-ink-800 aspect-video w-full object-contain'
+                    }
+                  />
+                  <span className="text-ink-400 flex items-center gap-1.5 px-2 py-1.5 text-[11px]">
+                    <Badge tone={candidate.provider === 'igdb' ? 'info' : 'success'}>
+                      {candidate.provider === 'igdb' ? 'IGDB' : 'SGDB'}
+                    </Badge>
+                    {candidate.width && candidate.height ? (
+                      <span>
+                        {candidate.width}×{candidate.height}
+                      </span>
+                    ) : null}
+                    {candidate.label ? <span className="truncate">{candidate.label}</span> : null}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

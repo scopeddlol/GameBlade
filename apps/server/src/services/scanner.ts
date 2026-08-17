@@ -1,7 +1,7 @@
 import { readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { ARCHIVE_EXTENSIONS, IGNORED_ENTRIES, type ScanProgress } from '@gameblade/shared';
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { gameFiles, games, libraries, type Game, type Library } from '../db/schema.js';
 import { newId } from '../lib/ids.js';
@@ -400,17 +400,28 @@ export class ScannerService {
     return files;
   }
 
-  /** Try to match every game that has no provider metadata yet. */
+  /**
+   * Fill in metadata and artwork for every game still missing either.
+   *
+   * A game with no cover is picked up even once it has been matched, because
+   * artwork comes from a different provider that may have been configured
+   * later — or that was unreachable when the game was first scanned.
+   */
   async matchPending(limit = 500): Promise<void> {
-    if (!this.metadata.hasIgdb) {
-      this.logger.info({}, 'IGDB not configured — skipping metadata matching');
+    if (!this.metadata.hasIgdb && !this.metadata.hasSteamGridDb) {
+      this.logger.info({}, 'no metadata providers configured — skipping enrichment');
       return;
     }
 
     const pending = this.db
       .select()
       .from(games)
-      .where(and(eq(games.matchStatus, 'unmatched'), isNull(games.missingAt)))
+      .where(
+        and(
+          isNull(games.missingAt),
+          or(eq(games.matchStatus, 'unmatched'), isNull(games.coverImageId)),
+        ),
+      )
       .limit(limit)
       .all();
 
@@ -430,9 +441,9 @@ export class ScannerService {
         currentItem: game.title,
       };
       try {
-        await this.metadata.autoMatch(game);
+        await this.metadata.enrich(game);
       } catch (error) {
-        this.logger.warn({ err: error, title: game.title }, 'metadata match failed');
+        this.logger.warn({ err: error, title: game.title }, 'metadata enrichment failed');
       }
     }
   }

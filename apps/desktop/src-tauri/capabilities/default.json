@@ -8,6 +8,11 @@
     "core:event:default",
     "opener:default",
     "dialog:allow-open",
-    "store:default"
+    "store:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close"
   ]
 }

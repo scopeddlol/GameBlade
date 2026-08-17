@@ -122,6 +122,18 @@ button {
   height: 100%;
 }
 
+/*
+ * With the native frame gone the title bar spans the whole window, so the
+ * sidebar and content sit beneath it rather than beside it.
+ */
+.app.frameless > .titlebar {
+  width: 100%;
+}
+.app.frameless .signin,
+.app.frameless .state {
+  flex: 1;
+}
+
 .sidebar {
   width: var(--sidebar);
   flex-shrink: 0;
@@ -207,15 +219,70 @@ button {
   flex-direction: column;
 }
 
-.topbar {
-  height: 48px;
+/* --------------------------------------------------- frameless title bar */
+
+/*
+ * The window is created with decorations off, so this bar supplies both the
+ * drag region and the caption buttons. Height matches the Windows caption so
+ * the app does not feel shorter than its neighbours.
+ */
+.titlebar {
+  display: flex;
+  align-items: stretch;
+  height: 40px;
   flex-shrink: 0;
+  background: var(--ink-900);
+  border-bottom: 1px solid var(--ink-800);
+}
+
+.titlebar-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.window-controls {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+
+.window-button {
+  width: 46px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-300);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.window-button:hover {
+  background: var(--ink-800);
+  color: var(--ink-100);
+}
+.window-button.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+/* Sign-in and the restoring splash still need a movable window. */
+.app.frameless {
+  flex-direction: column;
+}
+
+.topbar {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--ink-800);
-  background: var(--ink-900);
+  padding: 0 6px 0 18px;
+  background: transparent;
 }
 
 .playing-chip {

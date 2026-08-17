@@ -18,7 +18,9 @@
         "minWidth": 900,
         "minHeight": 600,
         "resizable": true,
-        "theme": "Dark"
+        "theme": "Dark",
+        "decorations": false,
+        "titleBarStyle": "Overlay"
       }
     ],
     "security": {

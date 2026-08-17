@@ -1,10 +1,9 @@
 import { Swords } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { ErrorNote, Spinner } from './components/ui.js';
-import { errorMessage, ipc, type SessionInfo } from './lib/ipc.js';
+import { SERVER_HOST, errorMessage, ipc, type SessionInfo } from './lib/ipc.js';
 
 export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionInfo) => void }) {
-  const [serverUrl, setServerUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -15,7 +14,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionInfo) => v
     setError(null);
     setBusy(true);
     try {
-      await ipc.signIn(serverUrl, username, password);
+      await ipc.signIn(username, password);
       const session = await ipc.currentSession();
       if (session) onSignedIn(session);
     } catch (caught) {
@@ -31,26 +30,11 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionInfo) => v
         <div className="signin-brand">
           <Swords size={34} aria-hidden />
           <h1>GameBlade</h1>
-          <p className="muted small">Sign in to your server</p>
+          <p className="muted small">{SERVER_HOST}</p>
         </div>
 
         <form className="card" onSubmit={handleSubmit}>
           <ErrorNote message={error} />
-
-          <label className="field">
-            <span>Server address</span>
-            <input
-              className="input"
-              value={serverUrl}
-              onChange={(e) => setServerUrl(e.target.value)}
-              placeholder="games.example.com"
-              autoFocus
-              required
-            />
-            <span className="muted small">
-              https:// is assumed unless you type http:// yourself.
-            </span>
-          </label>
 
           <label className="field">
             <span>Username</span>
@@ -59,6 +43,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionInfo) => v
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
+              autoFocus
               required
             />
           </label>
