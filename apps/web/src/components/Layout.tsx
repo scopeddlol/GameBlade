@@ -40,10 +40,20 @@ export function Layout() {
     navigate('/', { replace: true });
   };
 
+  // A flat fill reads the same as a hover state with the pointer nowhere near
+  // it — the gradient tint plus accent bar is what makes "this is where you
+  // are" and "this is what you're pointing at" look like two different things.
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     clsx(
-      'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-      isActive ? 'bg-ink-700 text-white' : 'text-ink-300 hover:bg-ink-800 hover:text-ink-100',
+      'relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+      "before:absolute before:-left-3 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-r-full before:content-['']",
+      isActive
+        ? [
+            'text-white',
+            'bg-gradient-to-r from-blade-400/[0.16] to-violet-400/[0.07]',
+            'before:bg-gradient-to-b before:from-blade-400 before:to-violet-400',
+          ]
+        : ['text-ink-300 hover:bg-ink-800 hover:text-ink-100', 'before:bg-transparent'],
     );
 
   return (

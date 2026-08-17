@@ -193,8 +193,8 @@ function Features() {
           Everything a storefront has. None of what makes it one.
         </h2>
         <p className="text-ink-300 mt-3 max-w-2xl">
-          A store, a library and a friends list, all in one fast Windows client — without the
-          price tag, the ads, or someone else deciding what disappears next.
+          A store, a library and a friends list, all in one fast Windows client — without the price
+          tag, the ads, or someone else deciding what disappears next.
         </p>
 
         <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
@@ -226,8 +226,9 @@ function Preservation() {
           <div className="text-ink-300 mt-5 space-y-4 leading-relaxed">
             <p>
               Free-to-play games get delisted. Servers shut down. Installers vanish from the web and
-              take years of someone&rsquo;s work with them. The copies that survive that are the ones
-              somebody actually kept — curated and cared for, not just downloaded and forgotten.
+              take years of someone&rsquo;s work with them. The copies that survive that are the
+              ones somebody actually kept — curated and cared for, not just downloaded and
+              forgotten.
             </p>
             <p>
               That&rsquo;s this library. Every title here is matched against real metadata and kept
@@ -242,7 +243,9 @@ function Preservation() {
         </div>
 
         <div className="gb-card space-y-5 p-7">
-          <h3 className="text-sm font-semibold tracking-wide uppercase">What&rsquo;s in the library</h3>
+          <h3 className="text-sm font-semibold tracking-wide uppercase">
+            What&rsquo;s in the library
+          </h3>
           <ul className="space-y-4 text-sm">
             <Bullet title="Free-to-play games">
               Titles that were given away and could be pulled at any time.
@@ -255,8 +258,8 @@ function Preservation() {
             </Bullet>
           </ul>
           <p className="text-ink-400 border-ink-800 border-t pt-4 text-xs leading-relaxed">
-            Nothing that requires a licence to play belongs in this library, and access is by
-            invite only.
+            Nothing that requires a licence to play belongs in this library, and access is by invite
+            only.
           </p>
         </div>
       </div>

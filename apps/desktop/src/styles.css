@@ -153,8 +153,17 @@ button {
   font-size: 15px;
   color: var(--blade-400);
 }
+/* A flat glyph read as an afterthought next to the gradient mark everywhere
+   else in the product — the icon, the landing page headline. This is the one
+   spot a player sees every time the app is open, so it gets the same glow. */
+.brand svg {
+  filter: drop-shadow(0 0 6px rgba(98, 208, 255, 0.45));
+}
 .brand span {
-  color: var(--ink-100);
+  background: linear-gradient(120deg, var(--ink-100) 55%, var(--blade-400));
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
 }
 
 .nav {
@@ -167,6 +176,7 @@ button {
 }
 
 .nav-item {
+  position: relative;
   width: 100%;
   display: flex;
   align-items: center;
@@ -189,8 +199,21 @@ button {
   color: var(--ink-100);
 }
 .nav-item.active {
-  background: var(--ink-700);
+  background: linear-gradient(90deg, rgba(98, 208, 255, 0.16), rgba(124, 92, 255, 0.07));
   color: #fff;
+}
+/* A flat fill reads the same as a hover state with the mouse nowhere near
+   it — a persistent accent bar is what makes "this is where you are" and
+   "this is what you're pointing at" look like two different things. */
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, var(--blade-400), var(--violet));
 }
 
 .sidebar-foot {
@@ -204,7 +227,7 @@ button {
 
 .pill {
   margin-left: auto;
-  background: var(--blade-600);
+  background: linear-gradient(135deg, var(--blade-500), var(--violet));
   color: #fff;
   font-size: 11px;
   font-weight: 600;
@@ -349,11 +372,20 @@ button {
 }
 
 .btn-primary {
-  background: var(--blade-600);
+  background: linear-gradient(135deg, var(--blade-500), var(--violet));
   color: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition:
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--blade-500);
+  box-shadow:
+    0 0 0 1px rgba(98, 208, 255, 0.4),
+    0 6px 20px rgba(43, 183, 245, 0.28);
+}
+.btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .btn-ghost {
@@ -501,8 +533,8 @@ textarea:focus {
   cursor: pointer;
 }
 .chip.active {
-  background: var(--blade-600);
-  border-color: var(--blade-600);
+  background: linear-gradient(135deg, var(--blade-500), var(--violet));
+  border-color: transparent;
   color: #fff;
 }
 
@@ -541,7 +573,7 @@ textarea:focus {
 }
 .progress-fill {
   height: 100%;
-  background: var(--blade-500);
+  background: linear-gradient(90deg, var(--blade-500), var(--violet));
   transition: width 0.25s ease;
 }
 
@@ -636,10 +668,17 @@ textarea:focus {
   border-radius: 10px;
   overflow: hidden;
   aspect-ratio: 2 / 3;
-  transition: transform 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .game-card-art:hover {
+  /* Movement alone reads as jitter rather than lift without a shadow to sell
+     that the card is now closer to the light. */
   transform: translateY(-3px);
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(98, 208, 255, 0.18);
 }
 
 .artwork {
