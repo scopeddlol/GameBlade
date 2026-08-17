@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
@@ -72,12 +72,26 @@ export class SettingsService {
     const now = new Date().toISOString();
     for (const [key, value] of Object.entries(patch)) {
       if (value === undefined) continue;
+
+      // Clearing a field (e.g. an emptied secret box) means "explicitly unset",
+      // which get() has to tell apart from "never configured" — the former
+      // must not fall back to an env-var default, the latter should. That
+      // requires storing a real JSON null rather than omitting the row, but
+      // handing the driver a bare JS null on this NOT NULL column bypasses
+      // Drizzle's JSON encoder instead of running it, so it writes SQL NULL
+      // straight through and the insert fails its own NOT NULL constraint —
+      // every save that touched a blank field (which is most of them; the
+      // settings form always sends clientVersion as null when unset) 500'd.
+      // A literal JSON text 'null' round-trips through the same column as the
+      // real value null on read, without going anywhere near that path.
+      const encoded = value === null ? sql`'null'` : (value as never);
+
       this.db
         .insert(settings)
-        .values({ key, value: value as never, updatedAt: now })
+        .values({ key, value: encoded, updatedAt: now })
         .onConflictDoUpdate({
           target: settings.key,
-          set: { value: value as never, updatedAt: now },
+          set: { value: encoded, updatedAt: now },
         })
         .run();
     }
