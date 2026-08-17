@@ -1,0 +1,36 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#161a23" />
+      <stop offset="55%" stop-color="#0b0d12" />
+      <stop offset="100%" stop-color="#07080c" />
+    </linearGradient>
+    <radialGradient id="glow" cx="30%" cy="18%" r="75%">
+      <stop offset="0%" stop-color="#2bb7f5" stop-opacity="0.35" />
+      <stop offset="45%" stop-color="#7c5cff" stop-opacity="0.12" />
+      <stop offset="100%" stop-color="#7c5cff" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="blade" x1="140" y1="140" x2="884" y2="884" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#8fe0ff" />
+      <stop offset="45%" stop-color="#62d0ff" />
+      <stop offset="100%" stop-color="#a78bfa" />
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="url(#bg)" />
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="url(#glow)" />
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="none" stroke="#2bb7f5" stroke-opacity="0.14" stroke-width="3" />
+
+  <g transform="translate(152, 152) scale(30)">
+    <g fill="none" stroke="url(#blade)" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5" />
+      <line x1="13" y1="19" x2="19" y2="13" />
+      <line x1="16" y1="16" x2="20" y2="20" />
+      <line x1="19" y1="21" x2="21" y2="19" />
+      <polyline points="14.5 6.5 18 3 21 3 21 6 17.5 9.5" />
+      <line x1="5" y1="14" x2="9" y2="18" />
+      <line x1="7" y1="17" x2="4" y2="20" />
+      <line x1="3" y1="19" x2="5" y2="21" />
+    </g>
+  </g>
+</svg>
