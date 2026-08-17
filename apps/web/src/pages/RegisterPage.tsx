@@ -8,7 +8,7 @@ import { api, ApiRequestError, setCsrfToken } from '../lib/api.js';
 import { AuthShell } from './LoginPage.js';
 
 export function RegisterPage() {
-  const { user, status, refresh } = useSession();
+  const { user, isAdmin, status, refresh } = useSession();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -33,7 +33,15 @@ export function RegisterPage() {
     retry: false,
   });
 
-  if (user) return <Navigate to="/" replace />;
+  // Visiting /register while already signed in (a bookmark, the back
+  // button) redirects the same place a fresh sign-in would. This used to be
+  // a bare "/" — before /account existed that was the only place a non-admin
+  // had to go, and it also raced the post-submit navigate() below: the
+  // refresh() there triggers a session refetch, which can resolve and
+  // re-render this component with a truthy user before it unmounts, and
+  // this check would then override that navigate() with its own redirect.
+  // Sending both to the same place makes the race harmless either way.
+  if (user) return <Navigate to={isAdmin ? '/admin' : '/account'} replace />;
 
   const inviteRequired = !status?.allowSelfRegistration;
 
@@ -66,9 +74,9 @@ export function RegisterPage() {
       });
       setCsrfToken(session.csrfToken);
       await refresh();
-      // A new account has nothing to do on the web. The landing page is where
-      // the Windows client download lives, which is the actual next step.
-      navigate(session.user.role === 'admin' ? '/admin' : '/', { replace: true });
+      // Playing happens in the desktop client; the account page is the actual
+      // next step on the web, not the landing page they just came from.
+      navigate(session.user.role === 'admin' ? '/admin' : '/account', { replace: true });
     } catch (caught) {
       setError(caught instanceof ApiRequestError ? caught.message : 'Could not reach the server.');
     } finally {

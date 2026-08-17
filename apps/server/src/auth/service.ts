@@ -292,6 +292,47 @@ export class AuthService {
     this.db.delete(devices).where(eq(devices.userId, userId)).run();
   }
 
+  /**
+   * Self-service username/email change. Deliberately narrower than the admin
+   * PATCH: no role, no isActive, no password reset without the current one —
+   * this is what `/account` exposes to any signed-in user about themselves.
+   */
+  async updateAccount(
+    userId: string,
+    patch: { username?: string; email?: string | null },
+  ): Promise<User> {
+    const user = this.findById(userId);
+    if (!user) throw ApiError.notFound('User not found');
+
+    const update: Partial<Pick<User, 'username' | 'usernameLower' | 'email'>> = {};
+
+    if (patch.username !== undefined && patch.username !== user.username) {
+      const usernameLower = patch.username.toLowerCase();
+      const existing = this.db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.usernameLower, usernameLower))
+        .get();
+      if (existing && existing.id !== userId) {
+        throw ApiError.conflict('That username is already taken');
+      }
+      update.username = patch.username;
+      update.usernameLower = usernameLower;
+    }
+
+    if (patch.email !== undefined) {
+      update.email = patch.email?.trim() ? patch.email.trim() : null;
+    }
+
+    if (Object.keys(update).length > 0) {
+      this.db.update(users).set(update).where(eq(users.id, userId)).run();
+    }
+
+    // Non-null: the row was just confirmed to exist, and this method is the
+    // only writer to touch it between the read above and here.
+    return this.findById(userId) as User;
+  }
+
   async setPassword(userId: string, newPassword: string): Promise<void> {
     this.db
       .update(users)

@@ -55,6 +55,13 @@ export const createInviteSchema = z.object({
 });
 export type CreateInviteInput = z.infer<typeof createInviteSchema>;
 
+/** Self-service equivalent of updateUserSchema — no role or isActive; those stay admin-only. */
+export const updateAccountSchema = z.object({
+  username: usernameSchema.optional(),
+  email: emailSchema.nullable().optional(),
+});
+export type UpdateAccountInput = z.infer<typeof updateAccountSchema>;
+
 export const updateUserSchema = z.object({
   role: z.enum(ROLES).optional(),
   isActive: z.boolean().optional(),

@@ -3,6 +3,7 @@ import {
   changePasswordSchema,
   loginSchema,
   registerSchema,
+  updateAccountSchema,
   type DeviceInfo,
   type SessionInfo,
 } from '@gameblade/shared';
@@ -181,6 +182,18 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const input = changePasswordSchema.parse(request.body);
     await auth.changePassword(context.user.id, input.currentPassword, input.newPassword);
     return { ok: true };
+  });
+
+  /**
+   * Self-service username/email change, distinct from PATCH /admin/users/:id —
+   * this is what lets a member manage their own account from the web without
+   * installing the desktop client, rather than needing an administrator.
+   */
+  app.patch('/account', async (request) => {
+    const context = requireUser(request);
+    const input = updateAccountSchema.parse(request.body);
+    const updated = await auth.updateAccount(context.user.id, input);
+    return toPublicUser(updated);
   });
 
   app.get('/auth/devices', async (request) => {

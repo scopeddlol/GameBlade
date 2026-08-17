@@ -9,6 +9,7 @@ import {
   Sliders,
   Sparkles,
   Swords,
+  UserCircle,
   Users,
 } from 'lucide-react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
@@ -76,6 +77,10 @@ export function Layout() {
         </nav>
 
         <div className="border-ink-800 mt-auto hidden border-t p-3 lg:block">
+          <NavLink to="/account" className={linkClass({ isActive: false })}>
+            <UserCircle className="h-4 w-4" aria-hidden />
+            Your account
+          </NavLink>
           <NavLink to="/" className={linkClass({ isActive: false })}>
             <Home className="h-4 w-4" aria-hidden />
             Landing page

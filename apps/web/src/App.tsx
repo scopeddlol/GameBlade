@@ -10,15 +10,16 @@ import { AdminLibrariesPage } from './pages/admin/AdminLibrariesPage.js';
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage.js';
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage.js';
 import { AdminUsersPage } from './pages/admin/AdminUsersPage.js';
+import { AccountPage } from './pages/AccountPage.js';
 import { LandingPage } from './pages/LandingPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { RegisterPage } from './pages/RegisterPage.js';
 import { SetupPage } from './pages/SetupPage.js';
 
 /**
- * The web surface is administrators only. A signed-in player has no pages to
- * visit here, so they are sent back to the landing page rather than shown an
- * empty shell.
+ * The admin routes stay administrators-only. A signed-in player has no pages
+ * to visit under /admin, so they are sent back to the landing page rather
+ * than shown an empty shell.
  */
 function RequireAdmin({ children }: { children: ReactElement }) {
   const { user, isAdmin, isLoading, status } = useSession();
@@ -40,6 +41,18 @@ function RequireAdmin({ children }: { children: ReactElement }) {
   return children;
 }
 
+/** Any signed-in account — the guard for pages about your own account rather than the server. */
+function RequireUser({ children }: { children: ReactElement }) {
+  const { user, isLoading } = useSession();
+  const location = useLocation();
+
+  if (isLoading) return <PageLoader label="Signing in" />;
+  if (!user) {
+    return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
+  }
+  return children;
+}
+
 export function App() {
   return (
     <Routes>
@@ -47,6 +60,14 @@ export function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route
+        path="/account"
+        element={
+          <RequireUser>
+            <AccountPage />
+          </RequireUser>
+        }
+      />
 
       <Route
         path="/admin"

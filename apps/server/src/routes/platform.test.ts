@@ -517,6 +517,42 @@ describe('platform routes', () => {
     expect((missingNow.json() as { missing: number }).missing).toBe(0);
   });
 
+  it('lets a member change their own username and email, but not their role', async () => {
+    const changed = await app.inject({
+      method: 'PATCH',
+      url: '/api/account',
+      headers: auth(friend),
+      payload: { username: 'curator-renamed', email: 'curator@example.test' },
+    });
+    expect(changed.statusCode).toBe(200);
+    const body = changed.json() as { username: string; email: string | null; role: string };
+    expect(body.username).toBe('curator-renamed');
+    expect(body.email).toBe('curator@example.test');
+    // The schema has no role field at all, so there is nothing for a crafted
+    // payload to smuggle through — this is the guarantee that makes /account
+    // safe to expose to every signed-in user rather than admins only.
+    expect(body.role).toBe('user');
+
+    // Taking someone else's username is refused rather than silently renaming
+    // both accounts to the same login.
+    const clash = await app.inject({
+      method: 'PATCH',
+      url: '/api/account',
+      headers: auth(admin),
+      payload: { username: 'curator-renamed' },
+    });
+    expect(clash.statusCode).toBe(409);
+
+    // Renaming yourself to your own current name is a no-op, not a conflict.
+    const same = await app.inject({
+      method: 'PATCH',
+      url: '/api/account',
+      headers: auth(friend),
+      payload: { username: 'curator-renamed' },
+    });
+    expect(same.statusCode).toBe(200);
+  });
+
   it('refuses to serve the API without a session', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/home' });
     expect(response.statusCode).toBe(401);

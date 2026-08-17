@@ -13,19 +13,23 @@ import {
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { useSession } from '../hooks/useSession.js';
 import { api } from '../lib/api.js';
 
 /**
  * The public face of the server.
  *
- * This is the only page an unauthenticated visitor ever sees. It exists to
- * sell the desktop client, not to explain how the thing behind it runs —
- * everyone who reaches this page is a member of one specific instance, not a
- * prospective operator of their own, so the copy speaks to what they get
- * rather than how it's hosted. The library itself lives entirely in the
- * desktop app, so there is deliberately nothing to browse here.
+ * It exists to sell the desktop client, not to explain how the thing behind
+ * it runs — everyone who reaches this page is a member of one specific
+ * instance, not a prospective operator of their own, so the copy speaks to
+ * what they get rather than how it's hosted. The library itself lives
+ * entirely in the desktop app, so there is deliberately nothing to browse
+ * here. A signed-in visitor can still land here (a bookmark, the back
+ * button), so the header reflects that instead of asking them to sign in
+ * again.
  */
 export function LandingPage() {
+  const { user, isAdmin } = useSession();
   const infoQuery = useQuery({
     queryKey: ['public', 'info'],
     queryFn: () => api.get<PublicServerInfo>('/public/info'),
@@ -45,9 +49,22 @@ export function LandingPage() {
           </span>
 
           <nav className="ml-auto flex items-center gap-2">
-            <Link to="/login" className="gb-btn-ghost">
-              Sign in
-            </Link>
+            {user ? (
+              <>
+                {isAdmin ? (
+                  <Link to="/admin" className="gb-btn-ghost">
+                    Admin panel
+                  </Link>
+                ) : null}
+                <Link to="/account" className="gb-btn-ghost">
+                  {user.username}
+                </Link>
+              </>
+            ) : (
+              <Link to="/login" className="gb-btn-ghost">
+                Sign in
+              </Link>
+            )}
             {info?.downloadUrl ? (
               <a href={info.downloadUrl} className="gb-btn-primary">
                 <Download className="h-4 w-4" aria-hidden />
@@ -78,6 +95,7 @@ export function LandingPage() {
 }
 
 function Hero({ info, serverName }: { info?: PublicServerInfo; serverName: string }) {
+  const { user, isAdmin } = useSession();
   return (
     <section className="relative overflow-hidden">
       {/* Two soft radial washes behind the copy, so the near-black page still
@@ -126,9 +144,18 @@ function Hero({ info, serverName }: { info?: PublicServerInfo; serverName: strin
             </span>
           )}
 
-          <Link to="/login" className="gb-btn-ghost px-5 py-2.5 text-base">
-            Already a member? Sign in
-          </Link>
+          {user ? (
+            <Link
+              to={isAdmin ? '/admin' : '/account'}
+              className="gb-btn-ghost px-5 py-2.5 text-base"
+            >
+              Go to your account
+            </Link>
+          ) : (
+            <Link to="/login" className="gb-btn-ghost px-5 py-2.5 text-base">
+              Already a member? Sign in
+            </Link>
+          )}
         </div>
 
         {info && info.gameCount > 0 ? (
