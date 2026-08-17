@@ -1167,6 +1167,77 @@ textarea:focus {
   flex-wrap: wrap;
 }
 
+/* ------------------------------------------------- screenshots and trailers */
+
+.screenshot-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.screenshot-thumb {
+  flex-shrink: 0;
+  width: 160px;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  padding: 0;
+  background: var(--ink-850);
+}
+.screenshot-thumb .artwork {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.screenshot-lightbox {
+  border-radius: 10px;
+  overflow: hidden;
+}
+.screenshot-lightbox .artwork {
+  width: 100%;
+  display: block;
+}
+
+.trailer-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.trailer-card {
+  position: relative;
+  flex-shrink: 0;
+  width: 200px;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  padding: 0;
+  background: var(--ink-850);
+}
+.trailer-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.trailer-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 8, 12, 0.35);
+  color: #fff;
+  transition: background 0.12s ease;
+}
+.trailer-card:hover .trailer-play {
+  background: rgba(7, 8, 12, 0.55);
+}
+
 /* ---------------------------------------------------------- profile drawer */
 
 .profile-banner {

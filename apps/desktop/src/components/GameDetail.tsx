@@ -5,12 +5,13 @@ import type {
   SaveRule,
 } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { openPath } from '@tauri-apps/plugin-opener';
+import { openPath, openUrl } from '@tauri-apps/plugin-opener';
 import clsx from 'clsx';
 import {
   CloudDownload,
   CloudUpload,
   Download,
+  Film,
   FolderOpen,
   HardDrive,
   Lock,
@@ -277,6 +278,9 @@ export function GameDetailPanel({
               </div>
 
               {game.summary ? <p className="detail-summary">{game.summary}</p> : null}
+              {game.storyline && game.storyline !== game.summary ? (
+                <p className="detail-summary">{game.storyline}</p>
+              ) : null}
 
               {game.genres.length > 0 ? (
                 <div className="tag-row">
@@ -285,6 +289,12 @@ export function GameDetailPanel({
                   ))}
                 </div>
               ) : null}
+
+              {game.screenshots.length > 0 ? (
+                <ScreenshotGallery screenshots={game.screenshots} title={game.title} />
+              ) : null}
+
+              {game.videos.length > 0 ? <TrailerList videoIds={game.videos} /> : null}
 
               {installed && saveRule ? (
                 <SaveSyncSection gameId={gameId} rule={saveRule} onError={setError} />
@@ -369,6 +379,85 @@ function StoragePickerModal({
         })}
       </div>
     </Modal>
+  );
+}
+
+function ScreenshotGallery({ screenshots, title }: { screenshots: string[]; title: string }) {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+
+  return (
+    <section className="detail-section">
+      <h3>Screenshots</h3>
+      <div className="screenshot-strip">
+        {screenshots.map((path, index) => (
+          <button
+            key={path}
+            type="button"
+            className="screenshot-thumb"
+            onClick={() => setOpenIndex(index)}
+          >
+            <Artwork path={path} alt={`${title} screenshot ${index + 1}`} />
+          </button>
+        ))}
+      </div>
+
+      {openIndex !== null ? (
+        <Modal
+          title={`${title} — screenshot ${openIndex + 1} of ${screenshots.length}`}
+          onClose={() => setOpenIndex(null)}
+        >
+          <div className="screenshot-lightbox">
+            <Artwork path={screenshots[openIndex]} alt="" />
+          </div>
+          {screenshots.length > 1 ? (
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() =>
+                  setOpenIndex((openIndex - 1 + screenshots.length) % screenshots.length)
+                }
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setOpenIndex((openIndex + 1) % screenshots.length)}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
+        </Modal>
+      ) : null}
+    </section>
+  );
+}
+
+function TrailerList({ videoIds }: { videoIds: string[] }) {
+  return (
+    <section className="detail-section">
+      <h3>
+        <Film size={16} aria-hidden /> Trailers
+      </h3>
+      <div className="trailer-strip">
+        {videoIds.map((id) => (
+          <button
+            key={id}
+            type="button"
+            className="trailer-card"
+            onClick={() => void openUrl(`https://www.youtube.com/watch?v=${id}`)}
+            title="Watch on YouTube"
+          >
+            <img src={`https://img.youtube.com/vi/${id}/hqdefault.jpg`} alt="" loading="lazy" />
+            <span className="trailer-play">
+              <Play size={20} aria-hidden />
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
