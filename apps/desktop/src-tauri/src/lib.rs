@@ -267,6 +267,33 @@ async fn list_downloads(state: State<'_, AppState>) -> AppResult<Vec<DownloadSta
     Ok(state.downloads.snapshot().await)
 }
 
+#[derive(Serialize)]
+struct DiskUsage {
+    available_bytes: u64,
+    total_bytes: u64,
+}
+
+/// Free/total space for the drive the install directory lives on, for the
+/// downloads panel's disk gauge.
+#[tauri::command]
+async fn disk_usage(state: State<'_, AppState>) -> AppResult<DiskUsage> {
+    let dir = state.install_dir().await;
+    // The install directory itself may not exist yet on a fresh install — walk
+    // up to the nearest ancestor that does, so this never fails before the
+    // very first download creates it.
+    let mut probe = dir.as_path();
+    while !probe.exists() {
+        probe = match probe.parent() {
+            Some(parent) => parent,
+            None => break,
+        };
+    }
+    Ok(DiskUsage {
+        available_bytes: fs4::available_space(probe)?,
+        total_bytes: fs4::total_space(probe)?,
+    })
+}
+
 /* ----------------------------------------------------------------- installs */
 
 #[tauri::command]
@@ -729,6 +756,7 @@ pub fn run() {
             pause_download,
             clear_download,
             list_downloads,
+            disk_usage,
             list_installed,
             finish_install,
             uninstall_game,

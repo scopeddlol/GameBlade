@@ -79,6 +79,11 @@ export interface LocalSave {
   capturedAt: string;
 }
 
+export interface DiskUsage {
+  available_bytes: number;
+  total_bytes: number;
+}
+
 /**
  * The bridge to the Rust side.
  *
@@ -122,6 +127,7 @@ export const ipc = {
   pauseDownload: (gameId: string) => invoke<boolean>('pause_download', { gameId }),
   clearDownload: (gameId: string) => invoke<void>('clear_download', { gameId }),
   listDownloads: () => invoke<DownloadState[]>('list_downloads'),
+  diskUsage: () => invoke<DiskUsage>('disk_usage'),
 
   /* ------------------------------------------------------------- installs */
 

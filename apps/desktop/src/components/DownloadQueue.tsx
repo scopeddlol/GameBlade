@@ -1,8 +1,13 @@
+import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Pause, Play, X } from 'lucide-react';
+import { HardDrive, Pause, Play, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { formatBytes, formatEta, formatRate } from '../lib/format.js';
-import type { DownloadState } from '../lib/ipc.js';
+import { ipc, type DownloadState } from '../lib/ipc.js';
 import { Badge, Empty, ProgressBar } from './ui.js';
+
+/** How many speed samples the network graph keeps — about two minutes at the progress event's own cadence. */
+const SPEED_HISTORY_LENGTH = 30;
 
 export function DownloadQueue({
   downloads,
@@ -19,6 +24,12 @@ export function DownloadQueue({
   onClear: (gameId: string) => void;
   onClose: () => void;
 }) {
+  const totalRate = downloads.reduce(
+    (sum, d) => (d.status === 'downloading' ? sum + d.bytes_per_second : sum),
+    0,
+  );
+  const speedHistory = useSpeedHistory(totalRate);
+
   return (
     <div className="drawer-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
       <div className="drawer narrow" onClick={(e) => e.stopPropagation()}>
@@ -30,6 +41,11 @@ export function DownloadQueue({
         </header>
 
         <div className="drawer-body">
+          <div className="downloads-gauges">
+            <NetworkGraph history={speedHistory} currentRate={totalRate} />
+            <DiskGauge />
+          </div>
+
           {downloads.length === 0 ? (
             <Empty
               title="Nothing downloading"
@@ -147,6 +163,88 @@ export function DownloadQueue({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Tracks the last N aggregate throughput samples for the sparkline. A new
+ * sample is only appended when the rate actually changes — `downloads`
+ * updates on every progress event, several times a second across files, and
+ * sampling all of them would make the graph jitter rather than read as a
+ * trend.
+ */
+function useSpeedHistory(currentRate: number): number[] {
+  const [history, setHistory] = useState<number[]>([]);
+  const lastRate = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (lastRate.current === currentRate) return;
+    lastRate.current = currentRate;
+    setHistory((current) => [...current, currentRate].slice(-SPEED_HISTORY_LENGTH));
+  }, [currentRate]);
+
+  return history;
+}
+
+function NetworkGraph({ history, currentRate }: { history: number[]; currentRate: number }) {
+  const peak = Math.max(1, ...history);
+  const width = 100;
+  const height = 32;
+  const points = history
+    .map((value, index) => {
+      const x = history.length > 1 ? (index / (history.length - 1)) * width : width;
+      const y = height - (value / peak) * height;
+      return `${x},${y}`;
+    })
+    .join(' ');
+
+  return (
+    <div className="gauge">
+      <div className="gauge-head">
+        <span className="muted small">Network</span>
+        <strong>{currentRate > 0 ? formatRate(currentRate) : 'Idle'}</strong>
+      </div>
+      <svg
+        className="gauge-graph"
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        aria-hidden
+      >
+        {history.length > 1 ? (
+          <>
+            <polyline points={`0,${height} ${points} ${width},${height}`} className="gauge-fill" />
+            <polyline points={points} className="gauge-line" />
+          </>
+        ) : null}
+      </svg>
+    </div>
+  );
+}
+
+function DiskGauge() {
+  const usageQuery = useQuery({
+    queryKey: ['disk-usage'],
+    queryFn: () => ipc.diskUsage(),
+    // The install drive doesn't change mid-session; a slow poll just keeps
+    // the number honest if something else fills the disk in the background.
+    refetchInterval: 30_000,
+  });
+
+  const usage = usageQuery.data;
+  const usedBytes = usage ? Math.max(0, usage.total_bytes - usage.available_bytes) : 0;
+  const usedPercent = usage && usage.total_bytes > 0 ? (usedBytes / usage.total_bytes) * 100 : 0;
+
+  return (
+    <div className="gauge">
+      <div className="gauge-head">
+        <span className="muted small">
+          <HardDrive size={12} aria-hidden /> Disk
+        </span>
+        <strong>{usage ? formatBytes(usage.available_bytes) : '—'} free</strong>
+      </div>
+      <ProgressBar value={usedPercent} />
+      {usage ? <p className="muted small">{formatBytes(usage.total_bytes)} total</p> : null}
     </div>
   );
 }
