@@ -22,8 +22,9 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { requireAdmin } from '../auth/middleware.js';
 import { toPublicUser } from '../auth/service.js';
-import { games, invites, libraries, users } from '../db/schema.js';
+import { gameFiles, games, invites, libraries, users } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
+import { isLikelyGameExecutable, listZipExecutables, sortCandidates } from '../lib/executables.js';
 import { newId, newInviteCode } from '../lib/ids.js';
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
@@ -327,6 +328,44 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.post('/admin/games/purge-missing', async (request) => {
     const { olderThanDays } = purgeMissingSchema.parse(request.body ?? {});
     return { removed: scanner.purgeMissing(olderThanDays) };
+  });
+
+  /**
+   * .exe files found in a game's own files, so the launch rule's executable
+   * field can be picked rather than hand-typed. A folder game's files were
+   * already indexed by the last scan; an archive game's central directory is
+   * read on demand instead, since only the archive itself — not its
+   * contents — gets a `game_files` row.
+   */
+  app.get('/admin/games/:id/executables', async (request) => {
+    const { id } = request.params as { id: string };
+    const row = db
+      .select({ game: games, libraryPath: libraries.path })
+      .from(games)
+      .innerJoin(libraries, eq(libraries.id, games.libraryId))
+      .where(eq(games.id, id))
+      .get();
+    if (!row) throw ApiError.notFound('Game not found');
+
+    if (row.game.kind === 'archive') {
+      const absolute = path.join(row.libraryPath, row.game.relPath);
+      try {
+        return { candidates: sortCandidates(await listZipExecutables(absolute)) };
+      } catch (error) {
+        request.log.warn({ err: error, gameId: id }, 'could not read archive for executables');
+        return { candidates: [] };
+      }
+    }
+
+    const files = db
+      .select({ relPath: gameFiles.relPath, sizeBytes: gameFiles.sizeBytes })
+      .from(gameFiles)
+      .where(eq(gameFiles.gameId, id))
+      .all();
+    const candidates = files
+      .filter((file) => isLikelyGameExecutable(file.relPath))
+      .map((file) => ({ path: file.relPath, sizeBytes: file.sizeBytes }));
+    return { candidates: sortCandidates(candidates) };
   });
 
   app.post('/admin/scan/match-pending', async (request, reply) => {

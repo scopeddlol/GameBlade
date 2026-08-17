@@ -2,6 +2,7 @@ import type {
   AchievementDefinition,
   ArtKind,
   ArtworkSearchResult,
+  ExecutableCandidate,
   GameDetail,
   GameSummary,
   LaunchRule,
@@ -957,6 +958,12 @@ function RulesTab({ gameId }: { gameId: string }) {
     queryFn: () => api.get<{ save: SaveRule[]; launch: LaunchRule[] }>(`/games/${gameId}/rules`),
   });
 
+  const executablesQuery = useQuery({
+    queryKey: ['admin', 'executables', gameId],
+    queryFn: () =>
+      api.get<{ candidates: ExecutableCandidate[] }>(`/admin/games/${gameId}/executables`),
+  });
+
   const [launch, setLaunch] = useState({ executable: '', args: '', workingDir: '' });
   const [save, setSave] = useState({ pathTemplate: '', include: '', exclude: '' });
 
@@ -1023,6 +1030,33 @@ function RulesTab({ gameId }: { gameId: string }) {
             placeholder="bin\\game.exe"
           />
         </Field>
+
+        {executablesQuery.isLoading ? (
+          <p className="text-ink-400 text-xs">Looking for .exe files…</p>
+        ) : (executablesQuery.data?.candidates.length ?? 0) > 0 ? (
+          <div className="space-y-1.5">
+            <p className="text-ink-400 text-xs">
+              Found in this game's files — pick one instead of typing the path:
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {executablesQuery.data?.candidates.map((candidate) => (
+                <button
+                  key={candidate.path}
+                  type="button"
+                  className={
+                    launch.executable === candidate.path ? 'gb-chip gb-chip-active' : 'gb-chip'
+                  }
+                  onClick={() => setLaunch({ ...launch, executable: candidate.path })}
+                  title={formatBytes(candidate.sizeBytes)}
+                >
+                  {candidate.path}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="text-ink-400 text-xs">No .exe found automatically — type the path above.</p>
+        )}
         <Field label="Arguments" htmlFor="rArgs">
           <input
             id="rArgs"

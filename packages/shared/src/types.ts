@@ -397,6 +397,12 @@ export interface LaunchRule {
   note: string | null;
 }
 
+/** An .exe found inside a game's files, offered as a launch-rule pick instead of free-typed. */
+export interface ExecutableCandidate {
+  path: string;
+  sizeBytes: number;
+}
+
 /* --------------------------------------------------------------- social feed */
 
 export interface MediaInfo {
