@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { open } from '@tauri-apps/plugin-dialog';
 import { FolderOpen, LogOut, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Avatar, Badge, ErrorNote, Loading, SectionHeader } from '../components/ui.js';
+import { Artwork, Avatar, Badge, ErrorNote, Loading, SectionHeader } from '../components/ui.js';
 import { useSession } from '../hooks/useSession.js';
 import { formatBytes, formatRelative } from '../lib/format.js';
 import { errorMessage, ipc, type ClientSettings } from '../lib/ipc.js';
@@ -183,6 +183,7 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   const [accent, setAccent] = useState('#7c5cff');
+  const [country, setCountry] = useState('');
   const [seeded, setSeeded] = useState(false);
 
   useEffect(() => {
@@ -191,6 +192,7 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
     setDisplayName(profile.displayName);
     setBio(profile.bio ?? '');
     setAccent(profile.accentColor);
+    setCountry(profile.country ?? '');
     setSeeded(true);
   }, [profileQuery.data, seeded]);
 
@@ -214,12 +216,36 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
     }
   };
 
+  const changeBanner = async () => {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
+    });
+    if (typeof selected !== 'string') return;
+    try {
+      const media = await ipc.uploadMedia(selected, 'banner');
+      saveMutation.mutate({ bannerMediaId: media.id });
+    } catch (caught) {
+      onError(errorMessage(caught));
+    }
+  };
+
   if (profileQuery.isLoading) return <Loading label="Loading profile" />;
   const profile = profileQuery.data;
 
   return (
     <section className="card">
-      <SectionHeader title="Profile" />
+      <SectionHeader
+        title="Profile"
+        subtitle="Shown to friends and anyone who opens your profile from a post or the member list."
+      />
+
+      <div className="settings-banner">
+        {profile?.bannerUrl ? <Artwork path={profile.bannerUrl} alt="" /> : null}
+        <button type="button" className="btn btn-ghost" onClick={changeBanner}>
+          {profile?.bannerUrl ? 'Change banner' : 'Add a banner'}
+        </button>
+      </div>
 
       <div className="profile-row">
         <Avatar
@@ -272,6 +298,18 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
       </label>
 
       <label className="field">
+        <span>Country (optional)</span>
+        <input
+          className="input"
+          value={country}
+          maxLength={2}
+          placeholder="US"
+          onChange={(e) => setCountry(e.target.value.toUpperCase())}
+          onBlur={() => saveMutation.mutate({ country: country || null })}
+        />
+      </label>
+
+      <label className="field">
         <span>Who can see your profile</span>
         <select
           className="select"
@@ -283,6 +321,13 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
           <option value="private">Nobody</option>
         </select>
       </label>
+
+      <Toggle
+        label="Show what I'm playing on my profile"
+        hint="Turn this off to hide live activity from your profile page, even from friends."
+        checked={profile?.showActivity ?? true}
+        onChange={(showActivity) => saveMutation.mutate({ showActivity })}
+      />
     </section>
   );
 }
