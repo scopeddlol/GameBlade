@@ -128,6 +128,9 @@ jobs:
           name: gameblade-windows-installers
           path: installers
 
+      - name: Show what was downloaded
+        run: find installers -type f -printf '%s\t%p\n' | sort
+
       - name: Resolve the release tag
         id: tag
         run: |
@@ -146,9 +149,16 @@ jobs:
           target_commitish: ${{ github.sha }}
           draft: false
           generate_release_notes: true
+          # upload-artifact roots the archive at the least common ancestor of
+          # the uploaded paths, so the installers arrive under nsis/ and msi/
+          # subdirectories rather than at the top level. Recursive globs match
+          # either shape.
           files: |
-            installers/*.exe
-            installers/*.msi
+            installers/**/*.exe
+            installers/**/*.msi
+          # Without this a glob that matches nothing only warns, and the run
+          # goes green having published a release with no installers attached.
+          fail_on_unmatched_files: true
           body: |
             ## Install
 
