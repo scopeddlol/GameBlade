@@ -106,7 +106,25 @@ function Shell() {
         void ipc
           .finishInstall(event.payload.game_id, event.payload.title, event.payload.destination)
           .then(() => queryClient.invalidateQueries({ queryKey: ['installed'] }))
-          .catch(() => undefined);
+          .catch((error: unknown) => {
+            // A silently swallowed failure here (a corrupt archive, a full
+            // disk, a permissions error) used to leave the download entry
+            // sitting at "Completed" forever with the game never actually
+            // installed and nothing telling the user why. Surfacing it
+            // through the same download entry reuses the queue's existing
+            // failed-state UI instead of adding a new one.
+            setDownloads((current) =>
+              current.map((d) =>
+                d.game_id === event.payload.game_id
+                  ? {
+                      ...d,
+                      status: 'failed',
+                      error: error instanceof Error ? error.message : 'Could not finish installing',
+                    }
+                  : d,
+              ),
+            );
+          });
       }
     });
 

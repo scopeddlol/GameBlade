@@ -309,10 +309,37 @@ async fn run_download(
         } else {
             DownloadStatus::Failed
         };
+
+        if result.is_ok() {
+            if let Some(path) = archive_file_path(&root, &manifest.kind, &manifest.files) {
+                guard.destination = path.to_string_lossy().to_string();
+            }
+        }
     }
     reporter.abort();
 
     result
+}
+
+/// The path a finished download should be reported at.
+///
+/// `destination` starts out as the containing folder, which is right for a
+/// folder game — several files land there, and there is nothing to extract.
+/// An archive game is exactly one file, and `finish_install` decides whether
+/// to extract by checking this path's extension, so reporting the folder
+/// instead of the `.zip` inside it meant that check never matched: the
+/// archive sat there unextracted, install fell through to treating the
+/// folder as an already-installed one, and no executable was ever found in
+/// it. Returns `None` for a folder game, where the original folder path is
+/// already correct and nothing needs to change.
+fn archive_file_path(root: &Path, kind: &str, files: &[ManifestFile]) -> Option<PathBuf> {
+    if kind == "folder" {
+        return None;
+    }
+    let [only] = files else { return None };
+    sanitise_relative_path(&only.path)
+        .ok()
+        .map(|rel| root.join(rel))
 }
 
 async fn download_file(
@@ -671,4 +698,42 @@ fn urlencode(value: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(path: &str) -> ManifestFile {
+        ManifestFile {
+            id: "f1".to_string(),
+            path: path.to_string(),
+            size_bytes: 0,
+            sha256: None,
+        }
+    }
+
+    #[test]
+    fn archive_file_path_points_at_the_file_inside_the_folder() {
+        let root = Path::new("/games/Cave Story");
+        let path = archive_file_path(root, "archive", &[file("Cave Story.zip")]);
+        assert_eq!(path, Some(root.join("Cave Story.zip")));
+    }
+
+    #[test]
+    fn archive_file_path_is_none_for_a_folder_game() {
+        let root = Path::new("/games/Cave Story");
+        let path = archive_file_path(root, "folder", &[file("data/game.dat"), file("game.exe")]);
+        assert_eq!(path, None);
+    }
+
+    #[test]
+    fn archive_file_path_is_none_without_exactly_one_file() {
+        let root = Path::new("/games/Cave Story");
+        assert_eq!(archive_file_path(root, "archive", &[]), None);
+        assert_eq!(
+            archive_file_path(root, "archive", &[file("a.zip"), file("b.zip")]),
+            None,
+        );
+    }
 }
