@@ -124,6 +124,20 @@ export class ImageCache {
     return id;
   }
 
+  /**
+   * Cache a list of URLs, dropping the ones that fail. Downloads run in
+   * sequence: a metadata edit is rarely more than a handful of screenshots, and
+   * hammering a provider in parallel is what gets an IP rate-limited.
+   */
+  async cacheMany(urls: string[], kind: ImageKind): Promise<string[]> {
+    const ids: string[] = [];
+    for (const url of urls) {
+      const id = await this.cache(url, kind);
+      if (id) ids.push(id);
+    }
+    return ids;
+  }
+
   /** Remove a cached image and its file. */
   async remove(id: string): Promise<void> {
     const record = this.findById(id);

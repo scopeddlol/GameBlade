@@ -283,42 +283,43 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   // ---- Settings ----
 
-  app.get('/admin/settings', async () => {
+  /** Secrets are never echoed back — only whether one is set. */
+  function describeSettings(): ServerSettings {
     const current = settings.get();
-    const body: ServerSettings = {
+    return {
       serverName: current.serverName,
+      tagline: current.tagline,
       allowSelfRegistration: current.allowSelfRegistration,
+      downloadUrl: current.downloadUrl,
+      clientVersion: current.clientVersion,
       providers: metadata.status(),
       igdbClientId: current.igdbClientId,
-      // Secrets are never echoed back — only whether one is set.
       igdbClientSecretSet: Boolean(current.igdbClientSecret),
       steamGridDbKeySet: Boolean(current.steamGridDbKey),
+      steamApiKeySet: Boolean(current.steamApiKey),
     };
-    return body;
-  });
+  }
+
+  app.get('/admin/settings', async () => describeSettings());
 
   app.patch('/admin/settings', async (request) => {
     const input = providerSettingsSchema.parse(request.body);
     settings.update({
       ...(input.serverName !== undefined ? { serverName: input.serverName } : {}),
+      ...(input.tagline !== undefined ? { tagline: input.tagline } : {}),
       ...(input.allowSelfRegistration !== undefined
         ? { allowSelfRegistration: input.allowSelfRegistration }
         : {}),
+      // An empty string from a cleared form field means "unset", not "".
+      ...(input.downloadUrl !== undefined ? { downloadUrl: input.downloadUrl || null } : {}),
+      ...(input.clientVersion !== undefined ? { clientVersion: input.clientVersion } : {}),
       ...(input.igdbClientId !== undefined ? { igdbClientId: input.igdbClientId } : {}),
       ...(input.igdbClientSecret !== undefined ? { igdbClientSecret: input.igdbClientSecret } : {}),
       ...(input.steamGridDbKey !== undefined ? { steamGridDbKey: input.steamGridDbKey } : {}),
+      ...(input.steamApiKey !== undefined ? { steamApiKey: input.steamApiKey } : {}),
     });
 
-    const current = settings.get();
-    const body: ServerSettings = {
-      serverName: current.serverName,
-      allowSelfRegistration: current.allowSelfRegistration,
-      providers: metadata.status(),
-      igdbClientId: current.igdbClientId,
-      igdbClientSecretSet: Boolean(current.igdbClientSecret),
-      steamGridDbKeySet: Boolean(current.steamGridDbKey),
-    };
-    return body;
+    return describeSettings();
   });
 
   app.post('/admin/settings/test-providers', async () => metadata.checkHealth());
