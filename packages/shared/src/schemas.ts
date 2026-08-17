@@ -370,6 +370,8 @@ export type SetArtworkInput = z.infer<typeof setArtworkSchema>;
 export const announcementSchema = z.object({
   title: z.string().trim().min(1).max(120),
   body: z.string().trim().max(2000).nullable().optional(),
+  /** A short emoji, e.g. "🎉" — kept as plain text; no icon upload pipeline. */
+  icon: z.string().trim().max(8).nullable().optional(),
   /** Empty targets everyone. */
   userIds: z.array(z.string().trim().max(64)).max(500).default([]),
 });

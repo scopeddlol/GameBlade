@@ -502,6 +502,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       kind: 'announcement',
       title: input.title,
       body: input.body ?? null,
+      icon: input.icon ?? null,
       actorId: context.user.id,
     });
 

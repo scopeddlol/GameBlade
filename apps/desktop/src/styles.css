@@ -1483,24 +1483,72 @@ textarea:focus {
   position: absolute;
   right: 0;
   top: calc(100% + 6px);
-  width: 300px;
-  max-height: 380px;
+  width: 320px;
+  max-height: 420px;
   overflow-y: auto;
-  background: var(--ink-850);
+  background: var(--ink-900);
   border: 1px solid var(--ink-700);
   border-radius: 12px;
-  padding: 10px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 6px;
   z-index: 30;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
+
+/* A list of <strong> tags with a gap between them reads as one run-on
+   paragraph. Each notification is its own bordered card now, so "where does
+   this one end and the next begin" is answered by looking at it rather than
+   reading it. */
 .notif {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 8px;
+  border: 1px solid var(--ink-800);
+  border-radius: 10px;
+  background: var(--ink-850);
   font-size: 13px;
+  transition: border-color 0.12s ease;
+}
+.notif:hover {
+  border-color: var(--ink-600);
+}
+.notif.unread {
+  border-color: rgba(98, 208, 255, 0.35);
+  background: linear-gradient(135deg, rgba(98, 208, 255, 0.08), rgba(124, 92, 255, 0.04));
+}
+
+.notif-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ink-800);
+  color: var(--blade-400);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.notif-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.notif-body > span.small {
+  white-space: pre-wrap;
+}
+
+.small-icon-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
 }
 
 @keyframes toast-in {

@@ -1,20 +1,32 @@
-import type { GameSummary, NotificationInfo } from '@gameblade/shared';
-import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import type { GameSummary, NotificationInfo, NotificationKind } from '@gameblade/shared';
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { listen } from '@tauri-apps/api/event';
 import clsx from 'clsx';
 import {
   Bell,
   Download,
   Gamepad2,
+  Heart,
   Home,
   LibraryBig,
+  Megaphone,
+  MessageSquare,
   Settings,
   Store,
   Swords,
   Trophy,
+  UserCheck,
+  UserPlus,
   Users,
   Wifi,
   WifiOff,
+  X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { DownloadQueue } from './components/DownloadQueue.js';
@@ -23,6 +35,7 @@ import { GameDetailPanel } from './components/GameDetail.js';
 import { Avatar, Loading } from './components/ui.js';
 import { RealtimeProvider, useRealtime } from './hooks/useRealtime.js';
 import { SessionProvider, useSession } from './hooks/useSession.js';
+import { formatRelative } from './lib/format.js';
 import { ipc, type DownloadState, type RunningGame } from './lib/ipc.js';
 import { SignIn } from './SignIn.js';
 import { HomeTab } from './tabs/HomeTab.js';
@@ -30,6 +43,16 @@ import { LibraryTab } from './tabs/LibraryTab.js';
 import { SettingsTab } from './tabs/SettingsTab.js';
 import { SocialTab } from './tabs/SocialTab.js';
 import { StoreTab } from './tabs/StoreTab.js';
+
+/** Falls back to this whenever a notification has no custom icon of its own. */
+const NOTIFICATION_ICONS: Record<NotificationKind, typeof Bell> = {
+  'friend-request': UserPlus,
+  'friend-accepted': UserCheck,
+  'post-comment': MessageSquare,
+  'post-reaction': Heart,
+  achievement: Trophy,
+  announcement: Megaphone,
+};
 
 const TABS = [
   { id: 'home', label: 'Home', icon: Home },
@@ -264,6 +287,7 @@ function Sidebar({
 
 function TopBar({ running }: { running: RunningGame | null }) {
   const { connected } = useRealtime();
+  const queryClient = useQueryClient();
 
   const notificationsQuery = useQuery({
     queryKey: ['notifications'],
@@ -272,8 +296,17 @@ function TopBar({ running }: { running: RunningGame | null }) {
     refetchInterval: 60_000,
   });
 
+  const dismissMutation = useMutation({
+    mutationFn: (id: string) => ipc.del(`/notifications/${id}`),
+    // The list is short and this is a background clean-up action, not
+    // something that needs its own error UI — a failed dismiss just leaves
+    // the card there for next time.
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+
   const [open, setOpen] = useState(false);
   const unread = notificationsQuery.data?.unreadCount ?? 0;
+  const items = notificationsQuery.data?.items ?? [];
 
   return (
     <div className="topbar" data-tauri-drag-region>
@@ -309,17 +342,39 @@ function TopBar({ running }: { running: RunningGame | null }) {
 
         {open ? (
           <div className="notif-menu">
-            {(notificationsQuery.data?.items ?? []).length === 0 ? (
+            {items.length === 0 ? (
               <p className="muted small">Nothing new.</p>
             ) : (
-              (notificationsQuery.data?.items ?? []).map((notification) => (
-                <div key={notification.id} className="notif">
-                  <strong>{notification.title}</strong>
-                  {notification.body ? (
-                    <span className="muted small">{notification.body}</span>
-                  ) : null}
-                </div>
-              ))
+              items.map((notification) => {
+                // Read-all just fired above, but this render still holds the
+                // pre-read snapshot until the next refetch — which is exactly
+                // what lets "was unread when I opened this" stay visible for
+                // the one glance the user actually gets at it.
+                const wasUnread = !notification.readAt;
+                const KindIcon = NOTIFICATION_ICONS[notification.kind];
+                return (
+                  <div key={notification.id} className={clsx('notif', wasUnread && 'unread')}>
+                    <div className="notif-icon" aria-hidden>
+                      {notification.icon ?? <KindIcon size={15} />}
+                    </div>
+                    <div className="notif-body">
+                      <strong>{notification.title}</strong>
+                      {notification.body ? (
+                        <span className="muted small">{notification.body}</span>
+                      ) : null}
+                      <span className="muted small">{formatRelative(notification.createdAt)}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="icon-btn small-icon-btn"
+                      onClick={() => dismissMutation.mutate(notification.id)}
+                      aria-label={`Dismiss ${notification.title}`}
+                    >
+                      <X size={13} aria-hidden />
+                    </button>
+                  </div>
+                );
+              })
             )}
           </div>
         ) : null}

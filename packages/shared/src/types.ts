@@ -451,6 +451,8 @@ export interface NotificationInfo {
   body: string | null;
   /** Client route to open, e.g. `social/post/<id>` or `profile/<id>`. */
   link: string | null;
+  /** Custom emoji on an admin announcement; null falls back to a per-kind icon. */
+  icon: string | null;
   readAt: string | null;
   createdAt: string;
 }

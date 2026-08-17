@@ -341,4 +341,11 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     notifications.markAllRead(context.user.id);
     return { ok: true };
   });
+
+  app.delete('/notifications/:id', async (request) => {
+    const context = requireUser(request);
+    const { id } = request.params as { id: string };
+    notifications.delete(context.user.id, id);
+    return { ok: true };
+  });
 }
