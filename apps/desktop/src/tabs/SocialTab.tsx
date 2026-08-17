@@ -3,6 +3,7 @@ import type {
   FriendEntry,
   FriendRequests,
   MediaInfo,
+  Paginated,
   PostInfo,
   ProfileSummary,
   ReactionKind,
@@ -11,7 +12,17 @@ import { REACTIONS } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { open } from '@tauri-apps/plugin-dialog';
 import clsx from 'clsx';
-import { Check, ImagePlus, MessageSquare, Pencil, Search, Send, UserPlus, X } from 'lucide-react';
+import {
+  Check,
+  ImagePlus,
+  MessageSquare,
+  Pencil,
+  Search,
+  Send,
+  UserPlus,
+  Users,
+  X,
+} from 'lucide-react';
 import { useState } from 'react';
 import {
   Avatar,
@@ -36,9 +47,9 @@ const REACTION_GLYPHS: Record<ReactionKind, string> = {
   sad: '😢',
 };
 
-type Pane = 'feed' | 'friends';
+type Pane = 'feed' | 'friends' | 'members';
 
-export function SocialTab() {
+export function SocialTab({ onOpenProfile }: { onOpenProfile: (userId: string) => void }) {
   const [pane, setPane] = useState<Pane>('feed');
 
   return (
@@ -62,16 +73,31 @@ export function SocialTab() {
         >
           Friends
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === 'members'}
+          className={clsx('segment', pane === 'members' && 'active')}
+          onClick={() => setPane('members')}
+        >
+          Members
+        </button>
       </div>
 
-      {pane === 'feed' ? <Feed /> : <Friends />}
+      {pane === 'feed' ? (
+        <Feed onOpenProfile={onOpenProfile} />
+      ) : pane === 'friends' ? (
+        <Friends onOpenProfile={onOpenProfile} />
+      ) : (
+        <Members onOpenProfile={onOpenProfile} />
+      )}
     </div>
   );
 }
 
 /* --------------------------------------------------------------------- feed */
 
-function Feed() {
+function Feed({ onOpenProfile }: { onOpenProfile: (userId: string) => void }) {
   const queryClient = useQueryClient();
   const [scope, setScope] = useState<'friends' | 'everyone' | 'mine'>('friends');
   const [error, setError] = useState<string | null>(null);
@@ -120,7 +146,13 @@ function Feed() {
       ) : (
         <div className="feed">
           {(feedQuery.data ?? []).map((post) => (
-            <PostCard key={post.id} post={post} onChanged={refresh} onError={setError} />
+            <PostCard
+              key={post.id}
+              post={post}
+              onChanged={refresh}
+              onError={setError}
+              onOpenProfile={onOpenProfile}
+            />
           ))}
         </div>
       )}
@@ -225,14 +257,17 @@ function Composer({
   );
 }
 
-function PostCard({
+export function PostCard({
   post,
   onChanged,
   onError,
+  onOpenProfile,
 }: {
   post: PostInfo;
   onChanged: () => void;
   onError: (message: string) => void;
+  /** Omitted when the card already lives inside that author's own profile. */
+  onOpenProfile?: (userId: string) => void;
 }) {
   const [showComments, setShowComments] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -260,21 +295,28 @@ function PostCard({
   return (
     <article className="post">
       <header>
-        <Avatar
-          url={post.author.avatarUrl}
-          name={post.author.displayName}
-          accent={post.author.accentColor}
-          presence={post.author.presence}
-          size={38}
-        />
-        <div>
-          <strong>{post.author.displayName}</strong>
-          <span className="muted small">
-            {formatRelative(post.createdAt)}
-            {post.editedAt ? ' · edited' : ''}
-            {post.visibility === 'friends' ? ' · friends only' : ''}
+        <button
+          type="button"
+          className="post-author"
+          onClick={() => onOpenProfile?.(post.author.userId)}
+          disabled={!onOpenProfile}
+        >
+          <Avatar
+            url={post.author.avatarUrl}
+            name={post.author.displayName}
+            accent={post.author.accentColor}
+            presence={post.author.presence}
+            size={38}
+          />
+          <span>
+            <strong>{post.author.displayName}</strong>
+            <span className="muted small">
+              {formatRelative(post.createdAt)}
+              {post.editedAt ? ' · edited' : ''}
+              {post.visibility === 'friends' ? ' · friends only' : ''}
+            </span>
           </span>
-        </div>
+        </button>
         {post.canEdit ? (
           <div className="post-owner-actions">
             <button
@@ -524,7 +566,7 @@ function Comments({ postId, onError }: { postId: string; onError: (message: stri
 
 /* ------------------------------------------------------------------ friends */
 
-function Friends() {
+function Friends({ onOpenProfile }: { onOpenProfile: (userId: string) => void }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -597,16 +639,22 @@ function Friends() {
             <ul className="people">
               {(searchQuery.data ?? []).map((profile) => (
                 <li key={profile.userId}>
-                  <Avatar
-                    url={profile.avatarUrl}
-                    name={profile.displayName}
-                    accent={profile.accentColor}
-                    presence={profile.presence}
-                  />
-                  <span>
-                    <strong>{profile.displayName}</strong>
-                    <span className="muted small">@{profile.username}</span>
-                  </span>
+                  <button
+                    type="button"
+                    className="person-link"
+                    onClick={() => onOpenProfile(profile.userId)}
+                  >
+                    <Avatar
+                      url={profile.avatarUrl}
+                      name={profile.displayName}
+                      accent={profile.accentColor}
+                      presence={profile.presence}
+                    />
+                    <span>
+                      <strong>{profile.displayName}</strong>
+                      <span className="muted small">@{profile.username}</span>
+                    </span>
+                  </button>
                   <button
                     type="button"
                     className="btn btn-ghost"
@@ -628,16 +676,22 @@ function Friends() {
           <ul className="people">
             {incoming.map(({ profile, requestedAt }) => (
               <li key={profile.userId}>
-                <Avatar
-                  url={profile.avatarUrl}
-                  name={profile.displayName}
-                  accent={profile.accentColor}
-                  presence={profile.presence}
-                />
-                <span>
-                  <strong>{profile.displayName}</strong>
-                  <span className="muted small">asked {formatRelative(requestedAt)}</span>
-                </span>
+                <button
+                  type="button"
+                  className="person-link"
+                  onClick={() => onOpenProfile(profile.userId)}
+                >
+                  <Avatar
+                    url={profile.avatarUrl}
+                    name={profile.displayName}
+                    accent={profile.accentColor}
+                    presence={profile.presence}
+                  />
+                  <span>
+                    <strong>{profile.displayName}</strong>
+                    <span className="muted small">asked {formatRelative(requestedAt)}</span>
+                  </span>
+                </button>
                 <button
                   type="button"
                   className="btn btn-primary"
@@ -672,24 +726,30 @@ function Friends() {
           <ul className="people">
             {(friendsQuery.data ?? []).map(({ profile, sharedGameCount }) => (
               <li key={profile.userId}>
-                <Avatar
-                  url={profile.avatarUrl}
-                  name={profile.displayName}
-                  accent={profile.accentColor}
-                  presence={profile.presence}
-                  size={38}
-                />
-                <span>
-                  <strong>{profile.displayName}</strong>
-                  <span className="muted small">
-                    {profile.presence === 'in-game' && profile.playingGameTitle
-                      ? `Playing ${profile.playingGameTitle}`
-                      : profile.presence === 'online'
-                        ? 'Online'
-                        : 'Offline'}
-                    {sharedGameCount > 0 ? ` · ${sharedGameCount} games in common` : ''}
+                <button
+                  type="button"
+                  className="person-link"
+                  onClick={() => onOpenProfile(profile.userId)}
+                >
+                  <Avatar
+                    url={profile.avatarUrl}
+                    name={profile.displayName}
+                    accent={profile.accentColor}
+                    presence={profile.presence}
+                    size={38}
+                  />
+                  <span>
+                    <strong>{profile.displayName}</strong>
+                    <span className="muted small">
+                      {profile.presence === 'in-game' && profile.playingGameTitle
+                        ? `Playing ${profile.playingGameTitle}`
+                        : profile.presence === 'online'
+                          ? 'Online'
+                          : 'Offline'}
+                      {sharedGameCount > 0 ? ` · ${sharedGameCount} games in common` : ''}
+                    </span>
                   </span>
-                </span>
+                </button>
                 <button
                   type="button"
                   className="icon-btn"
@@ -709,6 +769,101 @@ function Friends() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ members */
+
+const MEMBERS_PAGE_SIZE = 30;
+
+function Members({ onOpenProfile }: { onOpenProfile: (userId: string) => void }) {
+  const [search, setSearch] = useState('');
+  const [offset, setOffset] = useState(0);
+
+  const membersQuery = useQuery({
+    queryKey: ['members', search, offset],
+    queryFn: () =>
+      ipc.get<Paginated<ProfileSummary>>(
+        `/members${queryString({ query: search || undefined, offset, limit: MEMBERS_PAGE_SIZE })}`,
+      ),
+    placeholderData: (previous) => previous,
+  });
+
+  const members = membersQuery.data?.items ?? [];
+  const total = membersQuery.data?.total ?? 0;
+  const hasMore = offset + members.length < total;
+
+  return (
+    <>
+      <div className="search-box wide">
+        <Search size={15} aria-hidden />
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setOffset(0);
+          }}
+          placeholder="Find a member by username…"
+          aria-label="Find a member by username"
+        />
+      </div>
+
+      <section>
+        <SectionHeader
+          title="Members"
+          subtitle={total > 0 ? `${total} on this server` : undefined}
+        />
+        {membersQuery.isLoading ? (
+          <Loading label="Loading members" />
+        ) : members.length === 0 ? (
+          <Empty title="Nobody found" message="Try a different search." />
+        ) : (
+          <>
+            <ul className="people">
+              {members.map((profile) => (
+                <li key={profile.userId}>
+                  <button
+                    type="button"
+                    className="person-link"
+                    onClick={() => onOpenProfile(profile.userId)}
+                  >
+                    <Avatar
+                      url={profile.avatarUrl}
+                      name={profile.displayName}
+                      accent={profile.accentColor}
+                      presence={profile.presence}
+                    />
+                    <span>
+                      <strong>{profile.displayName}</strong>
+                      <span className="muted small">
+                        {profile.presence === 'in-game' && profile.playingGameTitle
+                          ? `Playing ${profile.playingGameTitle}`
+                          : profile.presence === 'online'
+                            ? 'Online'
+                            : `@${profile.username}`}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+
+            {hasMore ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setOffset((current) => current + MEMBERS_PAGE_SIZE)}
+                disabled={membersQuery.isFetching}
+              >
+                <Users size={14} aria-hidden />
+                Show more
+              </button>
+            ) : null}
+          </>
         )}
       </section>
     </>

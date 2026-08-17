@@ -15,10 +15,12 @@ export function FriendsRail({
   collapsed,
   onToggle,
   onOpenSocial,
+  onOpenProfile,
 }: {
   collapsed: boolean;
   onToggle: () => void;
   onOpenSocial: () => void;
+  onOpenProfile: (userId: string) => void;
 }) {
   const friendsQuery = useQuery({
     queryKey: ['friends', 'list'],
@@ -70,13 +72,21 @@ export function FriendsRail({
         ) : (
           <>
             {online.map((entry) => (
-              <FriendRow key={entry.profile.userId} entry={entry} onClick={onOpenSocial} />
+              <FriendRow
+                key={entry.profile.userId}
+                entry={entry}
+                onClick={() => onOpenProfile(entry.profile.userId)}
+              />
             ))}
             {offline.length > 0 ? (
               <p className="friends-rail-divider muted small">Offline — {offline.length}</p>
             ) : null}
             {offline.map((entry) => (
-              <FriendRow key={entry.profile.userId} entry={entry} onClick={onOpenSocial} />
+              <FriendRow
+                key={entry.profile.userId}
+                entry={entry}
+                onClick={() => onOpenProfile(entry.profile.userId)}
+              />
             ))}
           </>
         )}

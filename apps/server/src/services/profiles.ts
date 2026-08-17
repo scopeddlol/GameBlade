@@ -1,5 +1,7 @@
 import type {
   FriendshipView,
+  MemberQuery,
+  Paginated,
   ProfileDetail,
   ProfileSummary,
   UpdateProfileInput,
@@ -280,6 +282,56 @@ export class ProfileService {
         )
         .map((row) => this.summarize(row, { viewerId, areFriends: friends.has(row.userId) }))
     );
+  }
+
+  /**
+   * Every member on the server, for the browsable list rather than the
+   * "add a friend" box. A private profile is unlisted here — it never shows
+   * up unless the viewer already knows its exact username, which this does
+   * not accept — so browsing never doubles as a way to find someone who
+   * opted out of being found.
+   */
+  listMembers(viewerId: string, options: MemberQuery): Paginated<ProfileSummary> {
+    const pattern = options.query ? `%${options.query.replace(/[%_]/g, '')}%` : null;
+    const conditions = [eq(users.isActive, true), sql`${userProfiles.visibility} != 'private'`];
+    if (pattern) {
+      conditions.push(
+        sql`(${users.username} LIKE ${pattern} OR ${userProfiles.displayName} LIKE ${pattern})`,
+      );
+    }
+    const where = and(...conditions);
+
+    const totalRow = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(userProfiles)
+      .innerJoin(users, eq(users.id, userProfiles.userId))
+      .where(where)
+      .get();
+
+    const rows = this.db
+      .select({
+        userId: userProfiles.userId,
+        username: users.username,
+        displayName: userProfiles.displayName,
+        avatarMediaId: userProfiles.avatarMediaId,
+        accentColor: userProfiles.accentColor,
+        visibility: userProfiles.visibility,
+        showActivity: userProfiles.showActivity,
+      })
+      .from(userProfiles)
+      .innerJoin(users, eq(users.id, userProfiles.userId))
+      .where(where)
+      .orderBy(userProfiles.displayName)
+      .limit(options.limit)
+      .offset(options.offset)
+      .all();
+
+    const friends = this.friendIds(viewerId);
+    const items = rows.map((row) =>
+      this.summarize(row, { viewerId, areFriends: friends.has(row.userId) }),
+    );
+
+    return { items, total: totalRow?.count ?? 0, offset: options.offset, limit: options.limit };
   }
 
   private friendshipView(viewerId: string, otherId: string): FriendshipView | null {

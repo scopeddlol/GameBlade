@@ -6,6 +6,7 @@ import {
   feedQuerySchema,
   friendRequestSchema,
   friendSearchSchema,
+  memberQuerySchema,
   reactionSchema,
   updatePostSchema,
   updateProfileSchema,
@@ -85,6 +86,13 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     const context = requireUser(request);
     const input = friendSearchSchema.parse(request.query);
     return profiles.search(input.query, context.user.id, input.limit);
+  });
+
+  /** The browsable member list, as opposed to the by-name search above. */
+  app.get('/members', async (request) => {
+    const context = requireUser(request);
+    const input = memberQuerySchema.parse(request.query);
+    return profiles.listMembers(context.user.id, input);
   });
 
   /* ------------------------------------------------------------ friends */

@@ -282,6 +282,14 @@ export interface FriendshipView {
   since: string;
 }
 
+/** The public-facing view of a profile: detail plus a slice of their activity. */
+export interface ProfileShowcase {
+  profile: ProfileDetail;
+  posts: PostInfo[];
+  topGames: PlaytimeEntry[];
+  recentAchievements: AchievementProgress[];
+}
+
 export interface FriendEntry {
   profile: ProfileSummary;
   friendsSince: string;

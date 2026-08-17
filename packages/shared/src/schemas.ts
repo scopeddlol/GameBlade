@@ -156,6 +156,14 @@ export const friendSearchSchema = z.object({
 });
 export type FriendSearchInput = z.infer<typeof friendSearchSchema>;
 
+/** Browsing every member on the server, rather than searching for one by name. */
+export const memberQuerySchema = z.object({
+  query: z.string().trim().max(64).optional(),
+  offset: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(60).default(30),
+});
+export type MemberQuery = z.infer<typeof memberQuerySchema>;
+
 /* -------------------------------------------------------------------- social */
 
 export const createPostSchema = z

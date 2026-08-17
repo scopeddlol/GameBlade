@@ -31,6 +31,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { DownloadQueue } from './components/DownloadQueue.js';
 import { FriendsRail } from './components/FriendsRail.js';
+import { ProfileDrawer } from './components/ProfileDrawer.js';
 import { TitleBar } from './components/TitleBar.js';
 import { GameDetailPanel } from './components/GameDetail.js';
 import { Avatar, Loading } from './components/ui.js';
@@ -96,6 +97,7 @@ function Shell() {
   const [showDownloads, setShowDownloads] = useState(false);
   const [downloads, setDownloads] = useState<DownloadState[]>([]);
   const [friendsCollapsed, setFriendsCollapsed] = useState(false);
+  const [profileId, setProfileId] = useState<string | null>(null);
 
   const installedQuery = useQuery({
     queryKey: ['installed'],
@@ -203,7 +205,7 @@ function Shell() {
             <LibraryTab onOpenGame={openGame} installed={installed} running={running} />
           ) : null}
           {tab === 'store' ? <StoreTab onOpenGame={openGame} /> : null}
-          {tab === 'social' ? <SocialTab /> : null}
+          {tab === 'social' ? <SocialTab onOpenProfile={setProfileId} /> : null}
           {tab === 'settings' ? <SettingsTab /> : null}
         </div>
       </div>
@@ -213,8 +215,11 @@ function Shell() {
           collapsed={friendsCollapsed}
           onToggle={() => setFriendsCollapsed((current) => !current)}
           onOpenSocial={() => setTab('social')}
+          onOpenProfile={setProfileId}
         />
       )}
+
+      {profileId ? <ProfileDrawer userId={profileId} onClose={() => setProfileId(null)} /> : null}
 
       {openGameId ? (
         <GameDetailPanel
