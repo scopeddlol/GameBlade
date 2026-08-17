@@ -71,7 +71,7 @@ export function LoginPage() {
   return (
     <AuthShell
       title={status?.serverName ?? 'GameBlade'}
-      subtitle="Sign in to manage this server"
+      subtitle="Sign in to your account"
       footer={
         status?.allowSelfRegistration ? (
           <>

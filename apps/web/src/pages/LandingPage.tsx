@@ -5,7 +5,6 @@ import {
   CloudUpload,
   Download,
   Gamepad2,
-  Github,
   MonitorDown,
   Sparkles,
   Swords,
@@ -20,9 +19,11 @@ import { api } from '../lib/api.js';
  * The public face of the server.
  *
  * This is the only page an unauthenticated visitor ever sees. It exists to
- * explain what the server is and hand over the Windows client — the library
- * itself lives entirely in the desktop app, so there is deliberately nothing
- * to browse here.
+ * sell the desktop client, not to explain how the thing behind it runs —
+ * everyone who reaches this page is a member of one specific instance, not a
+ * prospective operator of their own, so the copy speaks to what they get
+ * rather than how it's hosted. The library itself lives entirely in the
+ * desktop app, so there is deliberately nothing to browse here.
  */
 export function LandingPage() {
   const infoQuery = useQuery({
@@ -65,20 +66,11 @@ export function LandingPage() {
       </main>
 
       <footer className="border-ink-800/80 border-t">
-        <div className="text-ink-400 mx-auto flex max-w-6xl flex-col gap-2 px-5 py-8 text-sm sm:flex-row sm:items-center">
+        <div className="text-ink-400 mx-auto max-w-6xl px-5 py-8 text-sm">
           <p>
-            {serverName} · a private, invite-only archive. Free, and always will be — there is
-            nothing here to sell.
+            {serverName} · a private members' library. Free, and always will be — there is nothing
+            here to sell.
           </p>
-          <a
-            href="https://github.com/scopeddlol/GameBlade"
-            className="hover:text-ink-200 inline-flex items-center gap-1.5 sm:ml-auto"
-            rel="noreferrer noopener"
-            target="_blank"
-          >
-            <Github className="h-4 w-4" aria-hidden />
-            Source
-          </a>
         </div>
       </footer>
     </div>
@@ -103,7 +95,7 @@ function Hero({ info, serverName }: { info?: PublicServerInfo; serverName: strin
       <div className="relative mx-auto max-w-6xl px-5 pt-20 pb-24 sm:pt-28">
         <p className="border-ink-700 bg-ink-850/70 text-ink-300 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium">
           <Sparkles className="text-blade-400 h-3.5 w-3.5" aria-hidden />
-          Invite-only · self-hosted · no accounts to buy
+          Members only · nothing to buy, ever
         </p>
 
         <h1 className="mt-6 max-w-3xl text-4xl leading-[1.1] font-semibold tracking-tight text-balance sm:text-6xl">
@@ -135,7 +127,7 @@ function Hero({ info, serverName }: { info?: PublicServerInfo; serverName: strin
           )}
 
           <Link to="/login" className="gb-btn-ghost px-5 py-2.5 text-base">
-            Sign in to the admin panel
+            Already a member? Sign in
           </Link>
         </div>
 
@@ -198,11 +190,11 @@ function Features() {
     <section className="border-ink-800/80 border-t">
       <div className="mx-auto max-w-6xl px-5 py-20">
         <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-          Built like a storefront, run like a library
+          Everything a storefront has. None of what makes it one.
         </h2>
         <p className="text-ink-300 mt-3 max-w-2xl">
-          Everything you would expect from a modern game client, pointed at an archive you control
-          instead of a shop.
+          A store, a library and a friends list, all in one fast Windows client — without the
+          price tag, the ads, or someone else deciding what disappears next.
         </p>
 
         <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
@@ -229,28 +221,28 @@ function Preservation() {
       <div className="mx-auto grid max-w-6xl gap-10 px-5 py-20 lg:grid-cols-2 lg:gap-16">
         <div>
           <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-            This is about keeping things
+            Built to last, not to expire
           </h2>
           <div className="text-ink-300 mt-5 space-y-4 leading-relaxed">
             <p>
-              Free-to-play games get delisted. Servers shut down. Installers disappear from the web
-              and take a decade of someone&rsquo;s work with them. DRM-free copies are the ones that
-              survive that — but only if somebody is actually keeping them.
+              Free-to-play games get delisted. Servers shut down. Installers vanish from the web and
+              take years of someone&rsquo;s work with them. The copies that survive that are the ones
+              somebody actually kept — curated and cared for, not just downloaded and forgotten.
             </p>
             <p>
-              GameBlade is the software for doing exactly that: a server that holds the files, and a
-              client that makes playing them feel current rather than archaeological.
+              That&rsquo;s this library. Every title here is matched against real metadata and kept
+              playable, so it still feels current instead of archaeological a decade from now.
             </p>
             <p className="text-ink-200">
-              Nobody is charged for anything. There is no tier, no upsell and no telemetry. The
-              server is run by one person for a small number of invited people, and the code is open
-              so you can run your own.
+              You&rsquo;re not charged for anything — not now, not later. No tiers, no upsells, no
+              telemetry watching what you play. Just an invite, a client, and a library that&rsquo;s
+              actually yours to come back to.
             </p>
           </div>
         </div>
 
         <div className="gb-card space-y-5 p-7">
-          <h3 className="text-sm font-semibold tracking-wide uppercase">What is kept here</h3>
+          <h3 className="text-sm font-semibold tracking-wide uppercase">What&rsquo;s in the library</h3>
           <ul className="space-y-4 text-sm">
             <Bullet title="Free-to-play games">
               Titles that were given away and could be pulled at any time.
@@ -263,8 +255,8 @@ function Preservation() {
             </Bullet>
           </ul>
           <p className="text-ink-400 border-ink-800 border-t pt-4 text-xs leading-relaxed">
-            Nothing that requires a licence to play belongs on this server, and access is by invite
-            only.
+            Nothing that requires a licence to play belongs in this library, and access is by
+            invite only.
           </p>
         </div>
       </div>
