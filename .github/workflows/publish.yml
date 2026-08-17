@@ -7,12 +7,24 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Cut a release at this version, e.g. 0.2.0. Leave blank to only refresh latest.'
+        description: 'Cut a release at this version, e.g. 0.3.0. Leave blank to only refresh latest.'
         required: false
         type: string
+      platforms:
+        description: 'Server image architectures. arm64 is emulated and adds ~15 minutes.'
+        required: false
+        default: linux/amd64
+        type: choice
+        options:
+          - linux/amd64
+          - linux/amd64,linux/arm64
 
+# A versioned release gets its own lane. Sharing one group with ordinary pushes
+# meant a release queued behind whatever was already building, and GitHub
+# cancels a *queued* run when a newer one joins the same group — so a release
+# could be silently killed before it started, which is exactly what happened.
 concurrency:
-  group: publish-${{ github.ref }}
+  group: publish-${{ github.ref }}-${{ inputs.version || 'branch' }}
   cancel-in-progress: false
 
 env:
@@ -59,8 +71,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          # arm64 covers a Raspberry Pi or an Ampere VPS as well as x86 servers.
-          platforms: linux/amd64,linux/arm64
+          # amd64 by default. There is no arm64 runner here, so that half is
+          # built under QEMU — and better-sqlite3 has no musl prebuild, so an
+          # emulated build compiles SQLite from source and takes ~15 minutes
+          # instead of ~1. Nobody asked for arm64; it is opt-in for the run that
+          # actually needs a Pi or an Ampere image.
+          platforms: ${{ inputs.platforms || 'linux/amd64' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
