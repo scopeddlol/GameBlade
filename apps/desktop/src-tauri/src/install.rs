@@ -51,7 +51,10 @@ impl InstallManager {
     pub async fn list(&self) -> Vec<InstalledGame> {
         let registry = self.registry.read().await;
         let mut games: Vec<_> = registry.games.values().cloned().collect();
-        games.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        // Cached rather than `sort_by_key`: the key allocates a String, and
+        // `sort_by_key` would rebuild it on every comparison instead of once
+        // per game.
+        games.sort_by_cached_key(|game| game.title.to_lowercase());
         games
     }
 
