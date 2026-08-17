@@ -151,6 +151,70 @@ export function Badge({
   return <span className={clsx('badge', tone)}>{children}</span>;
 }
 
+/** A centered dialog, for anything that should not be a native browser confirm. */
+export function Modal({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2>{title}</h2>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function ConfirmDialog({
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  danger = true,
+  pending = false,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  danger?: boolean;
+  pending?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Modal title={title} onClose={onCancel}>
+      <p>{message}</p>
+      <div className="modal-actions">
+        <button type="button" className="btn btn-ghost" onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={clsx('btn', danger ? 'btn-danger' : 'btn-primary')}
+          onClick={onConfirm}
+          disabled={pending}
+        >
+          {pending ? <Spinner className="h-4 w-4" /> : null}
+          {confirmLabel}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 export function ProgressBar({ value }: { value: number }) {
   const clamped = Math.max(0, Math.min(100, value));
   return (

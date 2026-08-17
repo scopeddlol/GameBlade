@@ -11,9 +11,18 @@ import { REACTIONS } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { open } from '@tauri-apps/plugin-dialog';
 import clsx from 'clsx';
-import { Check, ImagePlus, MessageSquare, Search, Send, UserPlus, X } from 'lucide-react';
+import { Check, ImagePlus, MessageSquare, Pencil, Search, Send, UserPlus, X } from 'lucide-react';
 import { useState } from 'react';
-import { Avatar, Badge, Empty, ErrorNote, Loading, SectionHeader } from '../components/ui.js';
+import {
+  Avatar,
+  Badge,
+  ConfirmDialog,
+  Empty,
+  ErrorNote,
+  Loading,
+  Modal,
+  SectionHeader,
+} from '../components/ui.js';
 import { useArtwork } from '../hooks/useArtwork.js';
 import { formatRelative } from '../lib/format.js';
 import { errorMessage, ipc, queryString } from '../lib/ipc.js';
@@ -226,6 +235,8 @@ function PostCard({
   onError: (message: string) => void;
 }) {
   const [showComments, setShowComments] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const reactMutation = useMutation({
     mutationFn: (reaction: ReactionKind | null) =>
@@ -236,8 +247,14 @@ function PostCard({
 
   const deleteMutation = useMutation({
     mutationFn: () => ipc.del(`/posts/${post.id}`),
-    onSuccess: onChanged,
-    onError: (caught) => onError(errorMessage(caught)),
+    onSuccess: () => {
+      setConfirmingDelete(false);
+      onChanged();
+    },
+    onError: (caught) => {
+      setConfirmingDelete(false);
+      onError(errorMessage(caught));
+    },
   });
 
   return (
@@ -259,14 +276,24 @@ function PostCard({
           </span>
         </div>
         {post.canEdit ? (
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={() => deleteMutation.mutate()}
-            aria-label="Delete post"
-          >
-            <X size={15} aria-hidden />
-          </button>
+          <div className="post-owner-actions">
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setEditing(true)}
+              aria-label="Edit post"
+            >
+              <Pencil size={14} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setConfirmingDelete(true)}
+              aria-label="Delete post"
+            >
+              <X size={15} aria-hidden />
+            </button>
+          </div>
         ) : null}
       </header>
 
@@ -332,7 +359,86 @@ function PostCard({
       </footer>
 
       {showComments ? <Comments postId={post.id} onError={onError} /> : null}
+
+      {editing ? (
+        <EditPostDialog
+          post={post}
+          onClose={() => setEditing(false)}
+          onSaved={() => {
+            setEditing(false);
+            onChanged();
+          }}
+          onError={onError}
+        />
+      ) : null}
+
+      {confirmingDelete ? (
+        <ConfirmDialog
+          title="Delete post?"
+          message="This removes it for everyone, along with its comments and reactions. This cannot be undone."
+          confirmLabel="Delete"
+          pending={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate()}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      ) : null}
     </article>
+  );
+}
+
+function EditPostDialog({
+  post,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  post: PostInfo;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (message: string) => void;
+}) {
+  const [body, setBody] = useState(post.body ?? '');
+  const [visibility, setVisibility] = useState<'friends' | 'public'>(
+    post.visibility === 'public' ? 'public' : 'friends',
+  );
+
+  const saveMutation = useMutation({
+    mutationFn: () => ipc.patch(`/posts/${post.id}`, { body, visibility }),
+    onSuccess: onSaved,
+    onError: (caught) => onError(errorMessage(caught)),
+  });
+
+  return (
+    <Modal title="Edit post" onClose={onClose}>
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        rows={4}
+        aria-label="Edit post text"
+      />
+      <select
+        className="select"
+        value={visibility}
+        onChange={(e) => setVisibility(e.target.value as 'friends' | 'public')}
+        aria-label="Who can see this"
+      >
+        <option value="friends">Friends only</option>
+        <option value="public">Everyone</option>
+      </select>
+      <div className="modal-actions">
+        <button type="button" className="btn btn-ghost" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => saveMutation.mutate()}
+          disabled={!body.trim() || saveMutation.isPending}
+        >
+          Save
+        </button>
+      </div>
+    </Modal>
   );
 }
 

@@ -1332,6 +1332,10 @@ textarea:focus {
 .post h3 {
   font-size: 15px;
 }
+.post-owner-actions {
+  display: flex;
+  gap: 2px;
+}
 .post-body {
   margin: 0;
   font-size: 13.5px;
@@ -1678,6 +1682,49 @@ textarea:focus {
   gap: 1px;
   text-align: left;
   color: var(--ink-100);
+}
+
+/* ------------------------------------------------------------------ modal */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.modal {
+  width: min(440px, 100%);
+  background: var(--ink-900);
+  border: 1px solid var(--ink-700);
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.modal h2 {
+  font-size: 16px;
+}
+.modal p {
+  color: var(--ink-300);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.modal textarea,
+.modal .select {
+  width: 100%;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 /* --------------------------------------------------------------- sign-in */
