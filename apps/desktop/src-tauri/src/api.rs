@@ -126,6 +126,107 @@ impl ApiClient {
         Ok(response.json().await?)
     }
 
+    pub async fn post_json(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> AppResult<serde_json::Value> {
+        let request = self.authorised(self.http.post(self.endpoint(path)).json(body))?;
+        let response = check_status(request.send().await?).await?;
+        // Some endpoints answer with an empty body; treat that as null rather
+        // than as a malformed response.
+        let text = response.text().await?;
+        if text.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    pub async fn put_json(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> AppResult<serde_json::Value> {
+        let request = self.authorised(self.http.put(self.endpoint(path)).json(body))?;
+        let response = check_status(request.send().await?).await?;
+        let text = response.text().await?;
+        if text.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    pub async fn delete_json(&self, path: &str) -> AppResult<serde_json::Value> {
+        let request = self.authorised(self.http.delete(self.endpoint(path)))?;
+        let response = check_status(request.send().await?).await?;
+        let text = response.text().await?;
+        if text.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    /// Uploads a file as a raw body. Used for cloud saves and social uploads,
+    /// both of which stream rather than being buffered into a multipart form.
+    pub async fn upload_file(
+        &self,
+        path: &str,
+        file: &std::path::Path,
+        content_type: &str,
+    ) -> AppResult<serde_json::Value> {
+        let handle = tokio::fs::File::open(file).await?;
+        let length = handle.metadata().await?.len();
+        // Streamed rather than read into memory: a save archive or a gameplay
+        // clip can be hundreds of megabytes.
+        let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(handle));
+
+        let request = self.authorised(
+            self.http
+                .post(self.endpoint(path))
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .header(reqwest::header::CONTENT_LENGTH, length)
+                .body(body),
+        )?;
+
+        let response = check_status(request.send().await?).await?;
+        let text = response.text().await?;
+        if text.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    /// Downloads to a path, returning the SHA-256 the server declared for it.
+    pub async fn download_file(
+        &self,
+        path: &str,
+        target: &std::path::Path,
+    ) -> AppResult<Option<String>> {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+
+        let request = self.authorised(self.http.get(self.endpoint(path)))?;
+        let response = check_status(request.send().await?).await?;
+
+        let declared = response
+            .headers()
+            .get("x-gameblade-sha256")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+
+        if let Some(parent) = target.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let mut file = tokio::fs::File::create(target).await?;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            file.write_all(&chunk?).await?;
+        }
+        file.flush().await?;
+
+        Ok(declared)
+    }
+
     pub async fn manifest(&self, game_id: &str) -> AppResult<DownloadManifest> {
         let request = self.authorised(
             self.http
