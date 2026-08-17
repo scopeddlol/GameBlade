@@ -167,6 +167,21 @@ jobs:
           # lowercases before pushing, so the notes must do the same to match
           # what actually exists in the registry.
           echo "image=${REGISTRY}/${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+
+          # target_commitish only means anything while the tag is still being
+          # created. Handing it a *different* commit for a tag that already
+          # exists asks GitHub to move a published release, which the releases
+          # API will not do; action-gh-release then falls back to looking the
+          # release up by GITHUB_REF — a branch ref on a dispatch — and dies on
+          # "No server is currently available to service your request". So the
+          # commit is passed only when the tag is genuinely new, which lets a
+          # re-dispatch correct an existing release's notes or assets in place.
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "existing tag $tag found; leaving its commit alone"
+            echo "commitish=" >> "$GITHUB_OUTPUT"
+          else
+            echo "commitish=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
         env:
           REGISTRY: ${{ env.REGISTRY }}
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
@@ -177,7 +192,8 @@ jobs:
           # Created from the current commit when it does not already exist.
           tag_name: ${{ steps.tag.outputs.name }}
           name: GameBlade ${{ steps.tag.outputs.name }}
-          target_commitish: ${{ github.sha }}
+          # Empty for a tag that already exists; see the resolve step above.
+          target_commitish: ${{ steps.tag.outputs.commitish }}
           draft: false
           generate_release_notes: true
           # upload-artifact roots the archive at the least common ancestor of
