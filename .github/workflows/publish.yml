@@ -5,6 +5,11 @@ on:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Cut a release at this version, e.g. 0.2.0. Leave blank to only refresh latest.'
+        required: false
+        type: string
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -47,6 +52,8 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
+            # A manually dispatched release has no tag ref for semver to read.
+            type=raw,value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.version != '' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -101,9 +108,13 @@ jobs:
 
   release:
     name: Publish the release
-    # Only a version tag produces a public release; a main push just refreshes
-    # `latest` and leaves the installers as artifacts.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # A public release comes from either a version tag or an explicit dispatch;
+    # a plain main push just refreshes `latest` and leaves installers as
+    # artifacts. The dispatch path exists because some environments cannot push
+    # tag refs, and the release is then what creates the tag.
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.version != '')
     needs: [image, desktop]
     runs-on: ubuntu-latest
     permissions:
@@ -117,9 +128,22 @@ jobs:
           name: gameblade-windows-installers
           path: installers
 
+      - name: Resolve the release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
+          # Created from the current commit when it does not already exist.
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: GameBlade ${{ steps.tag.outputs.name }}
+          target_commitish: ${{ github.sha }}
           draft: false
           generate_release_notes: true
           files: |
@@ -131,7 +155,7 @@ jobs:
             **Server** — pull the image and follow the quick start in the README:
 
             ```
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.name }}
             ```
 
             The image is published for `linux/amd64` and `linux/arm64`.
