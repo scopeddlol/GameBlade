@@ -151,10 +151,25 @@ jobs:
         id: tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "name=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            tag="v${{ inputs.version }}"
           else
-            echo "name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            tag="${{ github.ref_name }}"
           fi
+          echo "name=$tag" >> "$GITHUB_OUTPUT"
+
+          # The git tag carries a leading v; the image tag does not, because
+          # metadata-action's {{version}} strips it. Quoting the wrong one in
+          # the release notes hands people a `docker pull` that 404s.
+          echo "image_tag=${tag#v}" >> "$GITHUB_OUTPUT"
+
+          # Docker refuses a repository name with uppercase in it, and
+          # github.repository preserves the repo's casing. metadata-action
+          # lowercases before pushing, so the notes must do the same to match
+          # what actually exists in the registry.
+          echo "image=${REGISTRY}/${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
 
       - name: Publish
         uses: softprops/action-gh-release@v2
@@ -181,14 +196,15 @@ jobs:
             **Server** — pull the image and follow the quick start in the README:
 
             ```
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.name }}
+            docker pull ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.image_tag }}
             ```
 
-            The image is published for `linux/amd64` and `linux/arm64`.
+            Architectures in this build: `${{ inputs.platforms || 'linux/amd64' }}`.
 
             **Windows client** — download the `.exe` installer below. The `.msi`
             is there for deployment tooling; the `.exe` is what most people want.
 
-            Point the client at your server address and sign in with the account
-            an invite created. After installing, set the client download URL in
-            **Admin → Settings** so the landing page links this release.
+            The client connects to `archive.scopedd.lol` and no other server;
+            just sign in with the account an invite created. After installing,
+            set the client download URL in **Admin → Settings** so the landing
+            page links this release.
