@@ -1,7 +1,8 @@
 import type { FeaturedEntry, GameSummary, Paginated } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Images, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
+import { ArtworkPicker } from '../../components/ArtworkPicker.js';
 import { Badge, EmptyState, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
 import { api, ApiRequestError, queryString } from '../../lib/api.js';
 
@@ -58,6 +59,19 @@ export function AdminFeaturedPage() {
   const reorderMutation = useMutation({
     mutationFn: (ids: string[]) => api.post('/admin/featured/reorder', { ids }),
     onSuccess: invalidate,
+  });
+
+  const artworkMutation = useMutation({
+    mutationFn: ({ id, url }: { id: string; url: string | null }) =>
+      api.put(`/admin/featured/${id}/artwork`, { url }),
+    onSuccess: () => {
+      setError(null);
+      void invalidate();
+    },
+    onError: (caught) =>
+      setError(
+        caught instanceof ApiRequestError ? caught.message : 'Could not set the featured image.',
+      ),
   });
 
   const entries = featuredQuery.data ?? [];
@@ -136,6 +150,7 @@ export function AdminFeaturedPage() {
               onMoveDown={() => move(index, 1)}
               onRemove={() => removeMutation.mutate(entry.id)}
               onSave={(patch) => upsertMutation.mutate({ gameId: entry.game.id, ...patch })}
+              onSetArtwork={(url) => artworkMutation.mutate({ id: entry.id, url })}
             />
           ))}
         </div>
@@ -152,6 +167,7 @@ function FeaturedRow({
   onMoveDown,
   onRemove,
   onSave,
+  onSetArtwork,
 }: {
   entry: FeaturedEntry;
   isFirst: boolean;
@@ -160,17 +176,38 @@ function FeaturedRow({
   onMoveDown: () => void;
   onRemove: () => void;
   onSave: (patch: { headline: string | null; blurb: string | null; active: boolean }) => void;
+  onSetArtwork: (url: string | null) => void;
 }) {
   const [headline, setHeadline] = useState(entry.headline ?? '');
   const [blurb, setBlurb] = useState(entry.blurb ?? '');
+  const [picking, setPicking] = useState(false);
 
   return (
     <section className="gb-card overflow-hidden">
       {entry.heroUrl ? (
         <img src={entry.heroUrl} alt="" className="h-28 w-full object-cover" loading="lazy" />
-      ) : null}
+      ) : (
+        <div className="border-ink-700 text-ink-500 flex h-28 w-full items-center justify-center border-b border-dashed text-xs">
+          No image — the carousel will show a blank slot
+        </div>
+      )}
 
       <div className="space-y-3 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-ink-400 text-xs">
+            {entry.hasHeroOverride ? 'Using a hand-picked image' : "Using the game's own hero art"}
+          </span>
+          <button type="button" className="gb-btn-ghost ml-auto" onClick={() => setPicking(true)}>
+            <Images className="h-4 w-4" aria-hidden />
+            Browse gallery
+          </button>
+          {entry.hasHeroOverride ? (
+            <button type="button" className="gb-btn-ghost" onClick={() => onSetArtwork(null)}>
+              Use the game&rsquo;s art
+            </button>
+          ) : null}
+        </div>
+
         <div className="flex items-center gap-2">
           <h3 className="min-w-0 flex-1 truncate font-medium">{entry.game.title}</h3>
           <button
@@ -224,6 +261,17 @@ function FeaturedRow({
           Save
         </button>
       </div>
+
+      {picking ? (
+        <ArtworkPicker
+          gameId={entry.game.id}
+          title={entry.game.title}
+          kind="hero"
+          heading="Featured image"
+          onClose={() => setPicking(false)}
+          onChoose={(url) => onSetArtwork(url)}
+        />
+      ) : null}
     </section>
   );
 }

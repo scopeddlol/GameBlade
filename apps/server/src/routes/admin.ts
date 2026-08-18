@@ -3,7 +3,9 @@ import {
   announcementSchema,
   createInviteSchema,
   createLibrarySchema,
+  featuredArtworkSchema,
   featuredSchema,
+  MAX_INSTALLER_BYTES,
   importAchievementsSchema,
   providerSettingsSchema,
   purgeMissingSchema,
@@ -11,6 +13,7 @@ import {
   scanRequestSchema,
   updateLibrarySchema,
   updateUserSchema,
+  type ClientInstallerInfo,
   type InviteInfo,
   type LibraryInfo,
   type PublicUser,
@@ -40,6 +43,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     notifications,
     profiles,
     presence,
+    images,
+    installer,
   } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
@@ -394,6 +399,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       igdbClientSecretSet: Boolean(current.igdbClientSecret),
       steamGridDbKeySet: Boolean(current.steamGridDbKey),
       steamApiKeySet: Boolean(current.steamApiKey),
+      installer: installer.info(),
     };
   }
 
@@ -421,6 +427,43 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/admin/settings/test-providers', async () => metadata.checkHealth());
 
+  // ---- The Windows client installer ----
+
+  /**
+   * Uploads the installer as a raw body, streamed to disk.
+   *
+   * The file name rides in the query string rather than the body because there
+   * is no multipart parser here: a build is hundreds of megabytes, and
+   * buffering one through a form parser to recover a single string would cost
+   * the whole file in memory.
+   */
+  app.post(
+    '/admin/client-installer',
+    { bodyLimit: MAX_INSTALLER_BYTES },
+    async (request, reply) => {
+      const { fileName } = request.query as { fileName?: string };
+      if (!fileName?.trim()) {
+        throw ApiError.badRequest('Include the installer file name as ?fileName=');
+      }
+
+      const body: ClientInstallerInfo = await installer.store(
+        {
+          fileName,
+          contentType: request.headers['content-type'] ?? 'application/octet-stream',
+        },
+        request.raw,
+        MAX_INSTALLER_BYTES,
+      );
+
+      return reply.code(201).send(body);
+    },
+  );
+
+  app.delete('/admin/client-installer', async () => {
+    await installer.remove();
+    return { ok: true };
+  });
+
   // ---- Overview ----
 
   app.get('/admin/stats', async () => {
@@ -445,6 +488,9 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       totalBytes: gameStats?.totalBytes ?? 0,
       matched: gameStats?.matched ?? 0,
       missing: gameStats?.missing ?? 0,
+      // What still needs a human: no launch executable, no save rule, no art.
+      // The catalog page renders these as counts on its filter chips.
+      gaps: catalog.gapCounts(),
       users: userCount,
       libraries:
         db
@@ -483,6 +529,24 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     catalog.removeFeatured(id);
     return { ok: true };
+  });
+
+  /**
+   * Overrides the hero image behind one carousel slot, or clears the override
+   * so the game's own hero art shows through again.
+   */
+  app.put('/admin/featured/:id/artwork', async (request) => {
+    const context = requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const input = featuredArtworkSchema.parse(request.body);
+
+    const imageId = input.url ? await images.cache(input.url, 'hero') : null;
+    if (input.url && !imageId) {
+      throw ApiError.badRequest('That image could not be downloaded. Check the URL and try again.');
+    }
+
+    catalog.setFeaturedArtwork(id, imageId);
+    return catalog.listFeatured(context.user.id, false);
   });
 
   // ---- Achievement definitions ----

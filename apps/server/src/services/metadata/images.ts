@@ -19,7 +19,7 @@ const EXTENSION_BY_TYPE: Record<string, string> = {
   'image/avif': '.avif',
 };
 
-export type ImageKind = 'cover' | 'hero' | 'logo' | 'icon' | 'screenshot';
+export type ImageKind = 'cover' | 'banner' | 'hero' | 'logo' | 'icon' | 'screenshot';
 
 /**
  * Downloads provider artwork once and serves it from local disk afterwards.

@@ -68,8 +68,9 @@ docker compose up -d
 Open `http://<host>:8080` and create the first administrator account. That
 first-run screen is only available while the database has no users.
 
-Once the library has scanned, publish a client build (or point
-`CLIENT_DOWNLOAD_URL` at one) and invite people from **Admin → Invites**.
+Once the library has scanned, upload a client build from **Admin → Settings**
+(or point `CLIENT_DOWNLOAD_URL` at one hosted elsewhere) and invite people from
+**Admin → Invites**.
 
 > **If it fails to start with a database error**, the `data` folder is almost
 > certainly owned by root while the container runs as uid 1000. SQLite is built
@@ -115,7 +116,7 @@ environment variables.
 | Provider        | What it supplies                          | Where to get credentials                                                                      |
 | --------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------- |
 | **IGDB**        | Summaries, release dates, genres, ratings | Create an app at [dev.twitch.tv](https://dev.twitch.tv/console/apps) — IGDB uses Twitch OAuth |
-| **SteamGridDB** | Posters, hero banners, logos, icons       | Your [SteamGridDB API preferences](https://www.steamgriddb.com/profile/preferences/api)       |
+| **SteamGridDB** | Posters, capsules, hero art, logos, icons | Your [SteamGridDB API preferences](https://www.steamgriddb.com/profile/preferences/api)       |
 
 IGDB enforces 4 requests/second; GameBlade rate-limits itself to stay under that,
 so a first scan of a large library takes a while but never gets throttled out.
@@ -190,13 +191,42 @@ Everything an operator needs, at `/admin`:
 
 - **Overview** — catalog health, connected clients, scan progress, and a
   broadcast announcement box that pushes a notification to every account.
-- **Catalog** — a worklist of every game, filterable by match status. Opening
-  one gives a full metadata editor: fields, artwork slots (each fetched and
-  cached locally), Steam achievement import, and the launch and save rules the
+- **Catalog** — a worklist of every game, filterable by match status and by
+  what an entry is still missing: no launch executable, no cloud-save rule, no
+  artwork, no achievements, no metadata. Each filter carries a server-wide
+  count, and every row shows the same four things as `EXE / SAVE / ART / ACH`
+  markers, so a scan down the list says where the holes are without opening
+  anything. Opening one gives a full metadata editor: fields, artwork slots,
+  screenshots, Steam achievement import, and the launch and save rules the
   desktop client needs to actually run and back up that game.
-- **Featured** — curates the carousel on the client's Home tab, in order.
+- **Featured** — curates the carousel on the client's Home tab, in order, with
+  a per-slot image override.
 - **Libraries**, **Users**, **Invites**, **Settings** — as before, plus the
-  landing-page copy and the client download URL.
+  landing-page copy and the Windows client installer.
+
+### Picking artwork
+
+Every image slot — cover, banner, hero, logo/text, icon, and each screenshot —
+has a **Browse gallery** button that opens a picker over everything IGDB and
+SteamGridDB publish for that title. Search by whatever the providers call the
+game rather than what the folder is called, and narrow by SteamGridDB style
+(a white or black text wordmark, a capsule with no logo baked in, and so on).
+The screenshot picker stays open so a set can be assembled in one pass.
+
+Previews are streamed through the server rather than loaded from the provider
+CDNs, so a browser never talks to IGDB or SteamGridDB directly. Only the image
+actually chosen is downloaded and cached.
+
+### Publishing the Windows client
+
+**Admin → Settings** takes the installer itself: pick a `.exe` (or `.msi`,
+`.msix`, `.appinstaller`, `.zip`) up to 1 GB and it is stored on the server and
+served from the landing page's download button, with its size shown alongside
+the version. One build is kept at a time — uploading again replaces it.
+
+`CLIENT_DOWNLOAD_URL` and the URL field beside the upload still work and are
+used whenever no installer has been uploaded, so an existing deployment keeps
+pointing wherever it already did.
 
 ### Launch and save rules
 
@@ -311,7 +341,7 @@ and change them later without touching the stack.
 | Variable                                | Default            | Purpose                                                    |
 | --------------------------------------- | ------------------ | ---------------------------------------------------------- |
 | `LIBRARY_PATHS`                         | —                  | Comma-separated library roots **inside the container**     |
-| `DATA_DIR`                              | `/data`            | Database, artwork, user uploads and cloud saves            |
+| `DATA_DIR`                              | `/data`            | Database, artwork, uploads, cloud saves, client installer  |
 | `PORT` / `HOST`                         | `8080` / `0.0.0.0` | Listen address                                             |
 | `BASE_PATH`                             | —                  | Sub-path to host under, e.g. `/gameblade`                  |
 | `TRUST_PROXY`                           | `false`            | `true`, a hop count, or a CIDR list                        |
@@ -321,7 +351,7 @@ and change them later without touching the stack.
 | `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` | —                  | Twitch application credentials                             |
 | `STEAMGRIDDB_API_KEY`                   | —                  | SteamGridDB API key                                        |
 | `STEAM_API_KEY`                         | —                  | Reads published achievement schemas; no player data        |
-| `CLIENT_DOWNLOAD_URL`                   | —                  | Where the landing page's download button points            |
+| `CLIENT_DOWNLOAD_URL`                   | —                  | Download-button fallback when no installer is uploaded     |
 | `MEDIA_QUOTA_MB`                        | `20480`            | Per-account ceiling for avatars, screenshots and clips     |
 | `SAVE_QUOTA_MB`                         | `10240`            | Per-account ceiling for cloud saves                        |
 | `SCAN_ON_START`                         | `true`             | Scan shortly after boot                                    |

@@ -93,6 +93,63 @@ export const api = {
     apiFetch<T>(path, { ...options, method: 'DELETE' }),
 };
 
+/**
+ * Uploads a file as a raw request body, reporting progress as it goes.
+ *
+ * Built on XMLHttpRequest rather than fetch on purpose: a client installer is
+ * hundreds of megabytes, and fetch still has no upload-progress event, so the
+ * page would sit on a spinner with no indication of whether anything is
+ * happening for minutes at a time.
+ */
+export function uploadFile<T>(
+  path: string,
+  file: File,
+  options: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', `${API_BASE}${path}`, true);
+    request.withCredentials = true;
+    request.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    if (csrfToken) request.setRequestHeader(CSRF_HEADER, csrfToken);
+
+    request.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) options.onProgress?.(event.loaded / event.total);
+    });
+
+    const fail = (status: number, code: string, message: string) =>
+      reject(new ApiRequestError(status, code, message));
+
+    request.addEventListener('load', () => {
+      let payload: unknown = null;
+      try {
+        payload = request.responseText ? JSON.parse(request.responseText) : null;
+      } catch {
+        payload = null;
+      }
+
+      if (request.status >= 200 && request.status < 300) {
+        resolve(payload as T);
+        return;
+      }
+      const info = (payload as ApiErrorBody | null)?.error;
+      fail(
+        request.status,
+        info?.code ?? 'unknown_error',
+        info?.message ?? `Upload failed with status ${request.status}`,
+      );
+    });
+
+    request.addEventListener('error', () =>
+      fail(0, 'network_error', 'The upload failed. Check the connection and try again.'),
+    );
+    request.addEventListener('abort', () => fail(0, 'aborted', 'The upload was cancelled.'));
+
+    options.signal?.addEventListener('abort', () => request.abort());
+    request.send(file);
+  });
+}
+
 /** Build a query string, omitting empty values so URLs stay readable. */
 export function queryString(params: Record<string, unknown>): string {
   const search = new URLSearchParams();

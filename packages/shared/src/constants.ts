@@ -46,7 +46,59 @@ export const MATCH_STATUS = ['unmatched', 'auto', 'manual', 'skipped'] as const;
 
 export const GAME_KIND = ['folder', 'archive'] as const;
 
-export const ART_KIND = ['cover', 'hero', 'logo', 'icon'] as const;
+/**
+ * Every image slot a game has. `banner` is the wide Steam-style capsule, kept
+ * separate from `cover` because the two are different shapes with different
+ * artwork on SteamGridDB — asking for one and getting the other is exactly the
+ * mismatch the picker exists to fix.
+ */
+export const ART_KIND = ['cover', 'banner', 'hero', 'logo', 'icon'] as const;
+
+/**
+ * SteamGridDB publishes a style per asset, and which styles exist depends on
+ * the asset type. Offering them as a filter is what makes the picker usable
+ * for a specific look — a text-only wordmark, or a capsule with no logo baked
+ * in — rather than an undifferentiated wall of images.
+ */
+export const ART_STYLES: Record<(typeof ART_KIND)[number], readonly string[]> = {
+  cover: ['alternate', 'blurred', 'white_logo', 'material', 'no_logo'],
+  banner: ['alternate', 'blurred', 'white_logo', 'material', 'no_logo'],
+  hero: ['alternate', 'blurred', 'material'],
+  logo: ['official', 'white', 'black', 'custom'],
+  icon: ['official', 'custom'],
+};
+
+/** Human labels for the styles above; anything unlisted falls back to its key. */
+export const ART_STYLE_LABELS: Record<string, string> = {
+  alternate: 'Alternate',
+  blurred: 'Blurred',
+  white_logo: 'White logo',
+  material: 'Material',
+  no_logo: 'No logo',
+  official: 'Official',
+  white: 'White text',
+  black: 'Black text',
+  custom: 'Custom',
+};
+
+/**
+ * The gaps an administrator hunts for in the catalog: a game nobody can launch,
+ * one whose saves are never synced, one with no art. Each maps to a filter on
+ * the admin catalog and to an indicator on every row, so the same vocabulary
+ * describes "show me what is broken" and "what is broken about this one".
+ */
+export const CATALOG_GAP = [
+  'launch-rule',
+  'save-rule',
+  'cover',
+  'banner',
+  'hero',
+  'logo',
+  'icon',
+  'artwork',
+  'achievements',
+  'metadata',
+] as const;
 
 /** Default lifetime of a browser session, in days. */
 export const SESSION_TTL_DAYS = 30;
@@ -108,6 +160,12 @@ export const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 
 /** Ceiling on a single uploaded clip, in bytes. */
 export const MAX_CLIP_BYTES = 512 * 1024 * 1024;
+
+/**
+ * Ceiling on the Windows client installer an admin uploads. Generous, because
+ * an NSIS bundle with a webview runtime folded in is not small.
+ */
+export const MAX_INSTALLER_BYTES = 1024 * 1024 * 1024;
 
 /** Ceiling on one uploaded save archive, in bytes. */
 export const MAX_SAVE_BYTES = 512 * 1024 * 1024;

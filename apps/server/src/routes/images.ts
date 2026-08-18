@@ -1,11 +1,81 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import { Readable } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
+import { requireAdmin } from '../auth/middleware.js';
 import { allowCrossOriginEmbed } from '../lib/assets.js';
 import { ApiError } from '../lib/errors.js';
 
+/**
+ * Hosts the artwork proxy will fetch from.
+ *
+ * This is an allowlist rather than a filter because the route takes a URL from
+ * the caller: without it, an administrator's browser could be used to make the
+ * server issue requests to anything it can reach, including services on the
+ * private network the container sits on.
+ */
+function isProviderHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === 'images.igdb.com' || host === 'steamgriddb.com' || host.endsWith('.steamgriddb.com')
+  );
+}
+
+/** Provider thumbnails are small; anything larger is not a thumbnail. */
+const MAX_THUMBNAIL_BYTES = 8 * 1024 * 1024;
+
 export async function imageRoutes(app: FastifyInstance): Promise<void> {
   const { images, auth } = app.gameblade;
+
+  /**
+   * Streams one provider thumbnail through the server for the admin picker.
+   *
+   * The page's content security policy allows images from this origin only,
+   * and deliberately so: it is what keeps a player's browser from ever talking
+   * to IGDB or SteamGridDB directly. Rather than punching two CDN hosts into
+   * that policy for every page on the site, the picker's previews come through
+   * here. Nothing is written to disk — only the image an admin actually
+   * chooses gets cached, by the artwork route.
+   */
+  app.get('/admin/artwork/thumbnail', { config: { rateLimit: false } }, async (request, reply) => {
+    requireAdmin(request);
+    const { url } = request.query as { url?: string };
+    if (!url) throw ApiError.badRequest('A url is required');
+
+    let target: URL;
+    try {
+      target = new URL(url);
+    } catch {
+      throw ApiError.badRequest('That is not a valid URL');
+    }
+    if (target.protocol !== 'https:' || !isProviderHost(target.hostname)) {
+      throw ApiError.badRequest('Only IGDB and SteamGridDB images can be previewed');
+    }
+
+    const upstream = await fetch(target, { headers: { Accept: 'image/*' } }).catch(() => null);
+    if (!upstream?.ok || !upstream.body) {
+      throw ApiError.unavailable('That provider image could not be fetched');
+    }
+
+    const contentType = (upstream.headers.get('content-type') ?? '').split(';')[0]?.trim() ?? '';
+    if (!contentType.startsWith('image/')) {
+      throw ApiError.badRequest('That URL is not an image');
+    }
+
+    const declared = Number(upstream.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > MAX_THUMBNAIL_BYTES) {
+      throw ApiError.badRequest('That image is too large to preview');
+    }
+
+    return (
+      reply
+        .header('Content-Type', contentType)
+        // The provider's URL is content-addressed, so a preview can be held for
+        // the length of a browsing session without going stale.
+        .header('Cache-Control', 'private, max-age=3600')
+        .send(Readable.fromWeb(upstream.body as never))
+    );
+  });
 
   /**
    * Cached artwork. Authenticated, because the set of covers on a server is a

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   ACHIEVEMENT_SOURCE,
+  ART_KIND,
+  CATALOG_GAP,
   MAX_CLIP_BYTES,
   MAX_IMAGE_BYTES,
   POST_KIND,
@@ -88,6 +90,13 @@ export const gameQuerySchema = z.object({
   developer: z.string().trim().max(128).optional(),
   libraryId: z.string().trim().max(64).optional(),
   matchStatus: z.enum(['unmatched', 'auto', 'manual', 'skipped']).optional(),
+  /**
+   * Narrows to entries missing something — no launch executable, no cloud-save
+   * rule, no artwork. This is the admin catalog's "what still needs work"
+   * filter, and it is a server-side condition rather than a client-side sift so
+   * it stays correct across pagination.
+   */
+  missing: z.enum(CATALOG_GAP).optional(),
   favoritesOnly: z.coerce.boolean().optional(),
   /** Restrict to games the caller has added (Library) or excluded them (Store). */
   scope: z.enum(['all', 'library', 'not-in-library']).default('all'),
@@ -363,17 +372,35 @@ export type EditGameInput = z.infer<typeof editGameSchema>;
 
 /** Browses provider artwork for one slot before anything is applied. */
 export const artworkSearchSchema = z.object({
-  kind: z.enum(['cover', 'hero', 'logo', 'icon']),
+  kind: z.enum(ART_KIND),
   query: z.string().trim().min(1).max(200),
+  /** SteamGridDB style filter, e.g. `white` for a text-only wordmark. */
+  style: z.string().trim().max(40).nullable().optional(),
 });
 export type ArtworkSearchInput = z.infer<typeof artworkSearchSchema>;
 
 /** Replaces one artwork slot with an arbitrary URL the admin supplies. */
 export const setArtworkSchema = z.object({
-  kind: z.enum(['cover', 'hero', 'logo', 'icon']),
+  kind: z.enum(ART_KIND),
   url: z.string().trim().url().max(1000).nullable(),
 });
 export type SetArtworkInput = z.infer<typeof setArtworkSchema>;
+
+/** Appends one screenshot, downloaded into the local cache before it is stored. */
+export const setScreenshotSchema = z.object({
+  url: z.string().trim().url().max(1000),
+});
+export type SetScreenshotInput = z.infer<typeof setScreenshotSchema>;
+
+/**
+ * Overrides the hero image of one carousel slot. Separate from `featuredSchema`
+ * because the URL has to be downloaded into the local cache before it can be
+ * stored, which the plain upsert has no business doing.
+ */
+export const featuredArtworkSchema = z.object({
+  url: z.string().trim().url().max(1000).nullable(),
+});
+export type FeaturedArtworkInput = z.infer<typeof featuredArtworkSchema>;
 
 export const announcementSchema = z.object({
   title: z.string().trim().min(1).max(120),

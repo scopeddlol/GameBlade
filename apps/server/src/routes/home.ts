@@ -5,7 +5,7 @@ import { requireUser } from '../auth/middleware.js';
 import { games } from '../db/schema.js';
 
 export async function homeRoutes(app: FastifyInstance): Promise<void> {
-  const { catalog, db, settings, auth } = app.gameblade;
+  const { catalog, db, settings, auth, installer } = app.gameblade;
 
   /**
    * Everything the Home tab renders, in one request.
@@ -37,14 +37,21 @@ export async function homeRoutes(app: FastifyInstance): Promise<void> {
       .where(isNull(games.missingAt))
       .get();
 
+    // An uploaded installer wins over a pasted link: it is the more specific
+    // thing an operator did, and it stays correct when the external host
+    // eventually moves or expires.
+    const uploaded = installer.info();
+
     const body: PublicServerInfo = {
       serverName: current.serverName,
       tagline: current.tagline,
       allowSelfRegistration: current.allowSelfRegistration,
       isConfigured: auth.countUsers() > 0,
-      downloadUrl: current.downloadUrl,
+      downloadUrl: uploaded?.url ?? current.downloadUrl,
       clientVersion: current.clientVersion,
       gameCount: gameCount?.count ?? 0,
+      downloadFileName: uploaded?.fileName ?? null,
+      downloadSizeBytes: uploaded?.sizeBytes ?? null,
     };
     return body;
   });
