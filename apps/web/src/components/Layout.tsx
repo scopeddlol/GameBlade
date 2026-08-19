@@ -1,7 +1,9 @@
 import clsx from 'clsx';
 import {
+  ChartLine,
   Gamepad2,
   Home,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Mail,
@@ -18,12 +20,14 @@ import { useSession } from '../hooks/useSession.js';
 
 const SECTIONS = [
   { to: '/admin', end: true, icon: LayoutDashboard, label: 'Overview' },
+  { to: '/admin/analytics', end: false, icon: ChartLine, label: 'Analytics' },
   { to: '/admin/catalog', end: false, icon: Gamepad2, label: 'Catalog' },
   { to: '/admin/featured', end: false, icon: Sparkles, label: 'Featured' },
   { to: '/admin/client', end: false, icon: MonitorSmartphone, label: 'Desktop client' },
   { to: '/admin/libraries', end: false, icon: Server, label: 'Libraries' },
   { to: '/admin/users', end: false, icon: Users, label: 'Users' },
   { to: '/admin/invites', end: false, icon: Mail, label: 'Invites' },
+  { to: '/admin/api', end: false, icon: KeyRound, label: 'API keys' },
   { to: '/admin/settings', end: false, icon: Sliders, label: 'Settings' },
 ] as const;
 

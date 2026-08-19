@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   ACHIEVEMENT_SOURCE,
+  API_SCOPES,
   ART_KIND,
   CATALOG_GAP,
   CLIENT_BUTTON_ICONS,
@@ -72,6 +73,11 @@ export const updateUserSchema = z.object({
   email: emailSchema.nullable().optional(),
   /** Admin-initiated password reset. */
   password: passwordSchema.optional(),
+  /**
+   * Monthly download allowance in MB for this account, overriding the server
+   * default. Null restores the default; 0 makes this account unlimited.
+   */
+  monthlyQuotaMb: z.number().int().min(0).max(100_000_000).nullable().optional(),
 });
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 
@@ -129,6 +135,10 @@ export const providerSettingsSchema = z.object({
   igdbClientSecret: z.string().trim().max(200).nullable().optional(),
   steamGridDbKey: z.string().trim().max(200).nullable().optional(),
   steamApiKey: z.string().trim().max(200).nullable().optional(),
+  /** Ceiling on one download stream, in KB/s. 0 disables the limit. */
+  downloadSpeedLimitKbps: z.number().int().min(0).max(10_000_000).optional(),
+  /** Default monthly transfer allowance per account, in MB. 0 disables it. */
+  monthlyQuotaMb: z.number().int().min(0).max(100_000_000).optional(),
 });
 export type ProviderSettingsInput = z.infer<typeof providerSettingsSchema>;
 
@@ -403,6 +413,50 @@ export const featuredArtworkSchema = z.object({
   url: z.string().trim().url().max(1000).nullable(),
 });
 export type FeaturedArtworkInput = z.infer<typeof featuredArtworkSchema>;
+
+/* ----------------------------------------------------------------- api keys */
+
+export const createApiKeySchema = z.object({
+  name: z.string().trim().min(1, 'Name the key so you can recognise it later').max(60),
+  scopes: z.array(z.enum(API_SCOPES)).min(1, 'Pick at least one permission'),
+  /** Null means it never expires; an integration key usually should. */
+  expiresInDays: z.number().int().min(1).max(3650).nullable().default(365),
+});
+export type CreateApiKeyInput = z.infer<typeof createApiKeySchema>;
+
+/* ------------------------------------------------- the external v1 API */
+
+/**
+ * Provisioning an account from outside.
+ *
+ * The password is optional: an external service creating accounts in bulk
+ * usually wants the server to generate one and hand it back, rather than
+ * inventing (and having to transmit) its own.
+ */
+export const apiCreateUserSchema = z.object({
+  username: usernameSchema,
+  password: passwordSchema.optional(),
+  email: emailSchema.nullable().optional(),
+  role: z.enum(ROLES).default('user'),
+});
+export type ApiCreateUserInput = z.infer<typeof apiCreateUserSchema>;
+
+export const apiUpdateUserSchema = z.object({
+  email: emailSchema.nullable().optional(),
+  role: z.enum(ROLES).optional(),
+  isActive: z.boolean().optional(),
+  password: passwordSchema.optional(),
+});
+export type ApiUpdateUserInput = z.infer<typeof apiUpdateUserSchema>;
+
+export const apiListUsersSchema = z.object({
+  query: z.string().trim().max(64).optional(),
+  role: z.enum(ROLES).optional(),
+  isActive: z.coerce.boolean().optional(),
+  offset: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+export type ApiListUsersQuery = z.infer<typeof apiListUsersSchema>;
 
 /* ------------------------------------------------- desktop client buttons */
 

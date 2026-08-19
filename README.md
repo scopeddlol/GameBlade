@@ -207,8 +207,14 @@ Everything an operator needs, at `/admin`:
   to the player's browser, and only `http(s)` is accepted — pushing anything
   executable to every player's machine would be a different trust model
   entirely.
+- **Analytics** — who downloaded what, the most-played titles, bandwidth per
+  day and per month, allowance usage, and a recent-downloads log. Everything is
+  derived from the download and play records already being written, so there is
+  no separate counter to drift out of agreement with them.
+- **API keys** — scoped credentials for the external API. See
+  [docs/API.md](docs/API.md).
 - **Libraries**, **Users**, **Invites**, **Settings** — as before, plus the
-  landing-page copy and the Windows client installer.
+  landing-page copy, the Windows client installer and the bandwidth limits.
 
 ### Picking artwork
 
@@ -253,6 +259,31 @@ Right-clicking a game anywhere in the client — Home, Library or Store — open
 menu with everything that applies to it: play or install, add to library,
 favourite, open the install folder, unlink, uninstall, plus any custom buttons
 placed there. Text fields keep the native menu, so copy and paste still work.
+
+### Bandwidth
+
+Two limits, both off by default (`0` means no limit), under **Admin → Settings**:
+
+- A **download speed cap** in KB/s, applied per stream. A client opening several
+  connections gets that much on each, which is the honest way to describe it.
+- A **monthly allowance** per account, in MB, resetting on the 1st. Override it
+  for one account on the Users page — an explicit override binds even for an
+  administrator, while the server-wide default deliberately does not apply to
+  them, so a default can never lock the operator out of their own downloads.
+
+An account over its allowance is refused with `429` before any bytes are sent,
+and a single transfer that would cross the line is cut off mid-stream — usage is
+only recorded when a stream closes, so a start-only check would let one
+oversized download sail straight past.
+
+### The external API
+
+A versioned, key-authenticated API at `/api/v1` for driving the server from
+elsewhere — provisioning accounts from a billing system, handing out invites,
+reading stats. Keys carry explicit scopes, and `users:admin` is separate from
+`users:write` so a provisioning key cannot mint itself an administrator.
+
+Full reference, including a worked provisioning example: **[docs/API.md](docs/API.md)**.
 
 ### Launch and save rules
 

@@ -15,6 +15,8 @@ export function AdminSettingsPage() {
     downloadUrl: '',
     clientVersion: '',
     igdbClientId: '',
+    downloadSpeedLimitKbps: '0',
+    monthlyQuotaMb: '0',
   });
   // Secrets are write-only: the server reports whether one is set but never
   // returns it, so a blank box means "leave what is stored alone".
@@ -36,6 +38,8 @@ export function AdminSettingsPage() {
         downloadUrl: current.downloadUrl || (data.downloadUrl ?? ''),
         clientVersion: current.clientVersion || (data.clientVersion ?? ''),
         igdbClientId: current.igdbClientId || (data.igdbClientId ?? ''),
+        downloadSpeedLimitKbps: String(data.downloadSpeedLimitKbps ?? 0),
+        monthlyQuotaMb: String(data.monthlyQuotaMb ?? 0),
       }));
       return data;
     },
@@ -52,6 +56,8 @@ export function AdminSettingsPage() {
         igdbClientSecret: secrets.igdbClientSecret || undefined,
         steamGridDbKey: secrets.steamGridDbKey || undefined,
         steamApiKey: secrets.steamApiKey || undefined,
+        downloadSpeedLimitKbps: Number(form.downloadSpeedLimitKbps) || 0,
+        monthlyQuotaMb: Number(form.monthlyQuotaMb) || 0,
       }),
     onSuccess: async () => {
       setNotice('Settings saved.');
@@ -169,6 +175,45 @@ export function AdminSettingsPage() {
               </span>
             </span>
           </label>
+        </section>
+
+        <section className="gb-card space-y-4 p-5">
+          <h2 className="text-sm font-semibold tracking-wide uppercase">Bandwidth</h2>
+          <p className="text-ink-400 -mt-2 text-xs">
+            Both default to 0, which means no limit. Administrators are exempt from the allowance —
+            they can change it at will, so enforcing one against them only risks locking you out of
+            your own server.
+          </p>
+
+          <Field
+            label="Download speed limit"
+            htmlFor="speedLimit"
+            hint="KB/s per download stream. A client opening several connections gets this much on each."
+          >
+            <input
+              id="speedLimit"
+              type="number"
+              min={0}
+              className="gb-input"
+              value={form.downloadSpeedLimitKbps}
+              onChange={(e) => setForm({ ...form, downloadSpeedLimitKbps: e.target.value })}
+            />
+          </Field>
+
+          <Field
+            label="Monthly allowance per account"
+            htmlFor="monthlyQuota"
+            hint="MB per calendar month, resetting on the 1st. Override it per account on the Users page."
+          >
+            <input
+              id="monthlyQuota"
+              type="number"
+              min={0}
+              className="gb-input"
+              value={form.monthlyQuotaMb}
+              onChange={(e) => setForm({ ...form, monthlyQuotaMb: e.target.value })}
+            />
+          </Field>
         </section>
 
         <section className="gb-card space-y-4 p-5">

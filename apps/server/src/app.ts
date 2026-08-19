@@ -21,6 +21,7 @@ import { createContext } from './context.js';
 import { createDb } from './db/index.js';
 import { ApiError } from './lib/errors.js';
 import { adminRoutes } from './routes/admin.js';
+import { apiV1Routes } from './routes/api-v1.js';
 import { authRoutes } from './routes/auth.js';
 import { downloadRoutes } from './routes/downloads.js';
 import { gameRoutes } from './routes/games.js';
@@ -172,6 +173,11 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
       await socialRoutes(api);
       await playRoutes(api);
       await realtimeRoutes(api);
+      // Its own scope: the /v1 surface authenticates with an API key and
+      // nothing else, so its onRequest guard must not run for any other route.
+      await api.register(async (v1Scope) => {
+        await apiV1Routes(v1Scope);
+      });
       await api.register(async (adminScope) => {
         await adminRoutes(adminScope);
       });

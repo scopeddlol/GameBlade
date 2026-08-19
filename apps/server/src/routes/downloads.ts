@@ -10,6 +10,7 @@ import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { assertRealPathWithin, contentDisposition, resolveWithin } from '../lib/paths.js';
 import { ifRangeMatches, makeETag, parseRange } from '../lib/range.js';
+import { createThrottle } from '../lib/throttle.js';
 
 /** Bounded parallel stat so a folder game with thousands of files stays quick. */
 async function mapWithConcurrency<T, R>(
@@ -34,7 +35,24 @@ async function mapWithConcurrency<T, R>(
 }
 
 export async function downloadRoutes(app: FastifyInstance): Promise<void> {
-  const { db, downloadTokens } = app.gameblade;
+  const { db, downloadTokens, bandwidth } = app.gameblade;
+
+  /**
+   * Applies the configured per-stream speed limit.
+   *
+   * Returns the source untouched when no limit is set, so the default
+   * configuration keeps the zero-copy path a plain file stream has.
+   */
+  function meter(source: Readable): Readable {
+    const limit = bandwidth.speedLimitBytesPerSecond();
+    if (limit <= 0) return source;
+
+    const throttle = createThrottle(limit);
+    // Without this, destroying the source on a quota cutoff would leave the
+    // throttle open and the response hanging.
+    source.on('error', (error) => throttle.destroy(error));
+    return source.pipe(throttle);
+  }
 
   /**
    * Downloads accept either normal authentication or a signed token, because a
@@ -113,6 +131,10 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       throw ApiError.gone('That file is no longer available');
     }
 
+    // Refused before any header is written, so the client sees a JSON error
+    // rather than a truncated octet-stream.
+    const quota = bandwidth.assertWithinQuota(options.userId);
+
     const etag = makeETag(info.size, info.mtime.toISOString());
     const ifRange = request.headers['if-range'];
     const rangeHeader = ifRangeMatches(Array.isArray(ifRange) ? ifRange[0] : ifRange, etag)
@@ -162,24 +184,30 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
     );
 
     // An empty range would make createReadStream emit nothing but still needs a body.
-    const stream =
+    const source =
       info.size === 0
         ? createReadStream(options.absolutePath)
         : createReadStream(options.absolutePath, { start, end });
 
     let sent = 0;
-    stream.on('data', (chunk) => {
+    source.on('data', (chunk) => {
       sent += chunk.length;
+      // Usage is only recorded when a stream closes, so a single transfer
+      // larger than the whole allowance would otherwise sail past the check
+      // above. Cutting it off here is what makes the quota an actual ceiling.
+      if (quota.quotaBytes > 0 && quota.usedBytes + sent >= quota.quotaBytes) {
+        source.destroy(new Error('monthly download quota reached'));
+      }
     });
-    stream.on('close', () => {
+    source.on('close', () => {
       finishEvent(eventId, sent, sent >= length);
     });
-    stream.on('error', (error) => {
+    source.on('error', (error) => {
       request.log.warn({ err: error, path: options.absolutePath }, 'download stream failed');
       reply.raw.destroy();
     });
 
-    return reply.send(stream);
+    return reply.send(meter(source));
   }
 
   /** Archive games, and folder games requested as a single ZIP. */
@@ -257,6 +285,8 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
     options: { game: Game; gameRoot: string; libraryPath: string; userId: string },
   ): Promise<FastifyReply> {
     const { game, gameRoot, libraryPath, userId } = options;
+
+    const quota = bandwidth.assertWithinQuota(userId);
 
     const files = db.select().from(gameFiles).where(eq(gameFiles.gameId, game.id)).all();
     if (files.length === 0) {
@@ -338,6 +368,9 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
     let sent = 0;
     output.on('data', (chunk: Buffer) => {
       sent += chunk.length;
+      if (quota.quotaBytes > 0 && quota.usedBytes + sent >= quota.quotaBytes) {
+        output.destroy(new Error('monthly download quota reached'));
+      }
     });
     output.on('close', () => {
       finishEvent(eventId, sent, finalSize < 0 ? true : sent >= finalSize);
@@ -347,6 +380,6 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       reply.raw.destroy();
     });
 
-    return reply.send(output);
+    return reply.send(meter(output));
   }
 }

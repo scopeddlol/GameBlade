@@ -3,6 +3,7 @@ import {
   announcementSchema,
   createInviteSchema,
   clientButtonSchema,
+  createApiKeySchema,
   createLibrarySchema,
   featuredArtworkSchema,
   featuredSchema,
@@ -48,6 +49,9 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     images,
     installer,
     clientButtons,
+    apiKeys,
+    analytics,
+    bandwidth,
   } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
@@ -94,6 +98,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     if (input.role !== undefined) patch.role = input.role;
     if (input.isActive !== undefined) patch.isActive = input.isActive;
     if (input.email !== undefined) patch.email = input.email;
+    if (input.monthlyQuotaMb !== undefined) patch.monthlyQuotaMb = input.monthlyQuotaMb;
 
     if (Object.keys(patch).length > 0) {
       db.update(users).set(patch).where(eq(users.id, id)).run();
@@ -402,6 +407,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       igdbClientSecretSet: Boolean(current.igdbClientSecret),
       steamGridDbKeySet: Boolean(current.steamGridDbKey),
       steamApiKeySet: Boolean(current.steamApiKey),
+      downloadSpeedLimitKbps: current.downloadSpeedLimitKbps,
+      monthlyQuotaMb: current.monthlyQuotaMb,
       installer: installer.info(),
     };
   }
@@ -423,6 +430,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       ...(input.igdbClientSecret !== undefined ? { igdbClientSecret: input.igdbClientSecret } : {}),
       ...(input.steamGridDbKey !== undefined ? { steamGridDbKey: input.steamGridDbKey } : {}),
       ...(input.steamApiKey !== undefined ? { steamApiKey: input.steamApiKey } : {}),
+      ...(input.downloadSpeedLimitKbps !== undefined
+        ? { downloadSpeedLimitKbps: input.downloadSpeedLimitKbps }
+        : {}),
+      ...(input.monthlyQuotaMb !== undefined ? { monthlyQuotaMb: input.monthlyQuotaMb } : {}),
     });
 
     return describeSettings();
@@ -550,6 +561,53 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     catalog.setFeaturedArtwork(id, imageId);
     return catalog.listFeatured(context.user.id, false);
+  });
+
+  // ---- Analytics ----
+
+  /**
+   * Everything the analytics page renders, in one request. The page shows six
+   * panels; six endpoints would each pay their own round trip for data that all
+   * comes out of the same two tables.
+   */
+  app.get('/admin/analytics', async (request) => {
+    const { days } = request.query as { days?: string };
+    const parsed = Number(days);
+    const rangeDays = Number.isFinite(parsed) ? Math.min(365, Math.max(1, Math.floor(parsed))) : 30;
+    return analytics.report(rangeDays);
+  });
+
+  /** One account's month-to-date transfer against its allowance. */
+  app.get('/admin/users/:id/quota', async (request) => {
+    const { id } = request.params as { id: string };
+    return bandwidth.status(id);
+  });
+
+  // ---- API keys for the external API ----
+
+  app.get('/admin/api-keys', async () => apiKeys.list());
+
+  /**
+   * Mints a key. The plaintext token comes back here and nowhere else, so the
+   * UI has to show it once and tell the operator to store it.
+   */
+  app.post('/admin/api-keys', async (request, reply) => {
+    const context = requireAdmin(request);
+    const input = createApiKeySchema.parse(request.body);
+    return reply.code(201).send(apiKeys.create(input, context.user.id));
+  });
+
+  /** Revoking keeps the row, so the audit trail of what existed survives. */
+  app.post('/admin/api-keys/:id/revoke', async (request) => {
+    const { id } = request.params as { id: string };
+    apiKeys.revoke(id);
+    return { ok: true };
+  });
+
+  app.delete('/admin/api-keys/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    apiKeys.remove(id);
+    return { ok: true };
   });
 
   // ---- Custom buttons in the desktop client ----

@@ -4,6 +4,8 @@ import { Layout } from './components/Layout.js';
 import { PageLoader } from './components/ui.js';
 import { useSession } from './hooks/useSession.js';
 import { AdminCatalogPage } from './pages/admin/AdminCatalogPage.js';
+import { AdminAnalyticsPage } from './pages/admin/AdminAnalyticsPage.js';
+import { AdminApiPage } from './pages/admin/AdminApiPage.js';
 import { AdminClientPage } from './pages/admin/AdminClientPage.js';
 import { AdminFeaturedPage } from './pages/admin/AdminFeaturedPage.js';
 import { AdminInvitesPage } from './pages/admin/AdminInvitesPage.js';
@@ -82,6 +84,8 @@ export function App() {
         <Route path="catalog" element={<AdminCatalogPage />} />
         <Route path="featured" element={<AdminFeaturedPage />} />
         <Route path="client" element={<AdminClientPage />} />
+        <Route path="api" element={<AdminApiPage />} />
+        <Route path="analytics" element={<AdminAnalyticsPage />} />
         <Route path="libraries" element={<AdminLibrariesPage />} />
         <Route path="users" element={<AdminUsersPage />} />
         <Route path="invites" element={<AdminInvitesPage />} />
