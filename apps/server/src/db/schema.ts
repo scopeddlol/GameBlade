@@ -612,6 +612,32 @@ export const featuredGames = sqliteTable(
 );
 
 /**
+ * Operator-defined links the desktop client renders — a Discord invite, a
+ * wiki, a support page.
+ *
+ * Deliberately links and not actions: the client opens the URL in the user's
+ * browser. Letting an operator push anything executable to every player's
+ * machine is a different trust model entirely.
+ */
+export const clientButtons = sqliteTable(
+  'client_buttons',
+  {
+    id: text('id').primaryKey(),
+    label: text('label').notNull(),
+    url: text('url').notNull(),
+    icon: text('icon').notNull().default('link'),
+    placement: text('placement', { enum: ['sidebar', 'home', 'game-menu'] })
+      .notNull()
+      .default('sidebar'),
+    description: text('description'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('client_buttons_order_idx').on(t.active, t.placement, t.sortOrder)],
+);
+
+/**
  * Append-only feed rows. Written once and read by friends, which is far cheaper
  * than deriving a feed by unioning play sessions, unlocks and posts per request.
  */
@@ -679,6 +705,7 @@ export type MediaRecord = typeof media.$inferSelect;
 export type Post = typeof posts.$inferSelect;
 export type Comment = typeof comments.$inferSelect;
 export type FeaturedGame = typeof featuredGames.$inferSelect;
+export type ClientButtonRow = typeof clientButtons.$inferSelect;
 export type ActivityEvent = typeof activityEvents.$inferSelect;
 export type NotificationRow = typeof notifications.$inferSelect;
 export type PlaySession = typeof playSessions.$inferSelect;

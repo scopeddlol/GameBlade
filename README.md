@@ -201,6 +201,12 @@ Everything an operator needs, at `/admin`:
   desktop client needs to actually run and back up that game.
 - **Featured** — curates the carousel on the client's Home tab, in order, with
   a per-slot image override.
+- **Desktop client** — your own links (a Discord invite, a wiki, a support
+  page) rendered in the client's sidebar, on its Home tab, or in the menu that
+  opens when a player right-clicks a game. Links only: the client hands the URL
+  to the player's browser, and only `http(s)` is accepted — pushing anything
+  executable to every player's machine would be a different trust model
+  entirely.
 - **Libraries**, **Users**, **Invites**, **Settings** — as before, plus the
   landing-page copy and the Windows client installer.
 
@@ -227,6 +233,26 @@ the version. One build is kept at a time — uploading again replaces it.
 `CLIENT_DOWNLOAD_URL` and the URL field beside the upload still work and are
 used whenever no installer has been uploaded, so an existing deployment keeps
 pointing wherever it already did.
+
+### Games players already have
+
+A player with a drive full of games should not have to download a second copy
+of any of them. **Library → Import** points the client at a folder, finds every
+subfolder holding a Windows executable, and matches those folder names against
+the catalog — through the same title parser the library scanner uses, so a
+`Hollow.Knight.v1.5.78.11.GOG-FitGirl` folder still resolves. Each row is
+confirmed by hand before anything is linked, because a wrong match would attach
+the wrong cloud saves to the wrong game.
+
+Linking copies and moves nothing; the files stay where they are. Unlinking is
+therefore a separate action from uninstalling, and only the latter deletes.
+
+### Right-click menus
+
+Right-clicking a game anywhere in the client — Home, Library or Store — opens a
+menu with everything that applies to it: play or install, add to library,
+favourite, open the install folder, unlink, uninstall, plus any custom buttons
+placed there. Text fields keep the native menu, so copy and paste still work.
 
 ### Launch and save rules
 

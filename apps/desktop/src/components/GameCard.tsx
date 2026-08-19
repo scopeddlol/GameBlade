@@ -1,6 +1,7 @@
 import type { GameSummary } from '@gameblade/shared';
 import clsx from 'clsx';
 import { Check, Download, Play, Trophy } from 'lucide-react';
+import type { MouseEvent } from 'react';
 import { formatBytes, formatPlaytime, formatYear } from '../lib/format.js';
 import { Artwork } from './ui.js';
 
@@ -18,6 +19,7 @@ export function GameCard({
   onPrimary,
   primaryLabel,
   busy,
+  onContextMenu,
 }: {
   game: GameSummary;
   installed?: boolean;
@@ -25,11 +27,16 @@ export function GameCard({
   onPrimary?: (game: GameSummary) => void;
   primaryLabel?: 'install' | 'play' | 'add';
   busy?: boolean;
+  /** Right-click anywhere on the tile, not just the artwork. */
+  onContextMenu?: (event: MouseEvent, game: GameSummary) => void;
 }) {
   const year = formatYear(game.releaseDate);
 
   return (
-    <div className={clsx('game-card', game.isMissing && 'missing')}>
+    <div
+      className={clsx('game-card', game.isMissing && 'missing')}
+      onContextMenu={onContextMenu ? (event) => onContextMenu(event, game) : undefined}
+    >
       <button
         type="button"
         className="game-card-art"
@@ -89,10 +96,12 @@ export function GameShelf({
   games,
   onOpen,
   emptyMessage,
+  onContextMenu,
 }: {
   games: GameSummary[];
   onOpen: (game: GameSummary) => void;
   emptyMessage?: string;
+  onContextMenu?: (event: MouseEvent, game: GameSummary) => void;
 }) {
   if (games.length === 0) {
     return emptyMessage ? <p className="muted">{emptyMessage}</p> : null;
@@ -100,7 +109,7 @@ export function GameShelf({
   return (
     <div className="shelf">
       {games.map((game) => (
-        <GameCard key={game.id} game={game} onOpen={onOpen} />
+        <GameCard key={game.id} game={game} onOpen={onOpen} onContextMenu={onContextMenu} />
       ))}
     </div>
   );

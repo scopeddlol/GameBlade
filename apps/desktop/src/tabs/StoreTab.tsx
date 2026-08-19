@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Search, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { ContextMenu, useContextMenu } from '../components/ContextMenu.js';
 import { GameCard } from '../components/GameCard.js';
+import { useGameMenuItems } from '../components/GameContextMenu.js';
 import { Empty, ErrorNote, Loading } from '../components/ui.js';
 import { errorMessage, ipc, queryString } from '../lib/ipc.js';
 
@@ -34,6 +36,9 @@ export function StoreTab({ onOpenGame }: { onOpenGame: (game: GameSummary) => vo
   const [sort, setSort] = useState<(typeof SORTS)[number]['id']>('added');
   const [showFilters, setShowFilters] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const menu = useContextMenu<GameSummary>();
+  const buildMenuItems = useGameMenuItems({ onOpen: onOpenGame, onError: setError });
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(search.trim()), 250);
@@ -156,11 +161,20 @@ export function StoreTab({ onOpenGame }: { onOpenGame: (game: GameSummary) => vo
                 primaryLabel="add"
                 busy={game.inLibrary || addMutation.isPending}
                 onPrimary={() => addMutation.mutate(game.id)}
+                onContextMenu={menu.open}
               />
             ))}
           </div>
         </>
       )}
+
+      {menu.state ? (
+        <ContextMenu
+          position={menu.state.position}
+          onClose={menu.close}
+          items={buildMenuItems(menu.state.target, {})}
+        />
+      ) : null}
     </div>
   );
 }

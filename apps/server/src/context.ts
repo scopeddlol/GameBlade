@@ -6,6 +6,7 @@ import type { Db } from './db/index.js';
 import { AchievementService } from './services/achievements.js';
 import { ActivityService } from './services/activity.js';
 import { CatalogService } from './services/catalog.js';
+import { ClientButtonService } from './services/clientButtons.js';
 import { ChecksumService } from './services/checksums.js';
 import { DownloadTokenService } from './services/downloads.js';
 import { FriendService } from './services/friends.js';
@@ -34,6 +35,7 @@ export interface GamebladeContext {
   downloadTokens: DownloadTokenService;
   images: ImageCache;
   installer: InstallerService;
+  clientButtons: ClientButtonService;
 
   presence: PresenceService;
   profiles: ProfileService;
@@ -73,6 +75,7 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
   const auth = new AuthService(db);
   const downloadTokens = new DownloadTokenService(db, config.sessionSecret);
   const installer = new InstallerService(db, config);
+  const clientButtons = new ClientButtonService(db);
 
   const presence = new PresenceService();
   const profiles = new ProfileService(db, config, presence);
@@ -115,6 +118,7 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
     downloadTokens,
     images,
     installer,
+    clientButtons,
 
     presence,
     profiles,

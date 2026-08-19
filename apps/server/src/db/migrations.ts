@@ -431,4 +431,25 @@ export const migrations: Migration[] = [
       ALTER TABLE games ADD COLUMN banner_image_id TEXT;
     `,
   },
+  {
+    id: '0005_client_buttons',
+    sql: /* sql */ `
+      -- Operator-defined links rendered by the desktop client. Links only:
+      -- pushing anything executable to every player's machine would be a
+      -- wholly different trust model from "add a link to our Discord".
+      CREATE TABLE client_buttons (
+        id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        url TEXT NOT NULL,
+        icon TEXT NOT NULL DEFAULT 'link',
+        placement TEXT NOT NULL DEFAULT 'sidebar',
+        description TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX client_buttons_order_idx
+        ON client_buttons(active, placement, sort_order);
+    `,
+  },
 ];

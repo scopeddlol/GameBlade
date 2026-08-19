@@ -137,7 +137,7 @@ export function SettingsTab() {
       <section className="card">
         <SectionHeader title="Account" />
         <p className="muted small">
-          Signed in as <strong>{session?.username}</strong> on {session?.server_url}
+          Signed in as <strong>{session?.username}</strong>
         </p>
         <button type="button" className="btn btn-danger" onClick={() => void signOut()}>
           <LogOut size={15} aria-hidden />

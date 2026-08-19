@@ -100,6 +100,30 @@ export const CATALOG_GAP = [
   'metadata',
 ] as const;
 
+/**
+ * Where an admin-defined button shows up in the desktop client.
+ *
+ * A button is a link, not a script: the client opens the URL in the user's
+ * browser. Anything richer would mean shipping admin-authored code to every
+ * player's machine, which is a very different trust model from "the operator
+ * can add a link to their Discord".
+ */
+export const CLIENT_BUTTON_PLACEMENT = ['sidebar', 'home', 'game-menu'] as const;
+
+/** Icons an admin can pick for a custom button, mapped to lucide names client-side. */
+export const CLIENT_BUTTON_ICONS = [
+  'link',
+  'message-circle',
+  'life-buoy',
+  'book-open',
+  'gift',
+  'shield',
+  'star',
+  'megaphone',
+  'wrench',
+  'globe',
+] as const;
+
 /** Default lifetime of a browser session, in days. */
 export const SESSION_TTL_DAYS = 30;
 

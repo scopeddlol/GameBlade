@@ -4,14 +4,17 @@ import {
   gameQuerySchema,
   launchRuleSchema,
   matchGameSchema,
+  matchLocalSchema,
   saveRuleSchema,
   setArtworkSchema,
   setScreenshotSchema,
   type ArtKind,
+  type ClientButtonPlacement,
   type DownloadManifest,
+  type LocalGameMatch,
   type GameFileEntry,
 } from '@gameblade/shared';
-import { eq } from 'drizzle-orm';
+import { eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { requireAdmin, requireUser } from '../auth/middleware.js';
 import {
@@ -25,6 +28,8 @@ import {
 import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { isoNow } from '../lib/time.js';
+import { similarity } from '../services/metadata/service.js';
+import { parseTitle } from '../lib/titles.js';
 import { toGameDetail, toLaunchRule, toSaveRule } from './mappers.js';
 
 /** Which column on `games` backs each artwork slot. */
@@ -37,7 +42,8 @@ const ART_COLUMNS = {
 } as const satisfies Record<ArtKind, keyof typeof games.$inferInsert>;
 
 export async function gameRoutes(app: FastifyInstance): Promise<void> {
-  const { db, config, metadata, downloadTokens, catalog, achievements, images } = app.gameblade;
+  const { db, config, metadata, downloadTokens, catalog, achievements, images, clientButtons } =
+    app.gameblade;
   const basePath = config.basePath;
 
   app.get('/games', async (request) => {
@@ -173,6 +179,57 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
       .run();
 
     return { ok: true, favorite: favorite ?? true };
+  });
+
+  /** Operator-defined links the desktop client renders. Active rows only. */
+  app.get('/client-buttons', async (request) => {
+    requireUser(request);
+    const { placement } = request.query as { placement?: ClientButtonPlacement };
+    return clientButtons.listActive(placement);
+  });
+
+  /**
+   * Matches folder names found on a player's machine against catalog titles,
+   * so an already-installed copy can be linked rather than downloaded again.
+   *
+   * Scoring lives here rather than in the client because the normalisation and
+   * similarity functions the scanner and the admin matcher already use are
+   * here; a second implementation in Rust or TypeScript is just somewhere for
+   * the two to disagree about what counts as a match.
+   */
+  app.post('/games/match-local', async (request) => {
+    requireUser(request);
+    const input = matchLocalSchema.parse(request.body);
+
+    // One pass over the catalog for the whole batch: a player importing a
+    // drive full of games would otherwise mean a query per folder.
+    const catalogRows = db
+      .select({ id: games.id, title: games.title, searchTitle: games.searchTitle })
+      .from(games)
+      .where(isNull(games.missingAt))
+      .all();
+
+    const results: LocalGameMatch[] = input.names.map((name) => {
+      // A folder is named the way a release is named — version tags, repack
+      // group, bracketed junk — so it goes through the same parser the
+      // scanner uses on a library directory before anything is compared.
+      const cleaned = parseTitle(name, false);
+      const scored = catalogRows
+        .map((row) => ({
+          gameId: row.id,
+          title: row.title,
+          // Both the display title and the parsed search title are tried; a
+          // folder is as likely to be named after either.
+          score: Math.max(similarity(cleaned, row.title), similarity(cleaned, row.searchTitle)),
+        }))
+        .filter((candidate) => candidate.score >= input.threshold)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, input.limit);
+
+      return { name, matches: scored };
+    });
+
+    return { results };
   });
 
   // ---- Metadata management (administrators only) ----

@@ -3,6 +3,7 @@ import type {
   ACTIVITY_KIND,
   ART_KIND,
   CATALOG_GAP,
+  CLIENT_BUTTON_PLACEMENT,
   FRIENDSHIP_STATUS,
   GAME_KIND,
   MATCH_STATUS,
@@ -20,6 +21,7 @@ export type MatchStatus = (typeof MATCH_STATUS)[number];
 export type GameKind = (typeof GAME_KIND)[number];
 export type ArtKind = (typeof ART_KIND)[number];
 export type CatalogGap = (typeof CATALOG_GAP)[number];
+export type ClientButtonPlacement = (typeof CLIENT_BUTTON_PLACEMENT)[number];
 export type Visibility = (typeof VISIBILITY)[number];
 export type FriendshipStatus = (typeof FRIENDSHIP_STATUS)[number];
 export type PresenceStatus = (typeof PRESENCE_STATUS)[number];
@@ -195,6 +197,33 @@ export interface ServerSettings {
   steamApiKeySet?: boolean;
   /** The uploaded Windows installer, when one has been stored. */
   installer?: ClientInstallerInfo | null;
+}
+
+/**
+ * An operator-defined link rendered by the desktop client — a Discord invite,
+ * a wiki, a support page.
+ */
+export interface ClientButton {
+  id: string;
+  label: string;
+  url: string;
+  /** One of CLIENT_BUTTON_ICONS; the client maps it to an icon component. */
+  icon: string;
+  placement: ClientButtonPlacement;
+  /** Shown as a tooltip in the client. */
+  description: string | null;
+  sortOrder: number;
+  active: boolean;
+}
+
+/**
+ * One folder on a player's machine that might already hold a game from the
+ * catalog, offered for linking rather than re-downloading.
+ */
+export interface LocalGameMatch {
+  /** The folder name that was searched for. */
+  name: string;
+  matches: Array<{ gameId: string; title: string; score: number }>;
 }
 
 /** A Windows client installer held on the server rather than linked elsewhere. */

@@ -3,6 +3,8 @@ import {
   ACHIEVEMENT_SOURCE,
   ART_KIND,
   CATALOG_GAP,
+  CLIENT_BUTTON_ICONS,
+  CLIENT_BUTTON_PLACEMENT,
   MAX_CLIP_BYTES,
   MAX_IMAGE_BYTES,
   POST_KIND,
@@ -401,6 +403,55 @@ export const featuredArtworkSchema = z.object({
   url: z.string().trim().url().max(1000).nullable(),
 });
 export type FeaturedArtworkInput = z.infer<typeof featuredArtworkSchema>;
+
+/* ------------------------------------------------- desktop client buttons */
+
+/**
+ * An operator-defined link shown in the desktop client.
+ *
+ * The URL is restricted to http(s) rather than accepting any scheme: the
+ * client hands it to the OS opener, and a `file:` or custom-scheme URL pushed
+ * from the server would be a way to make every player's machine launch
+ * something local.
+ */
+export const clientButtonSchema = z.object({
+  label: z.string().trim().min(1, 'Give the button a label').max(40),
+  url: z
+    .string()
+    .trim()
+    .url('Enter a full URL, including https://')
+    .max(500)
+    .refine((value) => /^https?:\/\//i.test(value), 'Only http and https links are allowed'),
+  icon: z.enum(CLIENT_BUTTON_ICONS).default('link'),
+  placement: z.enum(CLIENT_BUTTON_PLACEMENT).default('sidebar'),
+  description: z.string().trim().max(160).nullable().optional(),
+  sortOrder: z.number().int().min(0).max(1000).default(0),
+  active: z.boolean().default(true),
+});
+export type ClientButtonInput = z.infer<typeof clientButtonSchema>;
+
+export const reorderClientButtonsSchema = z.object({
+  ids: z.array(z.string().trim().max(64)).max(50),
+});
+export type ReorderClientButtonsInput = z.infer<typeof reorderClientButtonsSchema>;
+
+/* --------------------------------------------------- linking local installs */
+
+/**
+ * Folder names found on a player's machine, matched against catalog titles so
+ * an already-installed copy can be linked instead of downloaded again.
+ *
+ * Matching runs on the server because that is where the title-normalisation
+ * and similarity scoring already live; duplicating them in the client is how
+ * the two drift into disagreeing about what counts as a match.
+ */
+export const matchLocalSchema = z.object({
+  names: z.array(z.string().trim().min(1).max(200)).min(1).max(200),
+  /** Below this similarity a suggestion is noise rather than a candidate. */
+  threshold: z.number().min(0).max(1).default(0.5),
+  limit: z.coerce.number().int().min(1).max(10).default(5),
+});
+export type MatchLocalInput = z.infer<typeof matchLocalSchema>;
 
 export const announcementSchema = z.object({
   title: z.string().trim().min(1).max(120),

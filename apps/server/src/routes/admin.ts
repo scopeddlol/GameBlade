@@ -2,6 +2,7 @@ import {
   achievementDefinitionSchema,
   announcementSchema,
   createInviteSchema,
+  clientButtonSchema,
   createLibrarySchema,
   featuredArtworkSchema,
   featuredSchema,
@@ -9,6 +10,7 @@ import {
   importAchievementsSchema,
   providerSettingsSchema,
   purgeMissingSchema,
+  reorderClientButtonsSchema,
   reorderFeaturedSchema,
   scanRequestSchema,
   updateLibrarySchema,
@@ -45,6 +47,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     presence,
     images,
     installer,
+    clientButtons,
   } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
@@ -547,6 +550,36 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     catalog.setFeaturedArtwork(id, imageId);
     return catalog.listFeatured(context.user.id, false);
+  });
+
+  // ---- Custom buttons in the desktop client ----
+
+  /**
+   * Operator-defined links the desktop client renders. Admins see inactive
+   * rows too, so a button can be staged before it goes live.
+   */
+  app.get('/admin/client-buttons', async () => clientButtons.listAll());
+
+  app.post('/admin/client-buttons', async (request, reply) => {
+    const input = clientButtonSchema.parse(request.body);
+    return reply.code(201).send(clientButtons.create(input));
+  });
+
+  app.put('/admin/client-buttons/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    return clientButtons.update(id, clientButtonSchema.parse(request.body));
+  });
+
+  app.delete('/admin/client-buttons/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    clientButtons.remove(id);
+    return { ok: true };
+  });
+
+  app.post('/admin/client-buttons/reorder', async (request) => {
+    const input = reorderClientButtonsSchema.parse(request.body);
+    clientButtons.reorder(input.ids);
+    return clientButtons.listAll();
   });
 
   // ---- Achievement definitions ----

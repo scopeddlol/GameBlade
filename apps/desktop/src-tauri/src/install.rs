@@ -98,6 +98,19 @@ impl InstallManager {
         self.persist().await
     }
 
+    /// Forgets an entry without touching the files.
+    ///
+    /// This is what unlinking a folder the user already had must do. Sharing
+    /// `uninstall`'s code path would delete a directory GameBlade never
+    /// created — the worst possible outcome of clicking the wrong menu item.
+    pub async fn forget(&self, game_id: &str) -> AppResult<()> {
+        {
+            let mut registry = self.registry.write().await;
+            registry.games.remove(game_id);
+        }
+        self.persist().await
+    }
+
     /// Drops entries whose directory has been deleted outside the app, so the
     /// Library does not offer to launch something that is no longer there.
     pub async fn prune_missing(&self) -> AppResult<Vec<String>> {
@@ -285,6 +298,118 @@ fn safe_join(root: &Path, candidate: &Path) -> Option<PathBuf> {
     Some(result)
 }
 
+/// A folder on disk that looks like it might hold a game.
+///
+/// Produced by scanning somewhere the user points at, before anything is
+/// matched against the catalog — the folder name is all the client knows at
+/// this stage, and the server does the matching.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallCandidate {
+    pub path: PathBuf,
+    /// Folder name as it appears on disk; what gets matched against titles.
+    pub name: String,
+    pub size_bytes: u64,
+    /// Best guess at the entry point, so the user can see it before linking.
+    pub executable: Option<PathBuf>,
+    pub executable_count: usize,
+}
+
+/// Folder names that are never a game and only add noise to the import list.
+const SKIPPED_FOLDERS: &[&str] = &[
+    "$recycle.bin",
+    "system volume information",
+    "windows",
+    "program files",
+    "program files (x86)",
+    "programdata",
+    "appdata",
+    "node_modules",
+    ".git",
+];
+
+/// Looks one level inside each root for folders that contain a Windows
+/// executable.
+///
+/// Only immediate children are treated as games: a library folder holds one
+/// directory per title, and recursing further would offer every `bin/` and
+/// `redist/` subfolder as a separate candidate. A root that is itself a single
+/// game is still handled, because a folder with executables directly inside it
+/// is offered as a candidate in its own right.
+pub fn scan_for_games(roots: &[PathBuf]) -> Vec<InstallCandidate> {
+    let mut found: Vec<InstallCandidate> = Vec::new();
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+
+        // The root itself counts when executables sit directly inside it.
+        if let Some(candidate) = inspect_folder(root) {
+            if seen.insert(candidate.path.clone()) {
+                found.push(candidate);
+            }
+        }
+
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if name.starts_with('.') || SKIPPED_FOLDERS.contains(&name.as_str()) {
+                continue;
+            }
+            if let Some(candidate) = inspect_folder(&path) {
+                if seen.insert(candidate.path.clone()) {
+                    found.push(candidate);
+                }
+            }
+        }
+    }
+
+    found.sort_by_cached_key(|candidate| candidate.name.to_lowercase());
+    found
+}
+
+/// Describes one folder, or `None` when it holds no executable at all.
+fn inspect_folder(path: &Path) -> Option<InstallCandidate> {
+    let name = path.file_name()?.to_string_lossy().to_string();
+
+    let executable_count = walkdir::WalkDir::new(path)
+        .max_depth(3)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.file_type().is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
+        })
+        .count();
+
+    // No executable anywhere means it is not an installed Windows game, and
+    // offering it would just make the import list something to wade through.
+    if executable_count == 0 {
+        return None;
+    }
+
+    Some(InstallCandidate {
+        executable: detect_executable(path, &name),
+        size_bytes: directory_size(path),
+        name,
+        path: path.to_path_buf(),
+        executable_count,
+    })
+}
+
 /// Total bytes occupied by an install, for the Library's storage readout.
 pub fn directory_size(root: &Path) -> u64 {
     walkdir::WalkDir::new(root)
@@ -317,6 +442,39 @@ mod tests {
     #[test]
     fn safe_join_rejects_an_empty_result() {
         assert!(safe_join(Path::new("/games/demo"), Path::new("./")).is_none());
+    }
+
+    #[test]
+    fn scanning_offers_folders_with_an_executable_and_skips_the_rest() {
+        let root = std::env::temp_dir().join(format!("gameblade-scan-{}", std::process::id()));
+        let game = root.join("Cave Story");
+        let docs = root.join("Notes");
+        std::fs::create_dir_all(game.join("bin")).unwrap();
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(game.join("bin").join("game.exe"), b"MZ").unwrap();
+        std::fs::write(docs.join("readme.txt"), b"hello").unwrap();
+
+        let found = scan_for_games(std::slice::from_ref(&root));
+
+        let names: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"Cave Story"), "got {names:?}");
+        assert!(!names.contains(&"Notes"), "got {names:?}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn scanning_offers_a_root_that_is_itself_one_game() {
+        let root = std::env::temp_dir().join(format!("gameblade-scan-one-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("game.exe"), b"MZ").unwrap();
+
+        let found = scan_for_games(std::slice::from_ref(&root));
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, root);
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
