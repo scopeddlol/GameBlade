@@ -187,7 +187,9 @@ device for that account.
 
 ## The admin panel
 
-Everything an operator needs, at `/admin`:
+Everything an operator needs, at `/admin` — and it works on a phone: below the
+large breakpoint the sidebar becomes a drawer, and tables and charts stay inside
+the viewport rather than forcing the page sideways.
 
 - **Overview** — catalog health, connected clients, scan progress, and a
   broadcast announcement box that pushes a notification to every account.
@@ -213,6 +215,8 @@ Everything an operator needs, at `/admin`:
   no separate counter to drift out of agreement with them.
 - **API keys** — scoped credentials for the external API. See
   [docs/API.md](docs/API.md).
+- **Appearance** — the colour theme and the landing page, edited side by side
+  with a live preview of the real page.
 - **Libraries**, **Users**, **Invites**, **Settings** — as before, plus the
   landing-page copy, the Windows client installer and the bandwidth limits.
 
@@ -259,6 +263,33 @@ Right-clicking a game anywhere in the client — Home, Library or Store — open
 menu with everything that applies to it: play or install, add to library,
 favourite, open the install folder, unlink, uninstall, plus any custom buttons
 placed there. Text fields keep the native menu, so copy and paste still work.
+
+### Theming
+
+Five presets — Midnight, Slate, Carbon, Nebula and a genuine light theme,
+Daylight — plus an optional accent colour that replaces the preset's own. Only
+the mid step is picked; the lighter and darker steps are derived from it, so
+hover, focus and gradient states keep working without asking anyone to choose
+four related colours by hand.
+
+A theme is a complete surface ramp rather than one hue: brightening only the
+accent on a near-black chrome produces something that reads as broken. The
+tokens are resolved server-side and applied by both the web app and the desktop
+client, so a server's look is one setting rather than two that drift.
+
+### Editing the landing page
+
+**Admin → Appearance** turns the landing page into an ordered list of sections —
+hero, feature grid, stats, screenshots, prose, call to action. Add, reorder,
+hide and edit them with the real page rendering beside the form; the preview is
+the same component the public page uses, not a mock-up of it.
+
+Blocks rather than free-form positioning is deliberate: an operator says what
+the page contains and in what order, while each section's layout stays something
+that was designed once and works at every width, phones included. Operator copy
+is rendered as text and never as HTML, and a stored page that cannot be parsed
+falls back to the built-in one rather than taking the front door down. **Reset**
+restores the shipped page at any point.
 
 ### Bandwidth
 

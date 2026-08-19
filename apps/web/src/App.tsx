@@ -1,10 +1,15 @@
+import type { PublicServerInfo } from '@gameblade/shared';
+import { useQuery } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Layout } from './components/Layout.js';
 import { PageLoader } from './components/ui.js';
 import { useSession } from './hooks/useSession.js';
+import { useApplyTheme } from './hooks/useTheme.js';
+import { api } from './lib/api.js';
 import { AdminCatalogPage } from './pages/admin/AdminCatalogPage.js';
 import { AdminAnalyticsPage } from './pages/admin/AdminAnalyticsPage.js';
+import { AdminAppearancePage } from './pages/admin/AdminAppearancePage.js';
 import { AdminApiPage } from './pages/admin/AdminApiPage.js';
 import { AdminClientPage } from './pages/admin/AdminClientPage.js';
 import { AdminFeaturedPage } from './pages/admin/AdminFeaturedPage.js';
@@ -56,7 +61,24 @@ function RequireUser({ children }: { children: ReactElement }) {
   return children;
 }
 
+/**
+ * Reads the server's theme once and applies it to the document.
+ *
+ * Mounted here rather than per page so a signed-in admin, the sign-in screen
+ * and the landing page all agree — the endpoint is public, so it works before
+ * anyone has logged in.
+ */
+function useServerTheme() {
+  const infoQuery = useQuery({
+    queryKey: ['public', 'info'],
+    queryFn: () => api.get<PublicServerInfo>('/public/info'),
+    staleTime: 60_000,
+  });
+  useApplyTheme(infoQuery.data?.theme.tokens);
+}
+
 export function App() {
+  useServerTheme();
   return (
     <Routes>
       <Route path="/" element={<LandingPage />} />
@@ -86,6 +108,7 @@ export function App() {
         <Route path="client" element={<AdminClientPage />} />
         <Route path="api" element={<AdminApiPage />} />
         <Route path="analytics" element={<AdminAnalyticsPage />} />
+        <Route path="appearance" element={<AdminAppearancePage />} />
         <Route path="libraries" element={<AdminLibrariesPage />} />
         <Route path="users" element={<AdminUsersPage />} />
         <Route path="invites" element={<AdminInvitesPage />} />

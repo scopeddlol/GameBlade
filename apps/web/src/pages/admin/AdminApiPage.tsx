@@ -89,7 +89,7 @@ export function AdminApiPage() {
       <FormError message={error} />
 
       {created ? (
-        <section className="space-y-3 rounded-xl border border-emerald-900/60 bg-emerald-950/30 p-5">
+        <section className="gb-note space-y-3 rounded-xl p-5">
           <h2 className="flex items-center gap-2 text-sm font-semibold tracking-wide uppercase">
             <KeyRound className="h-4 w-4" aria-hidden />
             Copy this key now
@@ -184,7 +184,7 @@ export function AdminApiPage() {
         </fieldset>
 
         {scopes.includes('users:admin') ? (
-          <p className="flex items-start gap-2 rounded-lg border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
+          <p className="gb-note-warning flex items-start gap-2 text-xs">
             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
             <span>
               <code className="font-mono">users:admin</code> lets this key create administrators and

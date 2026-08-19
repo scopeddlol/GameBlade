@@ -1,3 +1,5 @@
+import type { LandingBlock } from './landing.js';
+import type { ThemePreset, ThemeTokens } from './theme.js';
 import type {
   ACHIEVEMENT_SOURCE,
   ACTIVITY_KIND,
@@ -279,6 +281,14 @@ export interface PublicServerInfo {
   /** Set when the installer is hosted here, so the button can show its size. */
   downloadFileName: string | null;
   downloadSizeBytes: number | null;
+  /** Colours for the whole app, resolved server-side so both clients agree. */
+  theme: {
+    preset: ThemePreset;
+    accent: string | null;
+    tokens: ThemeTokens;
+  };
+  /** The landing page's sections, in order. */
+  landingBlocks: LandingBlock[];
 }
 
 /** One image an admin can choose for a game, from either provider. */

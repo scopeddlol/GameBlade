@@ -4,6 +4,8 @@ import {
   createInviteSchema,
   clientButtonSchema,
   createApiKeySchema,
+  defaultLandingBlocks,
+  landingPageSchema,
   createLibrarySchema,
   featuredArtworkSchema,
   featuredSchema,
@@ -14,9 +16,13 @@ import {
   reorderClientButtonsSchema,
   reorderFeaturedSchema,
   scanRequestSchema,
+  themeSettingsSchema,
   updateLibrarySchema,
   updateUserSchema,
+  resolveTheme,
   type ClientInstallerInfo,
+  type LandingBlock,
+  type ThemePreset,
   type InviteInfo,
   type LibraryInfo,
   type PublicUser,
@@ -561,6 +567,47 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     catalog.setFeaturedArtwork(id, imageId);
     return catalog.listFeatured(context.user.id, false);
+  });
+
+  // ---- Look and feel ----
+
+  app.get('/admin/theme', async () => {
+    const current = settings.get();
+    return {
+      preset: current.themePreset as ThemePreset,
+      accent: current.themeAccent,
+      tokens: resolveTheme(current.themePreset as ThemePreset, current.themeAccent),
+    };
+  });
+
+  app.put('/admin/theme', async (request) => {
+    const input = themeSettingsSchema.parse(request.body);
+    settings.update({ themePreset: input.preset, themeAccent: input.accent ?? null });
+    return {
+      preset: input.preset,
+      accent: input.accent ?? null,
+      tokens: resolveTheme(input.preset, input.accent ?? null),
+    };
+  });
+
+  /** The landing page's blocks. Unset falls back to the built-in page. */
+  app.get('/admin/landing', async () => {
+    const stored = settings.get().landingBlocks;
+    const parsed = landingPageSchema.safeParse({ blocks: stored });
+    const blocks: LandingBlock[] = parsed.success ? parsed.data.blocks : defaultLandingBlocks();
+    return { blocks, isCustomised: stored !== null && stored !== undefined };
+  });
+
+  app.put('/admin/landing', async (request) => {
+    const input = landingPageSchema.parse(request.body);
+    settings.update({ landingBlocks: input.blocks });
+    return { blocks: input.blocks, isCustomised: true };
+  });
+
+  /** Throws the customised page away and goes back to the shipped one. */
+  app.post('/admin/landing/reset', async () => {
+    settings.clear('landingBlocks');
+    return { blocks: defaultLandingBlocks(), isCustomised: false };
   });
 
   // ---- Analytics ----

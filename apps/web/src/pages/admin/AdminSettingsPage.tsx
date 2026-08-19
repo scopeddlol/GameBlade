@@ -3,7 +3,7 @@ import { MAX_INSTALLER_BYTES } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trash2, Upload } from 'lucide-react';
 import { useRef, useState, type FormEvent } from 'react';
-import { Badge, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
+import { Badge, Field, FormError, PageLoader, Spinner, Notice } from '../../components/ui.js';
 import { api, ApiRequestError, queryString, uploadFile } from '../../lib/api.js';
 import { formatBytes } from '../../lib/format.js';
 
@@ -92,11 +92,7 @@ export function AdminSettingsPage() {
       <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
 
       <FormError message={error} />
-      {notice ? (
-        <p className="rounded-lg border border-emerald-900/60 bg-emerald-950/50 px-3 py-2 text-sm text-emerald-200">
-          {notice}
-        </p>
-      ) : null}
+      <Notice message={notice} />
 
       <form
         className="space-y-6"

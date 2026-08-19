@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { THEME_PRESETS } from './theme.js';
 import {
   ACHIEVEMENT_SOURCE,
   API_SCOPES,
@@ -413,6 +414,20 @@ export const featuredArtworkSchema = z.object({
   url: z.string().trim().url().max(1000).nullable(),
 });
 export type FeaturedArtworkInput = z.infer<typeof featuredArtworkSchema>;
+
+/* ------------------------------------------------------------------- theming */
+
+export const themeSettingsSchema = z.object({
+  preset: z.enum(THEME_PRESETS),
+  /** Null uses the preset's own accent. */
+  accent: z
+    .string()
+    .trim()
+    .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour such as #2bb7f5')
+    .nullable()
+    .optional(),
+});
+export type ThemeSettingsInput = z.infer<typeof themeSettingsSchema>;
 
 /* ----------------------------------------------------------------- api keys */
 
