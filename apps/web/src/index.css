@@ -27,6 +27,37 @@
 }
 
 @layer base {
+  /* Dark is the default; the theme applier stamps data-scheme on <html>. */
+  :root {
+    --status-danger-bg: rgb(69 10 10 / 0.6);
+    --status-danger-bg-strong: rgb(127 29 29 / 0.6);
+    --status-danger-border: rgb(127 29 29 / 0.6);
+    --status-danger-fg: #fecaca;
+
+    --status-success-bg: rgb(2 44 34 / 0.5);
+    --status-success-border: rgb(6 78 59 / 0.6);
+    --status-success-fg: #a7f3d0;
+
+    --status-warning-bg: rgb(69 26 3 / 0.4);
+    --status-warning-border: rgb(120 53 15 / 0.6);
+    --status-warning-fg: #fde68a;
+  }
+
+  :root[data-scheme='light'] {
+    --status-danger-bg: #fee2e2;
+    --status-danger-bg-strong: #fecaca;
+    --status-danger-border: #fca5a5;
+    --status-danger-fg: #991b1b;
+
+    --status-success-bg: #dcfce7;
+    --status-success-border: #86efac;
+    --status-success-fg: #166534;
+
+    --status-warning-bg: #fef3c7;
+    --status-warning-border: #fcd34d;
+    --status-warning-fg: #92400e;
+  }
+
   html {
     color-scheme: dark;
   }
@@ -95,7 +126,46 @@
   }
 
   .gb-btn-danger {
-    @apply border border-red-900/60 bg-red-950/60 text-red-200 hover:bg-red-900/60;
+    border: 1px solid var(--status-danger-border);
+    background: var(--status-danger-bg);
+    color: var(--status-danger-fg);
+  }
+  .gb-btn-danger:hover:not(:disabled) {
+    background: var(--status-danger-bg-strong);
+  }
+
+  /*
+   * Status surfaces are their own tokens rather than fixed palette steps.
+   * A red-950 fill is right on a near-black chrome and reads as a muddy brown
+   * block on a light one, so each scheme states its own.
+   */
+  .gb-note {
+    @apply rounded-lg border px-3 py-2 text-sm;
+    border-color: var(--status-success-border);
+    background: var(--status-success-bg);
+    color: var(--status-success-fg);
+  }
+  .gb-note-danger {
+    @apply rounded-lg border px-3 py-2 text-sm;
+    border-color: var(--status-danger-border);
+    background: var(--status-danger-bg);
+    color: var(--status-danger-fg);
+  }
+  /* The readiness pills on the catalog, and the destructive icon-button hover. */
+  .gb-pill-ok {
+    background: var(--status-success-bg);
+    color: var(--status-success-fg);
+  }
+  .gb-hover-danger:hover:not(:disabled) {
+    background: var(--status-danger-bg);
+    color: var(--status-danger-fg);
+  }
+
+  .gb-note-warning {
+    @apply rounded-lg border px-3 py-2 text-sm;
+    border-color: var(--status-warning-border);
+    background: var(--status-warning-bg);
+    color: var(--status-warning-fg);
   }
 
   .gb-card {

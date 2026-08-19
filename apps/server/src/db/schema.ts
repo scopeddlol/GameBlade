@@ -18,6 +18,11 @@ export const users = sqliteTable(
     isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
     createdAt: text('created_at').notNull().default(now),
     lastLoginAt: text('last_login_at'),
+    /**
+     * Monthly download allowance in MB, overriding the server default.
+     * Null means "use the default"; 0 means "unlimited for this account".
+     */
+    monthlyQuotaMb: integer('monthly_quota_mb'),
   },
   (t) => [uniqueIndex('users_username_lower_idx').on(t.usernameLower)],
 );
@@ -612,6 +617,56 @@ export const featuredGames = sqliteTable(
 );
 
 /**
+ * Keys for the external HTTP API.
+ *
+ * Only the SHA-256 of the token is stored, exactly as with sessions: a database
+ * that leaks must not hand the reader working credentials. The prefix is kept
+ * in the clear purely so a key can be told apart from its siblings in a list.
+ */
+export const apiKeys = sqliteTable(
+  'api_keys',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    prefix: text('prefix').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    scopes: text('scopes', { mode: 'json' }).$type<string[]>().notNull(),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: text('created_at').notNull().default(now),
+    lastUsedAt: text('last_used_at'),
+    expiresAt: text('expires_at'),
+    revokedAt: text('revoked_at'),
+  },
+  (t) => [uniqueIndex('api_keys_token_hash_idx').on(t.tokenHash)],
+);
+
+/**
+ * Operator-defined links the desktop client renders — a Discord invite, a
+ * wiki, a support page.
+ *
+ * Deliberately links and not actions: the client opens the URL in the user's
+ * browser. Letting an operator push anything executable to every player's
+ * machine is a different trust model entirely.
+ */
+export const clientButtons = sqliteTable(
+  'client_buttons',
+  {
+    id: text('id').primaryKey(),
+    label: text('label').notNull(),
+    url: text('url').notNull(),
+    icon: text('icon').notNull().default('link'),
+    placement: text('placement', { enum: ['sidebar', 'home', 'game-menu'] })
+      .notNull()
+      .default('sidebar'),
+    description: text('description'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [index('client_buttons_order_idx').on(t.active, t.placement, t.sortOrder)],
+);
+
+/**
  * Append-only feed rows. Written once and read by friends, which is far cheaper
  * than deriving a feed by unioning play sessions, unlocks and posts per request.
  */
@@ -679,6 +734,8 @@ export type MediaRecord = typeof media.$inferSelect;
 export type Post = typeof posts.$inferSelect;
 export type Comment = typeof comments.$inferSelect;
 export type FeaturedGame = typeof featuredGames.$inferSelect;
+export type ClientButtonRow = typeof clientButtons.$inferSelect;
+export type ApiKeyRow = typeof apiKeys.$inferSelect;
 export type ActivityEvent = typeof activityEvents.$inferSelect;
 export type NotificationRow = typeof notifications.$inferSelect;
 export type PlaySession = typeof playSessions.$inferSelect;

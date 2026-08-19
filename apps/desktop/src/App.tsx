@@ -1,4 +1,10 @@
-import type { GameSummary, NotificationInfo, NotificationKind } from '@gameblade/shared';
+import {
+  themeCssVariables,
+  type GameSummary,
+  type NotificationInfo,
+  type NotificationKind,
+  type PublicServerInfo,
+} from '@gameblade/shared';
 import {
   QueryClient,
   QueryClientProvider,
@@ -11,6 +17,7 @@ import clsx from 'clsx';
 import {
   Bell,
   Download,
+  ExternalLink,
   Gamepad2,
   Heart,
   Home,
@@ -29,6 +36,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { useClientButtons } from './components/GameContextMenu.js';
 import { DownloadQueue } from './components/DownloadQueue.js';
 import { FriendsRail } from './components/FriendsRail.js';
 import { ProfileDrawer } from './components/ProfileDrawer.js';
@@ -37,6 +45,7 @@ import { GameDetailPanel } from './components/GameDetail.js';
 import { Avatar, Loading } from './components/ui.js';
 import { RealtimeProvider, useRealtime } from './hooks/useRealtime.js';
 import { SessionProvider, useSession } from './hooks/useSession.js';
+import { buttonIcon } from './lib/buttonIcons.js';
 import { formatRelative } from './lib/format.js';
 import { ipc, type DownloadState, type RunningGame } from './lib/ipc.js';
 import { SignIn } from './SignIn.js';
@@ -90,6 +99,33 @@ export function App() {
   );
 }
 
+/**
+ * Applies the server's theme to the client.
+ *
+ * The stylesheet is written against `--ink-*` and `--blade-*`, so overriding
+ * those on the root restyles everything already on screen. The tokens come
+ * from the server rather than being chosen locally: an operator sets the look
+ * of their archive once, and both the web app and this client follow it.
+ */
+function useServerTheme(enabled: boolean) {
+  const themeQuery = useQuery({
+    queryKey: ['public', 'info'],
+    queryFn: () => ipc.get<PublicServerInfo>('/public/info'),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+
+  const tokens = themeQuery.data?.theme?.tokens;
+  useEffect(() => {
+    if (!tokens) return;
+    const root = document.documentElement;
+    for (const [name, value] of Object.entries(themeCssVariables(tokens))) {
+      root.style.setProperty(name, value);
+    }
+    root.style.setProperty('color-scheme', tokens.scheme);
+  }, [tokens]);
+}
+
 function Shell() {
   const { session, isRestoring, setSession } = useSession();
   const [tab, setTab] = useState<TabId>('home');
@@ -98,6 +134,8 @@ function Shell() {
   const [downloads, setDownloads] = useState<DownloadState[]>([]);
   const [friendsCollapsed, setFriendsCollapsed] = useState(false);
   const [profileId, setProfileId] = useState<string | null>(null);
+
+  useServerTheme(Boolean(session));
 
   const installedQuery = useQuery({
     queryKey: ['installed'],
@@ -161,6 +199,23 @@ function Shell() {
   }, [session]);
 
   const openGame = useCallback((game: GameSummary) => setOpenGameId(game.id), []);
+
+  // The webview's built-in menu offers Reload and View Source, which are
+  // meaningless in a packaged app and make it look like a browser. Suppressing
+  // it here rather than per-component is what lets any surface opt back in by
+  // calling preventDefault on its own handler — which is exactly what the
+  // in-app menus do — while text inputs keep the native one for copy/paste.
+  useEffect(() => {
+    const onContextMenu = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const editable =
+        target?.closest('input, textarea, [contenteditable="true"]') !== null &&
+        target?.closest('input, textarea, [contenteditable="true"]') !== undefined;
+      if (!editable) event.preventDefault();
+    };
+    window.addEventListener('contextmenu', onContextMenu);
+    return () => window.removeEventListener('contextmenu', onContextMenu);
+  }, []);
 
   if (isRestoring) {
     return (
@@ -286,6 +341,8 @@ function Sidebar({
         ))}
       </ul>
 
+      <CustomButtons placement="sidebar" />
+
       <div className="sidebar-foot">
         <button type="button" className="nav-item" onClick={onDownloads}>
           <Download size={18} aria-hidden />
@@ -299,6 +356,36 @@ function Sidebar({
         </button>
       </div>
     </nav>
+  );
+}
+
+/**
+ * Operator-defined links, rendered wherever the admin put them.
+ *
+ * Nothing renders at all when none are configured, so a server that has not
+ * set any up looks exactly as it did before the feature existed.
+ */
+function CustomButtons({ placement }: { placement: 'sidebar' | 'home' }) {
+  const buttonsQuery = useClientButtons(placement);
+  const buttons = buttonsQuery.data ?? [];
+  if (buttons.length === 0) return null;
+
+  return (
+    <ul className={clsx('nav', 'custom-buttons', placement === 'home' && 'inline')}>
+      {buttons.map((button) => (
+        <li key={button.id}>
+          <button
+            type="button"
+            className="nav-item"
+            title={button.description ?? button.url}
+            onClick={() => void ipc.openExternal(button.url)}
+          >
+            {buttonIcon(button.icon, 18) ?? <ExternalLink size={18} aria-hidden />}
+            <span>{button.label}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 

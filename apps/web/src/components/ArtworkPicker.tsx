@@ -140,10 +140,7 @@ export function ArtworkPicker({
           {/* A provider that failed is named, so a half-empty grid does not
               read as "there is no artwork for this game". */}
           {providerErrors.map((failure) => (
-            <p
-              key={failure.provider}
-              className="mb-3 rounded-lg border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-sm text-amber-200"
-            >
+            <p key={failure.provider} className="gb-note-warning mb-3">
               {failure.provider === 'igdb' ? 'IGDB' : 'SteamGridDB'} could not be reached:{' '}
               {failure.message}
             </p>

@@ -12,7 +12,7 @@ use api::{ApiClient, UserInfo};
 use credentials::StoredSession;
 use downloader::{DownloadManager, DownloadState};
 use error::{AppError, AppResult};
-use install::{InstallManager, InstalledGame};
+use install::{InstallCandidate, InstallManager, InstalledGame};
 use launcher::{LaunchRequest, Launcher, RunningGame};
 use realtime::RealtimeClient;
 use saves::{LocalSave, SaveRule};
@@ -59,9 +59,15 @@ impl AppState {
     }
 }
 
+/// What the UI is told about the current session.
+///
+/// Deliberately without the server address. The client only ever talks to one
+/// server, so showing the address tells a user nothing they can act on, and
+/// keeping it out of the frontend means it cannot end up on screen — or in a
+/// screenshot — by accident. Rust still holds it in `StoredSession`, which is
+/// where every request actually gets it from.
 #[derive(Serialize)]
 struct SessionInfo {
-    server_url: String,
     username: String,
     role: String,
 }
@@ -72,7 +78,6 @@ struct SessionInfo {
 async fn current_session(state: State<'_, AppState>) -> AppResult<Option<SessionInfo>> {
     let session = state.session.read().await;
     Ok(session.as_ref().map(|s| SessionInfo {
-        server_url: s.server_url.clone(),
         username: s.username.clone(),
         role: s.role.clone(),
     }))
@@ -403,6 +408,146 @@ async fn finish_install(
 
     state.installs.record(record.clone()).await?;
     Ok(record)
+}
+
+/// Folders that look like games, for the "I already have this installed" flow.
+///
+/// Scanning is deliberately dumb about *which* game each folder holds: it
+/// reports names, and the server does the matching against catalog titles with
+/// the same normalisation the library scanner uses. Guessing here as well
+/// would mean two implementations to keep in agreement.
+#[tauri::command]
+async fn scan_install_candidates(
+    state: State<'_, AppState>,
+    roots: Option<Vec<String>>,
+) -> AppResult<Vec<InstallCandidate>> {
+    let roots: Vec<PathBuf> = match roots {
+        Some(paths) if !paths.is_empty() => paths.into_iter().map(PathBuf::from).collect(),
+        // With nothing specified, the places this client already installs to
+        // are the obvious things to offer.
+        _ => state.settings.read().await.all_install_dirs(),
+    };
+
+    // Walking a whole drive is slow and fully synchronous, so it goes to the
+    // blocking pool rather than stalling every other command.
+    tokio::task::spawn_blocking(move || install::scan_for_games(&roots))
+        .await
+        .map_err(|err| AppError::Other(format!("Could not scan that folder: {err}")))
+}
+
+/// Registers a folder already on disk as an installed game.
+///
+/// The counterpart to `finish_install` for a copy the user obtained some other
+/// way. Nothing is copied or moved: the folder stays exactly where it is, which
+/// is the entire point — a player with 400 GB of games already installed should
+/// not have to download them a second time.
+#[tauri::command]
+async fn link_installed(
+    state: State<'_, AppState>,
+    game_id: String,
+    title: String,
+    path: String,
+) -> AppResult<InstalledGame> {
+    let root = PathBuf::from(&path);
+    if !root.is_dir() {
+        return Err(AppError::Other(format!(
+            "\"{path}\" is not a folder on this machine"
+        )));
+    }
+
+    if let Some(existing) = state.installs.get(&game_id).await {
+        return Err(AppError::Other(format!(
+            "\"{}\" is already linked to {}",
+            existing.title,
+            existing.install_path.display()
+        )));
+    }
+
+    let detect_root = root.clone();
+    let detect_title = title.clone();
+    let executable = tokio::task::spawn_blocking(move || {
+        install::detect_executable(&detect_root, &detect_title)
+    })
+    .await
+    .map_err(|err| AppError::Other(format!("Could not scan that folder: {err}")))?;
+
+    let size_root = root.clone();
+    let size_bytes = tokio::task::spawn_blocking(move || install::directory_size(&size_root))
+        .await
+        .unwrap_or(0);
+
+    let record = InstalledGame {
+        game_id,
+        title,
+        install_path: root,
+        executable,
+        size_bytes,
+        installed_at: chrono::Utc::now().to_rfc3339(),
+        save_base_sha256: None,
+    };
+
+    state.installs.record(record.clone()).await?;
+    Ok(record)
+}
+
+/// Forgets an installed game without deleting anything.
+///
+/// Distinct from `uninstall_game`, which removes the files. A linked folder was
+/// never ours to delete — the user had it before GameBlade did — so unlinking
+/// has to be a separate, obviously non-destructive action.
+#[tauri::command]
+async fn unlink_installed(state: State<'_, AppState>, game_id: String) -> AppResult<()> {
+    if state.launcher.is_running(&game_id).await {
+        return Err(AppError::Other(
+            "Quit the game before unlinking it".to_string(),
+        ));
+    }
+    state.installs.forget(&game_id).await
+}
+
+/// Shows an installed game's folder in the system file manager.
+#[tauri::command]
+async fn open_install_folder(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    game_id: String,
+) -> AppResult<()> {
+    let installed = state
+        .installs
+        .get(&game_id)
+        .await
+        .ok_or_else(|| AppError::Other("That game is not installed".to_string()))?;
+
+    if !installed.install_path.exists() {
+        return Err(AppError::Other(
+            "That folder is no longer on this machine".to_string(),
+        ));
+    }
+
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(installed.install_path.to_string_lossy(), None::<&str>)
+        .map_err(|err| AppError::Other(format!("Could not open the folder: {err}")))
+}
+
+/// Opens an operator-defined button's link in the user's browser.
+///
+/// Restricted to http(s) here as well as in the server's schema: this is the
+/// point where a URL becomes something the OS acts on, so it does not rely on
+/// the server having validated it.
+#[tauri::command]
+async fn open_external(app: tauri::AppHandle, url: String) -> AppResult<()> {
+    let lowered = url.trim().to_lowercase();
+    if !(lowered.starts_with("http://") || lowered.starts_with("https://")) {
+        return Err(AppError::Other(
+            "Only http and https links can be opened".to_string(),
+        ));
+    }
+
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|err| AppError::Other(format!("Could not open that link: {err}")))
 }
 
 #[tauri::command]
@@ -793,6 +938,11 @@ pub fn run() {
             list_storage_locations,
             list_installed,
             finish_install,
+            scan_install_candidates,
+            link_installed,
+            unlink_installed,
+            open_install_folder,
+            open_external,
             uninstall_game,
             launch_game,
             running_game,

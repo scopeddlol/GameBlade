@@ -1,9 +1,12 @@
 import type { GameSummary, Paginated } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Search } from 'lucide-react';
+import { FolderSearch, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { ContextMenu, useContextMenu } from '../components/ContextMenu.js';
 import { GameCard } from '../components/GameCard.js';
+import { useGameMenuItems } from '../components/GameContextMenu.js';
+import { ImportGames } from '../components/ImportGames.js';
 import { Empty, ErrorNote, Loading } from '../components/ui.js';
 import {
   errorMessage,
@@ -41,6 +44,7 @@ export function LibraryTab({
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<(typeof SORTS)[number]['id']>('played');
   const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   // Debounced so typing does not fire a request per keystroke.
   useEffect(() => {
@@ -80,6 +84,9 @@ export function LibraryTab({
     },
     onError: (caught) => setError(errorMessage(caught)),
   });
+
+  const menu = useContextMenu<GameSummary>();
+  const buildMenuItems = useGameMenuItems({ onOpen: onOpenGame, onError: setError });
 
   const installedIds = new Set(installed.map((game) => game.gameId));
   const items = (gamesQuery.data?.items ?? []).filter(
@@ -127,6 +134,16 @@ export function LibraryTab({
             </option>
           ))}
         </select>
+
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => setImporting(true)}
+          title="Link games you already have on this PC instead of downloading them again"
+        >
+          <FolderSearch size={15} aria-hidden />
+          Import
+        </button>
       </div>
 
       <ErrorNote message={error} />
@@ -157,11 +174,25 @@ export function LibraryTab({
                 onPrimary={() =>
                   isInstalled ? launchMutation.mutate(game.id) : installMutation.mutate(game.id)
                 }
+                onContextMenu={menu.open}
               />
             );
           })}
         </div>
       )}
+
+      {importing ? <ImportGames installed={installed} onClose={() => setImporting(false)} /> : null}
+
+      {menu.state ? (
+        <ContextMenu
+          position={menu.state.position}
+          onClose={menu.close}
+          items={buildMenuItems(menu.state.target, {
+            installed: installed.find((entry) => entry.gameId === menu.state?.target.id),
+            isRunning: running?.gameId === menu.state.target.id,
+          })}
+        />
+      ) : null}
     </div>
   );
 }

@@ -1,8 +1,12 @@
+import type { LandingBlock } from './landing.js';
+import type { ThemePreset, ThemeTokens } from './theme.js';
 import type {
   ACHIEVEMENT_SOURCE,
   ACTIVITY_KIND,
+  API_SCOPES,
   ART_KIND,
   CATALOG_GAP,
+  CLIENT_BUTTON_PLACEMENT,
   FRIENDSHIP_STATUS,
   GAME_KIND,
   MATCH_STATUS,
@@ -20,6 +24,8 @@ export type MatchStatus = (typeof MATCH_STATUS)[number];
 export type GameKind = (typeof GAME_KIND)[number];
 export type ArtKind = (typeof ART_KIND)[number];
 export type CatalogGap = (typeof CATALOG_GAP)[number];
+export type ClientButtonPlacement = (typeof CLIENT_BUTTON_PLACEMENT)[number];
+export type ApiScope = (typeof API_SCOPES)[number];
 export type Visibility = (typeof VISIBILITY)[number];
 export type FriendshipStatus = (typeof FRIENDSHIP_STATUS)[number];
 export type PresenceStatus = (typeof PRESENCE_STATUS)[number];
@@ -193,8 +199,63 @@ export interface ServerSettings {
   igdbClientSecretSet?: boolean;
   steamGridDbKeySet?: boolean;
   steamApiKeySet?: boolean;
+  /** Ceiling on one download stream, in KB/s. 0 disables the limit. */
+  downloadSpeedLimitKbps?: number;
+  /** Default monthly transfer allowance per account, in MB. 0 disables it. */
+  monthlyQuotaMb?: number;
   /** The uploaded Windows installer, when one has been stored. */
   installer?: ClientInstallerInfo | null;
+}
+
+/**
+ * An operator-defined link rendered by the desktop client — a Discord invite,
+ * a wiki, a support page.
+ */
+export interface ClientButton {
+  id: string;
+  label: string;
+  url: string;
+  /** One of CLIENT_BUTTON_ICONS; the client maps it to an icon component. */
+  icon: string;
+  placement: ClientButtonPlacement;
+  /** Shown as a tooltip in the client. */
+  description: string | null;
+  sortOrder: number;
+  active: boolean;
+}
+
+/**
+ * One folder on a player's machine that might already hold a game from the
+ * catalog, offered for linking rather than re-downloading.
+ */
+export interface LocalGameMatch {
+  /** The folder name that was searched for. */
+  name: string;
+  matches: Array<{ gameId: string; title: string; score: number }>;
+}
+
+/**
+ * An API key as the admin panel sees it. The secret itself is never included —
+ * it exists in plaintext exactly once, in the response that created it.
+ */
+export interface ApiKeyInfo {
+  id: string;
+  name: string;
+  /** The leading characters of the token, so a key can be identified in a list. */
+  prefix: string;
+  scopes: ApiScope[];
+  createdAt: string;
+  createdByUsername: string | null;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  /** False once revoked or expired. */
+  isValid: boolean;
+}
+
+/** The one and only time the plaintext token is returned. */
+export interface CreatedApiKey extends ApiKeyInfo {
+  token: string;
 }
 
 /** A Windows client installer held on the server rather than linked elsewhere. */
@@ -220,6 +281,14 @@ export interface PublicServerInfo {
   /** Set when the installer is hosted here, so the button can show its size. */
   downloadFileName: string | null;
   downloadSizeBytes: number | null;
+  /** Colours for the whole app, resolved server-side so both clients agree. */
+  theme: {
+    preset: ThemePreset;
+    accent: string | null;
+    tokens: ThemeTokens;
+  };
+  /** The landing page's sections, in order. */
+  landingBlocks: LandingBlock[];
 }
 
 /** One image an admin can choose for a game, from either provider. */

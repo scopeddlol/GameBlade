@@ -100,6 +100,60 @@ export const CATALOG_GAP = [
   'metadata',
 ] as const;
 
+/**
+ * Where an admin-defined button shows up in the desktop client.
+ *
+ * A button is a link, not a script: the client opens the URL in the user's
+ * browser. Anything richer would mean shipping admin-authored code to every
+ * player's machine, which is a very different trust model from "the operator
+ * can add a link to their Discord".
+ */
+export const CLIENT_BUTTON_PLACEMENT = ['sidebar', 'home', 'game-menu'] as const;
+
+/** Icons an admin can pick for a custom button, mapped to lucide names client-side. */
+export const CLIENT_BUTTON_ICONS = [
+  'link',
+  'message-circle',
+  'life-buoy',
+  'book-open',
+  'gift',
+  'shield',
+  'star',
+  'megaphone',
+  'wrench',
+  'globe',
+] as const;
+
+/**
+ * What an API key is allowed to do.
+ *
+ * Deliberately fine-grained around users: a provisioning integration needs to
+ * create accounts, and almost none of them need to be able to mint
+ * administrators — so that is its own scope rather than something `users:write`
+ * quietly includes.
+ */
+export const API_SCOPES = [
+  'users:read',
+  'users:write',
+  'users:admin',
+  'invites:write',
+  'games:read',
+  'stats:read',
+] as const;
+
+/** Human descriptions, shown beside each checkbox in the admin panel. */
+export const API_SCOPE_DESCRIPTIONS: Record<(typeof API_SCOPES)[number], string> = {
+  'users:read': 'List and read accounts.',
+  'users:write': 'Create, update and deactivate non-admin accounts.',
+  'users:admin': 'Create or promote administrators. Grant sparingly.',
+  'invites:write': 'Generate invite codes.',
+  'games:read': 'List the catalog.',
+  'stats:read': 'Read server and usage statistics.',
+};
+
+/** Every key is issued with this prefix, so one is recognisable if leaked. */
+export const API_KEY_PREFIX = 'gbk_';
+
 /** Default lifetime of a browser session, in days. */
 export const SESSION_TTL_DAYS = 30;
 

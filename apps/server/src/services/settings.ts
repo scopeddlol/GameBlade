@@ -15,6 +15,16 @@ export interface RuntimeSettings {
   steamGridDbKey: string | null;
   /** Reads the public Steam achievement schema; no user data is involved. */
   steamApiKey: string | null;
+  /** Ceiling on one download stream, in KB/s. 0 disables the limit. */
+  downloadSpeedLimitKbps: number;
+  /** Default monthly transfer allowance per account, in MB. 0 disables it. */
+  monthlyQuotaMb: number;
+  /** Named colour theme applied to the web app and the desktop client. */
+  themePreset: string;
+  /** Optional hex accent replacing the preset's own. */
+  themeAccent: string | null;
+  /** The landing page, as an ordered list of blocks. Null means "the default". */
+  landingBlocks: unknown;
 }
 
 const DEFAULT_TAGLINE = 'A private home for free-to-play and DRM-free games worth keeping.';
@@ -54,6 +64,11 @@ export class SettingsService {
       return typeof value === 'boolean' ? value : fallback;
     };
 
+    const asNumber = (key: SettingKey, fallback: number): number => {
+      const value = stored.get(key);
+      return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+    };
+
     this.cache = {
       serverName: asString('serverName', 'GameBlade') ?? 'GameBlade',
       tagline: asString('tagline', DEFAULT_TAGLINE) ?? DEFAULT_TAGLINE,
@@ -64,6 +79,11 @@ export class SettingsService {
       igdbClientSecret: asString('igdbClientSecret', this.config.igdb?.clientSecret ?? null),
       steamGridDbKey: asString('steamGridDbKey', this.config.steamGridDbKey),
       steamApiKey: asString('steamApiKey', this.config.steamApiKey),
+      downloadSpeedLimitKbps: asNumber('downloadSpeedLimitKbps', 0),
+      monthlyQuotaMb: asNumber('monthlyQuotaMb', 0),
+      themePreset: asString('themePreset', 'midnight') ?? 'midnight',
+      themeAccent: asString('themeAccent', null),
+      landingBlocks: stored.get('landingBlocks') ?? null,
     };
     return this.cache;
   }

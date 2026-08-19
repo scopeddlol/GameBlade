@@ -1,8 +1,12 @@
 import { z } from 'zod';
+import { THEME_PRESETS } from './theme.js';
 import {
   ACHIEVEMENT_SOURCE,
+  API_SCOPES,
   ART_KIND,
   CATALOG_GAP,
+  CLIENT_BUTTON_ICONS,
+  CLIENT_BUTTON_PLACEMENT,
   MAX_CLIP_BYTES,
   MAX_IMAGE_BYTES,
   POST_KIND,
@@ -70,6 +74,11 @@ export const updateUserSchema = z.object({
   email: emailSchema.nullable().optional(),
   /** Admin-initiated password reset. */
   password: passwordSchema.optional(),
+  /**
+   * Monthly download allowance in MB for this account, overriding the server
+   * default. Null restores the default; 0 makes this account unlimited.
+   */
+  monthlyQuotaMb: z.number().int().min(0).max(100_000_000).nullable().optional(),
 });
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 
@@ -127,6 +136,10 @@ export const providerSettingsSchema = z.object({
   igdbClientSecret: z.string().trim().max(200).nullable().optional(),
   steamGridDbKey: z.string().trim().max(200).nullable().optional(),
   steamApiKey: z.string().trim().max(200).nullable().optional(),
+  /** Ceiling on one download stream, in KB/s. 0 disables the limit. */
+  downloadSpeedLimitKbps: z.number().int().min(0).max(10_000_000).optional(),
+  /** Default monthly transfer allowance per account, in MB. 0 disables it. */
+  monthlyQuotaMb: z.number().int().min(0).max(100_000_000).optional(),
 });
 export type ProviderSettingsInput = z.infer<typeof providerSettingsSchema>;
 
@@ -401,6 +414,113 @@ export const featuredArtworkSchema = z.object({
   url: z.string().trim().url().max(1000).nullable(),
 });
 export type FeaturedArtworkInput = z.infer<typeof featuredArtworkSchema>;
+
+/* ------------------------------------------------------------------- theming */
+
+export const themeSettingsSchema = z.object({
+  preset: z.enum(THEME_PRESETS),
+  /** Null uses the preset's own accent. */
+  accent: z
+    .string()
+    .trim()
+    .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour such as #2bb7f5')
+    .nullable()
+    .optional(),
+});
+export type ThemeSettingsInput = z.infer<typeof themeSettingsSchema>;
+
+/* ----------------------------------------------------------------- api keys */
+
+export const createApiKeySchema = z.object({
+  name: z.string().trim().min(1, 'Name the key so you can recognise it later').max(60),
+  scopes: z.array(z.enum(API_SCOPES)).min(1, 'Pick at least one permission'),
+  /** Null means it never expires; an integration key usually should. */
+  expiresInDays: z.number().int().min(1).max(3650).nullable().default(365),
+});
+export type CreateApiKeyInput = z.infer<typeof createApiKeySchema>;
+
+/* ------------------------------------------------- the external v1 API */
+
+/**
+ * Provisioning an account from outside.
+ *
+ * The password is optional: an external service creating accounts in bulk
+ * usually wants the server to generate one and hand it back, rather than
+ * inventing (and having to transmit) its own.
+ */
+export const apiCreateUserSchema = z.object({
+  username: usernameSchema,
+  password: passwordSchema.optional(),
+  email: emailSchema.nullable().optional(),
+  role: z.enum(ROLES).default('user'),
+});
+export type ApiCreateUserInput = z.infer<typeof apiCreateUserSchema>;
+
+export const apiUpdateUserSchema = z.object({
+  email: emailSchema.nullable().optional(),
+  role: z.enum(ROLES).optional(),
+  isActive: z.boolean().optional(),
+  password: passwordSchema.optional(),
+});
+export type ApiUpdateUserInput = z.infer<typeof apiUpdateUserSchema>;
+
+export const apiListUsersSchema = z.object({
+  query: z.string().trim().max(64).optional(),
+  role: z.enum(ROLES).optional(),
+  isActive: z.coerce.boolean().optional(),
+  offset: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+export type ApiListUsersQuery = z.infer<typeof apiListUsersSchema>;
+
+/* ------------------------------------------------- desktop client buttons */
+
+/**
+ * An operator-defined link shown in the desktop client.
+ *
+ * The URL is restricted to http(s) rather than accepting any scheme: the
+ * client hands it to the OS opener, and a `file:` or custom-scheme URL pushed
+ * from the server would be a way to make every player's machine launch
+ * something local.
+ */
+export const clientButtonSchema = z.object({
+  label: z.string().trim().min(1, 'Give the button a label').max(40),
+  url: z
+    .string()
+    .trim()
+    .url('Enter a full URL, including https://')
+    .max(500)
+    .refine((value) => /^https?:\/\//i.test(value), 'Only http and https links are allowed'),
+  icon: z.enum(CLIENT_BUTTON_ICONS).default('link'),
+  placement: z.enum(CLIENT_BUTTON_PLACEMENT).default('sidebar'),
+  description: z.string().trim().max(160).nullable().optional(),
+  sortOrder: z.number().int().min(0).max(1000).default(0),
+  active: z.boolean().default(true),
+});
+export type ClientButtonInput = z.infer<typeof clientButtonSchema>;
+
+export const reorderClientButtonsSchema = z.object({
+  ids: z.array(z.string().trim().max(64)).max(50),
+});
+export type ReorderClientButtonsInput = z.infer<typeof reorderClientButtonsSchema>;
+
+/* --------------------------------------------------- linking local installs */
+
+/**
+ * Folder names found on a player's machine, matched against catalog titles so
+ * an already-installed copy can be linked instead of downloaded again.
+ *
+ * Matching runs on the server because that is where the title-normalisation
+ * and similarity scoring already live; duplicating them in the client is how
+ * the two drift into disagreeing about what counts as a match.
+ */
+export const matchLocalSchema = z.object({
+  names: z.array(z.string().trim().min(1).max(200)).min(1).max(200),
+  /** Below this similarity a suggestion is noise rather than a candidate. */
+  threshold: z.number().min(0).max(1).default(0.5),
+  limit: z.coerce.number().int().min(1).max(10).default(5),
+});
+export type MatchLocalInput = z.infer<typeof matchLocalSchema>;
 
 export const announcementSchema = z.object({
   title: z.string().trim().min(1).max(120),

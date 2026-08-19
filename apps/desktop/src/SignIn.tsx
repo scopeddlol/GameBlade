@@ -1,7 +1,7 @@
 import { Swords } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { ErrorNote, Spinner } from './components/ui.js';
-import { SERVER_HOST, errorMessage, ipc, type SessionInfo } from './lib/ipc.js';
+import { errorMessage, ipc, type SessionInfo } from './lib/ipc.js';
 
 export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionInfo) => void }) {
   const [username, setUsername] = useState('');
@@ -30,7 +30,6 @@ export function SignIn({ onSignedIn }: { onSignedIn: (session: SessionInfo) => v
         <div className="signin-brand">
           <Swords size={34} aria-hidden />
           <h1>GameBlade</h1>
-          <p className="muted small">{SERVER_HOST}</p>
         </div>
 
         <form className="card" onSubmit={handleSubmit}>

@@ -1,17 +1,17 @@
 import { invoke } from '@tauri-apps/api/core';
 
+/**
+ * Deliberately without the server address.
+ *
+ * The client only ever talks to one server, so naming it on screen tells a
+ * user nothing they can act on. Keeping it out of the payload entirely is what
+ * stops it reappearing in the UI — or in a screenshot — by accident; the Rust
+ * side still holds it and puts it on every request.
+ */
 export interface SessionInfo {
-  server_url: string;
   username: string;
   role: string;
 }
-
-/**
- * The server this build talks to, shown on the sign-in screen. The address
- * itself is compiled into the Rust side; this is only for display, so a user
- * can see at a glance which archive they are signing in to.
- */
-export const SERVER_HOST = 'archive.scopedd.lol';
 
 export interface UserInfo {
   id: string;
@@ -45,6 +45,15 @@ export interface InstalledGame {
   sizeBytes: number;
   installedAt: string;
   saveBaseSha256: string | null;
+}
+
+/** A folder on this machine that might already hold a game from the catalog. */
+export interface InstallCandidate {
+  path: string;
+  name: string;
+  sizeBytes: number;
+  executable: string | null;
+  executableCount: number;
 }
 
 export interface RunningGame {
@@ -145,6 +154,18 @@ export const ipc = {
   finishInstall: (gameId: string, title: string, downloadedPath: string) =>
     invoke<InstalledGame>('finish_install', { gameId, title, downloadedPath }),
   uninstall: (gameId: string) => invoke<void>('uninstall_game', { gameId }),
+
+  /** Folders that look like games, for linking a copy the user already has. */
+  scanInstallCandidates: (roots?: string[]) =>
+    invoke<InstallCandidate[]>('scan_install_candidates', { roots }),
+  /** Registers a folder already on disk; nothing is copied or moved. */
+  linkInstalled: (gameId: string, title: string, path: string) =>
+    invoke<InstalledGame>('link_installed', { gameId, title, path }),
+  /** Forgets a linked folder without deleting it. */
+  unlinkInstalled: (gameId: string) => invoke<void>('unlink_installed', { gameId }),
+
+  openInstallFolder: (gameId: string) => invoke<void>('open_install_folder', { gameId }),
+  openExternal: (url: string) => invoke<void>('open_external', { url }),
 
   /* -------------------------------------------------------------- playing */
 

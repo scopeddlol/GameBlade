@@ -64,11 +64,19 @@ export function Badge({
       className={clsx(
         'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
         tone === 'neutral' && 'bg-ink-700 text-ink-200',
-        tone === 'success' && 'bg-emerald-950 text-emerald-300',
-        tone === 'warning' && 'bg-amber-950 text-amber-300',
-        tone === 'danger' && 'bg-red-950 text-red-300',
         tone === 'info' && 'bg-blade-700/30 text-blade-400',
       )}
+      // Status tints are scheme-dependent — a near-black fill is right on a
+      // dark chrome and unreadable on a light one — so they come from tokens
+      // the theme sets rather than from fixed palette steps.
+      style={
+        tone === 'success' || tone === 'warning' || tone === 'danger'
+          ? {
+              background: `var(--status-${tone}-bg)`,
+              color: `var(--status-${tone}-fg)`,
+            }
+          : undefined
+      }
     >
       {children}
     </span>
@@ -78,10 +86,17 @@ export function Badge({
 export function FormError({ message }: { message?: string | null }) {
   if (!message) return null;
   return (
-    <p
-      className="rounded-lg border border-red-900/60 bg-red-950/50 px-3 py-2 text-sm text-red-200"
-      role="alert"
-    >
+    <p className="gb-note-danger" role="alert">
+      {message}
+    </p>
+  );
+}
+
+/** A short confirmation. Pairs with FormError, and follows the theme. */
+export function Notice({ message }: { message?: string | null }) {
+  if (!message) return null;
+  return (
+    <p className="gb-note" role="status">
       {message}
     </p>
   );

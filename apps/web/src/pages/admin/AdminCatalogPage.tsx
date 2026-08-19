@@ -24,7 +24,15 @@ import {
 import { useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ArtworkPicker } from '../../components/ArtworkPicker.js';
-import { Badge, EmptyState, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
+import {
+  Badge,
+  EmptyState,
+  Field,
+  FormError,
+  PageLoader,
+  Spinner,
+  Notice,
+} from '../../components/ui.js';
 import { api, ApiRequestError, queryString } from '../../lib/api.js';
 import { formatBytes } from '../../lib/format.js';
 
@@ -97,7 +105,7 @@ function ReadinessPills({ game }: { game: GameSummary }) {
             title={`${indicator.title}: ${present ? 'set' : 'missing'}`}
             className={
               present
-                ? 'rounded bg-emerald-950 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-300'
+                ? 'gb-pill-ok rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide'
                 : 'bg-ink-800 text-ink-500 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide line-through'
             }
           >
@@ -358,7 +366,7 @@ function DeleteGameButton({ game }: { game: GameSummary }) {
           : 'Remove this entry from the catalog'
       }
       aria-label={`Remove ${game.title} from the catalog`}
-      className="text-ink-500 rounded p-2 transition-colors hover:bg-red-950/60 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+      className="text-ink-500 gb-hover-danger rounded p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       disabled={remove.isPending}
       onClick={() => {
         const question = game.isMissing
@@ -585,11 +593,7 @@ function MetadataTab({ game }: { game: GameDetail }) {
   return (
     <div className="space-y-6">
       <FormError message={error} />
-      {notice ? (
-        <p className="rounded-lg border border-emerald-900/60 bg-emerald-950/50 px-3 py-2 text-sm text-emerald-200">
-          {notice}
-        </p>
-      ) : null}
+      <Notice message={notice} />
 
       <section className="gb-card space-y-3 p-4">
         <h3 className="text-sm font-semibold tracking-wide uppercase">Pull from IGDB</h3>
@@ -1002,11 +1006,7 @@ function AchievementsTab({ game }: { game: GameDetail }) {
   return (
     <div className="space-y-5">
       <FormError message={error} />
-      {notice ? (
-        <p className="rounded-lg border border-emerald-900/60 bg-emerald-950/50 px-3 py-2 text-sm text-emerald-200">
-          {notice}
-        </p>
-      ) : null}
+      <Notice message={notice} />
 
       <section className="gb-card space-y-3 p-4">
         <h3 className="text-sm font-semibold tracking-wide uppercase">Import from Steam</h3>

@@ -3,7 +3,7 @@ import { MAX_INSTALLER_BYTES } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trash2, Upload } from 'lucide-react';
 import { useRef, useState, type FormEvent } from 'react';
-import { Badge, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
+import { Badge, Field, FormError, PageLoader, Spinner, Notice } from '../../components/ui.js';
 import { api, ApiRequestError, queryString, uploadFile } from '../../lib/api.js';
 import { formatBytes } from '../../lib/format.js';
 
@@ -15,6 +15,8 @@ export function AdminSettingsPage() {
     downloadUrl: '',
     clientVersion: '',
     igdbClientId: '',
+    downloadSpeedLimitKbps: '0',
+    monthlyQuotaMb: '0',
   });
   // Secrets are write-only: the server reports whether one is set but never
   // returns it, so a blank box means "leave what is stored alone".
@@ -36,6 +38,8 @@ export function AdminSettingsPage() {
         downloadUrl: current.downloadUrl || (data.downloadUrl ?? ''),
         clientVersion: current.clientVersion || (data.clientVersion ?? ''),
         igdbClientId: current.igdbClientId || (data.igdbClientId ?? ''),
+        downloadSpeedLimitKbps: String(data.downloadSpeedLimitKbps ?? 0),
+        monthlyQuotaMb: String(data.monthlyQuotaMb ?? 0),
       }));
       return data;
     },
@@ -52,6 +56,8 @@ export function AdminSettingsPage() {
         igdbClientSecret: secrets.igdbClientSecret || undefined,
         steamGridDbKey: secrets.steamGridDbKey || undefined,
         steamApiKey: secrets.steamApiKey || undefined,
+        downloadSpeedLimitKbps: Number(form.downloadSpeedLimitKbps) || 0,
+        monthlyQuotaMb: Number(form.monthlyQuotaMb) || 0,
       }),
     onSuccess: async () => {
       setNotice('Settings saved.');
@@ -86,11 +92,7 @@ export function AdminSettingsPage() {
       <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
 
       <FormError message={error} />
-      {notice ? (
-        <p className="rounded-lg border border-emerald-900/60 bg-emerald-950/50 px-3 py-2 text-sm text-emerald-200">
-          {notice}
-        </p>
-      ) : null}
+      <Notice message={notice} />
 
       <form
         className="space-y-6"
@@ -169,6 +171,45 @@ export function AdminSettingsPage() {
               </span>
             </span>
           </label>
+        </section>
+
+        <section className="gb-card space-y-4 p-5">
+          <h2 className="text-sm font-semibold tracking-wide uppercase">Bandwidth</h2>
+          <p className="text-ink-400 -mt-2 text-xs">
+            Both default to 0, which means no limit. Administrators are exempt from the allowance —
+            they can change it at will, so enforcing one against them only risks locking you out of
+            your own server.
+          </p>
+
+          <Field
+            label="Download speed limit"
+            htmlFor="speedLimit"
+            hint="KB/s per download stream. A client opening several connections gets this much on each."
+          >
+            <input
+              id="speedLimit"
+              type="number"
+              min={0}
+              className="gb-input"
+              value={form.downloadSpeedLimitKbps}
+              onChange={(e) => setForm({ ...form, downloadSpeedLimitKbps: e.target.value })}
+            />
+          </Field>
+
+          <Field
+            label="Monthly allowance per account"
+            htmlFor="monthlyQuota"
+            hint="MB per calendar month, resetting on the 1st. Override it per account on the Users page."
+          >
+            <input
+              id="monthlyQuota"
+              type="number"
+              min={0}
+              className="gb-input"
+              value={form.monthlyQuotaMb}
+              onChange={(e) => setForm({ ...form, monthlyQuotaMb: e.target.value })}
+            />
+          </Field>
         </section>
 
         <section className="gb-card space-y-4 p-5">

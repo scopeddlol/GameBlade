@@ -181,11 +181,7 @@ function Announcements() {
       </h2>
 
       <FormError message={error} />
-      {notice ? (
-        <p className="mb-3 rounded-lg border border-emerald-900/60 bg-emerald-950/50 px-3 py-2 text-sm text-emerald-200">
-          {notice}
-        </p>
-      ) : null}
+      {notice ? <p className="gb-note mb-3">{notice}</p> : null}
 
       <form
         className="max-w-xl space-y-4"

@@ -2,6 +2,10 @@ import {
   achievementDefinitionSchema,
   announcementSchema,
   createInviteSchema,
+  clientButtonSchema,
+  createApiKeySchema,
+  defaultLandingBlocks,
+  landingPageSchema,
   createLibrarySchema,
   featuredArtworkSchema,
   featuredSchema,
@@ -9,11 +13,16 @@ import {
   importAchievementsSchema,
   providerSettingsSchema,
   purgeMissingSchema,
+  reorderClientButtonsSchema,
   reorderFeaturedSchema,
   scanRequestSchema,
+  themeSettingsSchema,
   updateLibrarySchema,
   updateUserSchema,
+  resolveTheme,
   type ClientInstallerInfo,
+  type LandingBlock,
+  type ThemePreset,
   type InviteInfo,
   type LibraryInfo,
   type PublicUser,
@@ -45,6 +54,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     presence,
     images,
     installer,
+    clientButtons,
+    apiKeys,
+    analytics,
+    bandwidth,
   } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
@@ -91,6 +104,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     if (input.role !== undefined) patch.role = input.role;
     if (input.isActive !== undefined) patch.isActive = input.isActive;
     if (input.email !== undefined) patch.email = input.email;
+    if (input.monthlyQuotaMb !== undefined) patch.monthlyQuotaMb = input.monthlyQuotaMb;
 
     if (Object.keys(patch).length > 0) {
       db.update(users).set(patch).where(eq(users.id, id)).run();
@@ -399,6 +413,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       igdbClientSecretSet: Boolean(current.igdbClientSecret),
       steamGridDbKeySet: Boolean(current.steamGridDbKey),
       steamApiKeySet: Boolean(current.steamApiKey),
+      downloadSpeedLimitKbps: current.downloadSpeedLimitKbps,
+      monthlyQuotaMb: current.monthlyQuotaMb,
       installer: installer.info(),
     };
   }
@@ -420,6 +436,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       ...(input.igdbClientSecret !== undefined ? { igdbClientSecret: input.igdbClientSecret } : {}),
       ...(input.steamGridDbKey !== undefined ? { steamGridDbKey: input.steamGridDbKey } : {}),
       ...(input.steamApiKey !== undefined ? { steamApiKey: input.steamApiKey } : {}),
+      ...(input.downloadSpeedLimitKbps !== undefined
+        ? { downloadSpeedLimitKbps: input.downloadSpeedLimitKbps }
+        : {}),
+      ...(input.monthlyQuotaMb !== undefined ? { monthlyQuotaMb: input.monthlyQuotaMb } : {}),
     });
 
     return describeSettings();
@@ -547,6 +567,124 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     catalog.setFeaturedArtwork(id, imageId);
     return catalog.listFeatured(context.user.id, false);
+  });
+
+  // ---- Look and feel ----
+
+  app.get('/admin/theme', async () => {
+    const current = settings.get();
+    return {
+      preset: current.themePreset as ThemePreset,
+      accent: current.themeAccent,
+      tokens: resolveTheme(current.themePreset as ThemePreset, current.themeAccent),
+    };
+  });
+
+  app.put('/admin/theme', async (request) => {
+    const input = themeSettingsSchema.parse(request.body);
+    settings.update({ themePreset: input.preset, themeAccent: input.accent ?? null });
+    return {
+      preset: input.preset,
+      accent: input.accent ?? null,
+      tokens: resolveTheme(input.preset, input.accent ?? null),
+    };
+  });
+
+  /** The landing page's blocks. Unset falls back to the built-in page. */
+  app.get('/admin/landing', async () => {
+    const stored = settings.get().landingBlocks;
+    const parsed = landingPageSchema.safeParse({ blocks: stored });
+    const blocks: LandingBlock[] = parsed.success ? parsed.data.blocks : defaultLandingBlocks();
+    return { blocks, isCustomised: stored !== null && stored !== undefined };
+  });
+
+  app.put('/admin/landing', async (request) => {
+    const input = landingPageSchema.parse(request.body);
+    settings.update({ landingBlocks: input.blocks });
+    return { blocks: input.blocks, isCustomised: true };
+  });
+
+  /** Throws the customised page away and goes back to the shipped one. */
+  app.post('/admin/landing/reset', async () => {
+    settings.clear('landingBlocks');
+    return { blocks: defaultLandingBlocks(), isCustomised: false };
+  });
+
+  // ---- Analytics ----
+
+  /**
+   * Everything the analytics page renders, in one request. The page shows six
+   * panels; six endpoints would each pay their own round trip for data that all
+   * comes out of the same two tables.
+   */
+  app.get('/admin/analytics', async (request) => {
+    const { days } = request.query as { days?: string };
+    const parsed = Number(days);
+    const rangeDays = Number.isFinite(parsed) ? Math.min(365, Math.max(1, Math.floor(parsed))) : 30;
+    return analytics.report(rangeDays);
+  });
+
+  /** One account's month-to-date transfer against its allowance. */
+  app.get('/admin/users/:id/quota', async (request) => {
+    const { id } = request.params as { id: string };
+    return bandwidth.status(id);
+  });
+
+  // ---- API keys for the external API ----
+
+  app.get('/admin/api-keys', async () => apiKeys.list());
+
+  /**
+   * Mints a key. The plaintext token comes back here and nowhere else, so the
+   * UI has to show it once and tell the operator to store it.
+   */
+  app.post('/admin/api-keys', async (request, reply) => {
+    const context = requireAdmin(request);
+    const input = createApiKeySchema.parse(request.body);
+    return reply.code(201).send(apiKeys.create(input, context.user.id));
+  });
+
+  /** Revoking keeps the row, so the audit trail of what existed survives. */
+  app.post('/admin/api-keys/:id/revoke', async (request) => {
+    const { id } = request.params as { id: string };
+    apiKeys.revoke(id);
+    return { ok: true };
+  });
+
+  app.delete('/admin/api-keys/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    apiKeys.remove(id);
+    return { ok: true };
+  });
+
+  // ---- Custom buttons in the desktop client ----
+
+  /**
+   * Operator-defined links the desktop client renders. Admins see inactive
+   * rows too, so a button can be staged before it goes live.
+   */
+  app.get('/admin/client-buttons', async () => clientButtons.listAll());
+
+  app.post('/admin/client-buttons', async (request, reply) => {
+    const input = clientButtonSchema.parse(request.body);
+    return reply.code(201).send(clientButtons.create(input));
+  });
+
+  app.put('/admin/client-buttons/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    return clientButtons.update(id, clientButtonSchema.parse(request.body));
+  });
+
+  app.delete('/admin/client-buttons/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    clientButtons.remove(id);
+    return { ok: true };
+  });
+
+  app.post('/admin/client-buttons/reorder', async (request) => {
+    const input = reorderClientButtonsSchema.parse(request.body);
+    clientButtons.reorder(input.ids);
+    return clientButtons.listAll();
   });
 
   // ---- Achievement definitions ----

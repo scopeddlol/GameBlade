@@ -1,8 +1,29 @@
-import type { PublicServerInfo } from '@gameblade/shared';
+import {
+  defaultLandingBlocks,
+  landingPageSchema,
+  resolveTheme,
+  type LandingBlock,
+  type PublicServerInfo,
+  type ThemePreset,
+} from '@gameblade/shared';
 import { isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { requireUser } from '../auth/middleware.js';
 import { games } from '../db/schema.js';
+
+/**
+ * Stored blocks, or the defaults.
+ *
+ * Parsed rather than trusted: the column is JSON written by an earlier version
+ * of the schema, and a landing page that throws is a server whose front door
+ * 500s. Anything unreadable falls back to the default page.
+ */
+function readLandingBlocks(stored: unknown): LandingBlock[] {
+  if (stored === null || stored === undefined) return defaultLandingBlocks();
+  const parsed = landingPageSchema.safeParse({ blocks: stored });
+  if (!parsed.success) return defaultLandingBlocks();
+  return parsed.data.blocks;
+}
 
 export async function homeRoutes(app: FastifyInstance): Promise<void> {
   const { catalog, db, settings, auth, installer } = app.gameblade;
@@ -52,6 +73,12 @@ export async function homeRoutes(app: FastifyInstance): Promise<void> {
       gameCount: gameCount?.count ?? 0,
       downloadFileName: uploaded?.fileName ?? null,
       downloadSizeBytes: uploaded?.sizeBytes ?? null,
+      theme: {
+        preset: current.themePreset as ThemePreset,
+        accent: current.themeAccent,
+        tokens: resolveTheme(current.themePreset as ThemePreset, current.themeAccent),
+      },
+      landingBlocks: readLandingBlocks(current.landingBlocks),
     };
     return body;
   });

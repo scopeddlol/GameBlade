@@ -187,7 +187,9 @@ device for that account.
 
 ## The admin panel
 
-Everything an operator needs, at `/admin`:
+Everything an operator needs, at `/admin` — and it works on a phone: below the
+large breakpoint the sidebar becomes a drawer, and tables and charts stay inside
+the viewport rather than forcing the page sideways.
 
 - **Overview** — catalog health, connected clients, scan progress, and a
   broadcast announcement box that pushes a notification to every account.
@@ -201,8 +203,22 @@ Everything an operator needs, at `/admin`:
   desktop client needs to actually run and back up that game.
 - **Featured** — curates the carousel on the client's Home tab, in order, with
   a per-slot image override.
+- **Desktop client** — your own links (a Discord invite, a wiki, a support
+  page) rendered in the client's sidebar, on its Home tab, or in the menu that
+  opens when a player right-clicks a game. Links only: the client hands the URL
+  to the player's browser, and only `http(s)` is accepted — pushing anything
+  executable to every player's machine would be a different trust model
+  entirely.
+- **Analytics** — who downloaded what, the most-played titles, bandwidth per
+  day and per month, allowance usage, and a recent-downloads log. Everything is
+  derived from the download and play records already being written, so there is
+  no separate counter to drift out of agreement with them.
+- **API keys** — scoped credentials for the external API. See
+  [docs/API.md](docs/API.md).
+- **Appearance** — the colour theme and the landing page, edited side by side
+  with a live preview of the real page.
 - **Libraries**, **Users**, **Invites**, **Settings** — as before, plus the
-  landing-page copy and the Windows client installer.
+  landing-page copy, the Windows client installer and the bandwidth limits.
 
 ### Picking artwork
 
@@ -227,6 +243,78 @@ the version. One build is kept at a time — uploading again replaces it.
 `CLIENT_DOWNLOAD_URL` and the URL field beside the upload still work and are
 used whenever no installer has been uploaded, so an existing deployment keeps
 pointing wherever it already did.
+
+### Games players already have
+
+A player with a drive full of games should not have to download a second copy
+of any of them. **Library → Import** points the client at a folder, finds every
+subfolder holding a Windows executable, and matches those folder names against
+the catalog — through the same title parser the library scanner uses, so a
+`Hollow.Knight.v1.5.78.11.GOG-FitGirl` folder still resolves. Each row is
+confirmed by hand before anything is linked, because a wrong match would attach
+the wrong cloud saves to the wrong game.
+
+Linking copies and moves nothing; the files stay where they are. Unlinking is
+therefore a separate action from uninstalling, and only the latter deletes.
+
+### Right-click menus
+
+Right-clicking a game anywhere in the client — Home, Library or Store — opens a
+menu with everything that applies to it: play or install, add to library,
+favourite, open the install folder, unlink, uninstall, plus any custom buttons
+placed there. Text fields keep the native menu, so copy and paste still work.
+
+### Theming
+
+Five presets — Midnight, Slate, Carbon, Nebula and a genuine light theme,
+Daylight — plus an optional accent colour that replaces the preset's own. Only
+the mid step is picked; the lighter and darker steps are derived from it, so
+hover, focus and gradient states keep working without asking anyone to choose
+four related colours by hand.
+
+A theme is a complete surface ramp rather than one hue: brightening only the
+accent on a near-black chrome produces something that reads as broken. The
+tokens are resolved server-side and applied by both the web app and the desktop
+client, so a server's look is one setting rather than two that drift.
+
+### Editing the landing page
+
+**Admin → Appearance** turns the landing page into an ordered list of sections —
+hero, feature grid, stats, screenshots, prose, call to action. Add, reorder,
+hide and edit them with the real page rendering beside the form; the preview is
+the same component the public page uses, not a mock-up of it.
+
+Blocks rather than free-form positioning is deliberate: an operator says what
+the page contains and in what order, while each section's layout stays something
+that was designed once and works at every width, phones included. Operator copy
+is rendered as text and never as HTML, and a stored page that cannot be parsed
+falls back to the built-in one rather than taking the front door down. **Reset**
+restores the shipped page at any point.
+
+### Bandwidth
+
+Two limits, both off by default (`0` means no limit), under **Admin → Settings**:
+
+- A **download speed cap** in KB/s, applied per stream. A client opening several
+  connections gets that much on each, which is the honest way to describe it.
+- A **monthly allowance** per account, in MB, resetting on the 1st. Override it
+  for one account on the Users page — an explicit override binds even for an
+  administrator, while the server-wide default deliberately does not apply to
+  them, so a default can never lock the operator out of their own downloads.
+
+An account over its allowance is refused with `429` before any bytes are sent,
+and a single transfer that would cross the line is cut off mid-stream — usage is
+only recorded when a stream closes, so a start-only check would let one
+oversized download sail straight past.
+
+### The external API
+
+A versioned, key-authenticated API at `/api/v1` for driving the server from
+elsewhere — provisioning accounts from a billing system, handing out invites,
+reading stats. Keys carry explicit scopes, and `users:admin` is separate from
+`users:write` so a provisioning key cannot mint itself an administrator.
+
+Full reference, including a worked provisioning example: **[docs/API.md](docs/API.md)**.
 
 ### Launch and save rules
 
