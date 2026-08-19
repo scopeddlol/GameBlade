@@ -51,6 +51,9 @@ export function similarity(a: string, b: string): number {
 /** Above this, a search result is accepted without a human confirming it. */
 const AUTO_MATCH_THRESHOLD = 0.86;
 
+/** The artwork slots IGDB can contribute to; it publishes no logos or icons. */
+const IGDB_KINDS = ['cover', 'banner', 'hero'] as const;
+
 interface ProviderHealth {
   reachable: boolean | null;
   lastError: string | null;
@@ -70,7 +73,20 @@ export class MetadataService {
     private readonly settings: SettingsService,
     readonly imageCache: ImageCache,
     private readonly logger: Logger,
+    /** Prefix for the picker's thumbnail proxy; '' when hosted at the root. */
+    private readonly basePath = '',
   ) {}
+
+  /**
+   * Rewrites a provider thumbnail to go through this server.
+   *
+   * The picker's previews are the one place the browser would otherwise load
+   * images from IGDB and SteamGridDB directly, which both the page's content
+   * security policy and the project's no-third-party-requests stance rule out.
+   */
+  private proxied(url: string): string {
+    return `${this.basePath}/api/admin/artwork/thumbnail?url=${encodeURIComponent(url)}`;
+  }
 
   /** Clients are rebuilt whenever the stored credentials change. */
   private getIgdb(): IgdbClient | null {
@@ -305,8 +321,9 @@ export class MetadataService {
         matches.slice().sort((a, b) => similarity(title, b.name) - similarity(title, a.name))[0];
       if (!best || similarity(title, best.name) < 0.7) return;
 
-      const [grids, heroes, logos, icons] = await Promise.all([
+      const [grids, banners, heroes, logos, icons] = await Promise.all([
         sgdb.grids(best.id).catch(() => []),
+        sgdb.banners(best.id).catch(() => []),
         sgdb.heroes(best.id).catch(() => []),
         sgdb.logos(best.id).catch(() => []),
         sgdb.icons(best.id).catch(() => []),
@@ -321,6 +338,11 @@ export class MetadataService {
       if (gridUrl) {
         const id = await this.imageCache.cache(gridUrl, 'cover');
         if (id) patch.coverImageId = id;
+      }
+      const bannerUrl = banners[0]?.url;
+      if (bannerUrl) {
+        const id = await this.imageCache.cache(bannerUrl, 'banner');
+        if (id) patch.bannerImageId = id;
       }
       const heroUrl = heroes[0]?.url;
       if (heroUrl) {
@@ -362,14 +384,22 @@ export class MetadataService {
    * only half the results should say why, not look like the other provider had
    * nothing.
    */
-  async searchArtwork(kind: ArtKind, query: string, limit = 40): Promise<ArtworkSearchResult> {
+  async searchArtwork(
+    kind: ArtKind,
+    query: string,
+    options: { style?: string | null; limit?: number } = {},
+  ): Promise<ArtworkSearchResult> {
+    const style = options.style?.trim() || null;
+    const limit = options.limit ?? 60;
     const candidates: ArtworkCandidate[] = [];
     const errors: ArtworkSearchResult['errors'] = [];
+    const providers: ArtworkSearchResult['providers'] = [];
 
     const sgdb = this.getSgdb();
     if (sgdb) {
+      providers.push('steamgriddb');
       try {
-        candidates.push(...(await this.steamGridCandidates(sgdb, kind, query)));
+        candidates.push(...(await this.steamGridCandidates(sgdb, kind, query, style)));
       } catch (error) {
         errors.push({
           provider: 'steamgriddb',
@@ -378,12 +408,16 @@ export class MetadataService {
       }
     }
 
-    // IGDB has no logos or icons, so it is only consulted for the two kinds it
-    // can actually answer.
+    // IGDB publishes no logos or icons, and its styles are not SteamGridDB's,
+    // so it is consulted only for the shapes it has and only when the results
+    // are not being narrowed to a SteamGridDB style.
     const igdb = this.getIgdb();
-    if (igdb && (kind === 'cover' || kind === 'hero')) {
+    if (igdb && !style && IGDB_KINDS.includes(kind as (typeof IGDB_KINDS)[number])) {
+      providers.push('igdb');
       try {
-        candidates.push(...(await this.igdbCandidates(igdb, kind, query)));
+        candidates.push(
+          ...(await this.igdbCandidates(igdb, kind as (typeof IGDB_KINDS)[number], query)),
+        );
       } catch (error) {
         errors.push({
           provider: 'igdb',
@@ -395,6 +429,8 @@ export class MetadataService {
     return {
       kind,
       query,
+      style,
+      providers,
       // Highest community score first; unscored IGDB images fall in behind
       // SteamGridDB's ranked art rather than displacing it.
       candidates: candidates.sort((a, b) => (b.score ?? -1) - (a.score ?? -1)).slice(0, limit),
@@ -406,6 +442,7 @@ export class MetadataService {
     sgdb: SteamGridDbClient,
     kind: ArtKind,
     query: string,
+    style: string | null,
   ): Promise<ArtworkCandidate[]> {
     const matches = await sgdb.search(query);
     if (matches.length === 0) return [];
@@ -417,13 +454,24 @@ export class MetadataService {
       matches.slice().sort((a, b) => similarity(query, b.name) - similarity(query, a.name))[0];
     if (!best) return [];
 
-    const bucket = { cover: 'grids', hero: 'heroes', logo: 'logos', icon: 'icons' } as const;
-    const assets = await sgdb.browse(bucket[kind], best.id);
+    // Cover and banner both come out of the grids bucket; what separates them
+    // is the shape, so the banner asks for Steam's wide capsule dimensions.
+    const bucket = {
+      cover: 'grids',
+      banner: 'grids',
+      hero: 'heroes',
+      logo: 'logos',
+      icon: 'icons',
+    } as const;
+    const assets = await sgdb.browse(bucket[kind], best.id, {
+      style,
+      ...(kind === 'banner' ? { dimensions: '920x430,460x215' } : {}),
+    });
 
     return assets.map((asset) => ({
       provider: 'steamgriddb' as const,
       url: asset.url,
-      thumbnailUrl: asset.thumb || asset.url,
+      thumbnailUrl: this.proxied(asset.thumb || asset.url),
       width: asset.width,
       height: asset.height,
       label: asset.style ?? null,
@@ -433,21 +481,23 @@ export class MetadataService {
 
   private async igdbCandidates(
     igdb: IgdbClient,
-    kind: 'cover' | 'hero',
+    kind: (typeof IGDB_KINDS)[number],
     query: string,
   ): Promise<ArtworkCandidate[]> {
     const images = await igdb.images(query);
 
-    // A cover slot wants portrait cover art; a hero wants the wide artwork and
+    // A cover slot wants portrait cover art; the wide slots want artwork and
     // screenshots. Offering the wrong shape just makes the picker noisier.
     const wanted = kind === 'cover' ? ['cover'] : ['artwork', 'screenshot'];
+    const size = kind === 'cover' ? 'cover_big' : '1080p';
+    const thumbSize = kind === 'cover' ? 'cover_small' : 'thumb';
 
     return images
       .filter((image) => wanted.includes(image.source))
       .map((image) => ({
         provider: 'igdb' as const,
-        url: igdbImageUrl(image.imageId, kind === 'cover' ? 'cover_big' : '1080p'),
-        thumbnailUrl: igdbImageUrl(image.imageId, kind === 'cover' ? 'cover_small' : 'thumb'),
+        url: igdbImageUrl(image.imageId, size),
+        thumbnailUrl: this.proxied(igdbImageUrl(image.imageId, thumbSize)),
         width: null,
         height: null,
         label: `${image.source} · ${image.gameName}`,
@@ -474,6 +524,7 @@ export class MetadataService {
         screenshots: null,
         videos: null,
         coverImageId: null,
+        bannerImageId: null,
         heroImageId: null,
         logoImageId: null,
         iconImageId: null,

@@ -15,6 +15,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useSession } from '../hooks/useSession.js';
 import { api } from '../lib/api.js';
+import { formatBytes } from '../lib/format.js';
 
 /**
  * The public face of the server.
@@ -134,8 +135,17 @@ function Hero({ info, serverName }: { info?: PublicServerInfo; serverName: strin
             <a href={info.downloadUrl} className="gb-btn-primary px-5 py-2.5 text-base">
               <MonitorDown className="h-5 w-5" aria-hidden />
               Download for Windows
-              {info.clientVersion ? (
-                <span className="text-blade-400/90 text-sm font-normal">{info.clientVersion}</span>
+              {/* Version and size are both optional; the size only exists when
+                  the installer is hosted here rather than linked elsewhere. */}
+              {info.clientVersion || info.downloadSizeBytes ? (
+                <span className="text-blade-400/90 text-sm font-normal">
+                  {[
+                    info.clientVersion,
+                    info.downloadSizeBytes && formatBytes(info.downloadSizeBytes),
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
               ) : null}
             </a>
           ) : (

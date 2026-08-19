@@ -1,7 +1,7 @@
 import type {
   AchievementDefinition,
   ArtKind,
-  ArtworkSearchResult,
+  CatalogGap,
   ExecutableCandidate,
   GameDetail,
   GameSummary,
@@ -11,12 +11,103 @@ import type {
   SaveRule,
 } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, Image as ImageIcon, Search, Trash2, Trophy, Wand2, X } from 'lucide-react';
+import {
+  Download,
+  Image as ImageIcon,
+  Images,
+  Search,
+  Trash2,
+  Trophy,
+  Wand2,
+  X,
+} from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { ArtworkPicker } from '../../components/ArtworkPicker.js';
 import { Badge, EmptyState, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
 import { api, ApiRequestError, queryString } from '../../lib/api.js';
 import { formatBytes } from '../../lib/format.js';
+
+/**
+ * The gaps worth filtering on, in the order they matter.
+ *
+ * Deliberately shorter than the full set the API accepts: a chip row that lists
+ * every individual artwork slot is a wall, and "no artwork at all" is the one
+ * that actually needs triage. The per-slot filters stay reachable through the
+ * dropdown for the rarer cases.
+ */
+const GAP_FILTERS: Array<{ id: CatalogGap; label: string; hint: string }> = [
+  {
+    id: 'launch-rule',
+    label: 'No launch exec',
+    hint: 'No executable is set, so the client has to guess what to run.',
+  },
+  {
+    id: 'save-rule',
+    label: 'No cloud saving',
+    hint: 'No save path is set, so nothing syncs for this game.',
+  },
+  { id: 'artwork', label: 'No artwork', hint: 'Not one of the five image slots is filled.' },
+  { id: 'cover', label: 'No cover', hint: 'No portrait poster for the library grid.' },
+  { id: 'banner', label: 'No banner', hint: 'No wide capsule.' },
+  { id: 'hero', label: 'No hero', hint: 'No wide art behind the game page.' },
+  { id: 'logo', label: 'No logo', hint: 'No wordmark.' },
+  { id: 'icon', label: 'No icon', hint: 'No small square mark.' },
+  { id: 'achievements', label: 'No achievements', hint: 'No achievement definitions imported.' },
+  {
+    id: 'metadata',
+    label: 'No metadata',
+    hint: 'Never identified, or identified but still without a description.',
+  },
+];
+
+/**
+ * The four things a row reports at a glance. Present reads green, absent reads
+ * muted-red, so a scan down the column shows where the holes are without
+ * opening anything.
+ */
+const ROW_INDICATORS: Array<{ label: string; title: string; has: (game: GameSummary) => boolean }> =
+  [
+    {
+      label: 'EXE',
+      title: 'Launch executable',
+      has: (game) => game.hasLaunchRule,
+    },
+    { label: 'SAVE', title: 'Cloud save rule', has: (game) => game.hasSaveRule },
+    {
+      label: 'ART',
+      title: 'Artwork in every slot',
+      has: (game) =>
+        Boolean(
+          game.art.cover && game.art.banner && game.art.hero && game.art.logo && game.art.icon,
+        ),
+    },
+    { label: 'ACH', title: 'Achievements', has: (game) => game.achievementCount > 0 },
+  ];
+
+/** One row's worth of readiness, as four compact pills. */
+function ReadinessPills({ game }: { game: GameSummary }) {
+  return (
+    <span className="hidden shrink-0 gap-1 sm:flex" aria-label="What this entry has">
+      {ROW_INDICATORS.map((indicator) => {
+        const present = indicator.has(game);
+        return (
+          <span
+            key={indicator.label}
+            title={`${indicator.title}: ${present ? 'set' : 'missing'}`}
+            className={
+              present
+                ? 'rounded bg-emerald-950 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-300'
+                : 'bg-ink-800 text-ink-500 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide line-through'
+            }
+          >
+            {indicator.label}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
 
 /**
  * The catalog browser and metadata editor.
@@ -31,6 +122,19 @@ export function AdminCatalogPage() {
   const [selected, setSelected] = useState<string | null>(null);
 
   const matchStatus = params.get('matchStatus') ?? '';
+  const missing = params.get('missing') ?? '';
+
+  /** Every filter here is a URL parameter, so a triage view is a shareable link. */
+  const setParam = (key: string, value: string) =>
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        if (value) next.set(key, value);
+        else next.delete(key);
+        return next;
+      },
+      { replace: true },
+    );
 
   // Debounced so typing does not fire a request per keystroke.
   useEffect(() => {
@@ -55,6 +159,7 @@ export function AdminCatalogPage() {
         `/games${queryString({
           search: params.get('search') ?? '',
           matchStatus: matchStatus || undefined,
+          missing: missing || undefined,
           includeMissing: true,
           sort: 'title',
           limit: 100,
@@ -67,9 +172,10 @@ export function AdminCatalogPage() {
   // counting the visible rows would understate what the button actually does.
   const statsQuery = useQuery({
     queryKey: ['admin', 'stats'],
-    queryFn: () => api.get<{ missing: number }>('/admin/stats'),
+    queryFn: () => api.get<{ missing: number; gaps: Record<CatalogGap, number> }>('/admin/stats'),
   });
   const missingCount = statsQuery.data?.missing ?? 0;
+  const gaps = statsQuery.data?.gaps;
 
   return (
     <div className="space-y-6">
@@ -107,17 +213,7 @@ export function AdminCatalogPage() {
             id="catalogStatus"
             className="gb-input w-auto"
             value={matchStatus}
-            onChange={(e) =>
-              setParams(
-                (current) => {
-                  const next = new URLSearchParams(current);
-                  if (e.target.value) next.set('matchStatus', e.target.value);
-                  else next.delete('matchStatus');
-                  return next;
-                },
-                { replace: true },
-              )
-            }
+            onChange={(e) => setParam('matchStatus', e.target.value)}
           >
             <option value="">Any</option>
             <option value="unmatched">Unmatched</option>
@@ -126,6 +222,48 @@ export function AdminCatalogPage() {
             <option value="skipped">Skipped</option>
           </select>
         </Field>
+
+        <Field
+          label="Missing"
+          htmlFor="catalogMissing"
+          hint="Narrow to entries that still need work."
+        >
+          <select
+            id="catalogMissing"
+            className="gb-input w-auto"
+            value={missing}
+            onChange={(e) => setParam('missing', e.target.value)}
+          >
+            <option value="">Nothing in particular</option>
+            {GAP_FILTERS.map((filter) => (
+              <option key={filter.id} value={filter.id}>
+                {filter.label}
+                {gaps ? ` (${gaps[filter.id]})` : ''}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      {/* The same filters as one-click chips. The counts are server-wide, not
+          per page, so they say how much work is actually left. */}
+      <div className="flex flex-wrap gap-1.5">
+        {GAP_FILTERS.map((filter) => {
+          const count = gaps?.[filter.id];
+          return (
+            <button
+              key={filter.id}
+              type="button"
+              className={missing === filter.id ? 'gb-chip gb-chip-active' : 'gb-chip'}
+              title={filter.hint}
+              aria-pressed={missing === filter.id}
+              onClick={() => setParam('missing', missing === filter.id ? '' : filter.id)}
+            >
+              {filter.label}
+              {count === undefined ? '' : ` ${count}`}
+            </button>
+          );
+        })}
       </div>
 
       {listQuery.isLoading ? (
@@ -168,6 +306,7 @@ export function AdminCatalogPage() {
                   </p>
                 </div>
 
+                <ReadinessPills game={game} />
                 {game.isMissing ? <Badge tone="danger">Missing</Badge> : null}
                 <MatchBadge status={game.matchStatus} />
               </button>
@@ -579,33 +718,91 @@ function MetadataTab({ game }: { game: GameDetail }) {
 }
 
 const ART_SLOTS = [
-  { kind: 'cover', label: 'Cover', aspect: 'aspect-[2/3] w-28' },
-  { kind: 'hero', label: 'Hero', aspect: 'aspect-[16/6] w-full' },
-  { kind: 'logo', label: 'Logo', aspect: 'aspect-[16/9] w-40' },
-  { kind: 'icon', label: 'Icon', aspect: 'aspect-square w-16' },
-] as const;
+  {
+    kind: 'cover',
+    label: 'Cover',
+    hint: 'The portrait poster on the library grid.',
+    aspect: 'aspect-[2/3] w-28',
+    fit: 'object-cover',
+  },
+  {
+    kind: 'banner',
+    label: 'Banner',
+    hint: 'The wide Steam-style capsule.',
+    aspect: 'aspect-[92/43] w-64',
+    fit: 'object-cover',
+  },
+  {
+    kind: 'hero',
+    label: 'Hero',
+    hint: 'The wide art behind the game page.',
+    aspect: 'aspect-[16/6] w-full',
+    fit: 'object-cover',
+  },
+  {
+    kind: 'logo',
+    label: 'Logo / text',
+    hint: 'The wordmark laid over the hero. Pick a style to find a text-only one.',
+    aspect: 'aspect-[16/9] w-40',
+    fit: 'object-contain',
+  },
+  {
+    kind: 'icon',
+    label: 'Icon',
+    hint: 'The small square mark.',
+    aspect: 'aspect-square w-16',
+    fit: 'object-contain',
+  },
+] as const satisfies ReadonlyArray<{
+  kind: ArtKind;
+  label: string;
+  hint: string;
+  aspect: string;
+  fit: string;
+}>;
 
 function ArtworkTab({ game }: { game: GameDetail }) {
   const queryClient = useQueryClient();
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState<ArtKind | null>(null);
+  const [pickingScreenshots, setPickingScreenshots] = useState(false);
+
+  const invalidate = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['admin', 'game', game.id] });
+    await queryClient.invalidateQueries({ queryKey: ['admin', 'catalog'] });
+    await queryClient.invalidateQueries({ queryKey: ['admin', 'stats'] });
+  };
 
   const setMutation = useMutation({
-    mutationFn: ({ kind, url }: { kind: string; url: string | null }) =>
+    mutationFn: ({ kind, url }: { kind: ArtKind; url: string | null }) =>
       api.put(`/games/${game.id}/artwork`, { kind, url }),
     onSuccess: async () => {
       setError(null);
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'game', game.id] });
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'catalog'] });
+      await invalidate();
     },
     onError: (caught) =>
       setError(caught instanceof ApiRequestError ? caught.message : 'Could not set artwork.'),
   });
 
+  const addScreenshot = useMutation({
+    mutationFn: (url: string) => api.post(`/games/${game.id}/screenshots`, { url }),
+    onSuccess: async () => {
+      setError(null);
+      await invalidate();
+    },
+    onError: (caught) =>
+      setError(caught instanceof ApiRequestError ? caught.message : 'Could not add that image.'),
+  });
+
+  const removeScreenshot = useMutation({
+    mutationFn: (imageId: string) => api.delete(`/games/${game.id}/screenshots/${imageId}`),
+    onSuccess: invalidate,
+  });
+
   const refreshMutation = useMutation({
     mutationFn: () => api.post(`/games/${game.id}/refresh-artwork`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'game', game.id] }),
+    onSuccess: invalidate,
   });
 
   return (
@@ -623,7 +820,7 @@ function ArtworkTab({ game }: { game: GameDetail }) {
         ) : (
           <Wand2 className="h-4 w-4" />
         )}
-        Re-fetch from SteamGridDB
+        Re-fetch every slot from SteamGridDB
       </button>
 
       {ART_SLOTS.map((slot) => {
@@ -632,10 +829,18 @@ function ArtworkTab({ game }: { game: GameDetail }) {
           <section key={slot.kind} className="gb-card space-y-3 p-4">
             <div className="flex items-center gap-3">
               <h3 className="text-sm font-semibold tracking-wide uppercase">{slot.label}</h3>
+              <button
+                type="button"
+                className="gb-btn-primary ml-auto"
+                onClick={() => setPicking(slot.kind)}
+              >
+                <Images className="h-4 w-4" aria-hidden />
+                Browse gallery
+              </button>
               {current ? (
                 <button
                   type="button"
-                  className="gb-btn-danger ml-auto"
+                  className="gb-btn-danger"
                   onClick={() => setMutation.mutate({ kind: slot.kind, url: null })}
                 >
                   Clear
@@ -643,11 +848,13 @@ function ArtworkTab({ game }: { game: GameDetail }) {
               ) : null}
             </div>
 
+            <p className="text-ink-400 text-xs">{slot.hint}</p>
+
             {current ? (
               <img
                 src={current}
                 alt=""
-                className={`bg-ink-800 rounded-lg object-cover ${slot.aspect}`}
+                className={`bg-ink-800 rounded-lg ${slot.fit} ${slot.aspect}`}
               />
             ) : (
               <div
@@ -657,10 +864,13 @@ function ArtworkTab({ game }: { game: GameDetail }) {
               </div>
             )}
 
+            {/* The gallery covers almost every case; this stays for the one it
+                does not — art neither provider has, pasted from anywhere. */}
             <div className="flex gap-2">
               <input
                 className="gb-input"
-                placeholder="https://…"
+                aria-label={`${slot.label} image URL`}
+                placeholder="…or paste an image URL"
                 value={urls[slot.kind] ?? ''}
                 onChange={(e) => setUrls({ ...urls, [slot.kind]: e.target.value })}
               />
@@ -668,9 +878,10 @@ function ArtworkTab({ game }: { game: GameDetail }) {
                 type="button"
                 className="gb-btn-ghost shrink-0"
                 disabled={!urls[slot.kind]}
-                onClick={() =>
-                  setMutation.mutate({ kind: slot.kind, url: urls[slot.kind] ?? null })
-                }
+                onClick={() => {
+                  setMutation.mutate({ kind: slot.kind, url: urls[slot.kind] ?? null });
+                  setUrls({ ...urls, [slot.kind]: '' });
+                }}
               >
                 <Download className="h-4 w-4" aria-hidden />
                 Fetch
@@ -680,153 +891,78 @@ function ArtworkTab({ game }: { game: GameDetail }) {
         );
       })}
 
-      {picking ? (
-        <ArtworkPicker
-          game={game}
-          kind={picking}
-          onClose={() => setPicking(null)}
-          onChoose={(url) => {
-            setMutation.mutate({ kind: picking, url });
-            setPicking(null);
-          }}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Browses every image both providers have for a title so a slot can be filled
- * by eye. The automatic pass picks the highest-scoring asset, which is usually
- * right and occasionally very wrong — this is the escape hatch for the latter.
- */
-function ArtworkPicker({
-  game,
-  kind,
-  onClose,
-  onChoose,
-}: {
-  game: GameDetail;
-  kind: ArtKind;
-  onClose: () => void;
-  onChoose: (url: string) => void;
-}) {
-  const [query, setQuery] = useState(game.title);
-  const [submitted, setSubmitted] = useState(game.title);
-
-  const searchQuery = useQuery({
-    queryKey: ['admin', 'artwork', game.id, kind, submitted],
-    queryFn: () =>
-      api.get<ArtworkSearchResult>(
-        `/games/${game.id}/artwork/search${queryString({ kind, q: submitted })}`,
-      ),
-  });
-
-  const candidates = searchQuery.data?.candidates ?? [];
-  const providerErrors = searchQuery.data?.errors ?? [];
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-    >
-      <div
-        className="bg-ink-900 border-ink-700 flex h-full max-h-[85vh] w-full max-w-4xl flex-col rounded-xl border shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="border-ink-800 flex items-center gap-3 border-b px-5 py-4">
-          <h2 className="text-lg font-semibold capitalize">{kind} artwork</h2>
-          <button type="button" className="gb-btn-ghost ml-auto" onClick={onClose}>
-            <X className="h-4 w-4" aria-hidden />
-            Close
-          </button>
-        </header>
-
-        <div className="border-ink-800 flex gap-2 border-b px-5 py-3">
-          <input
-            className="gb-input"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') setSubmitted(query.trim() || game.title);
-            }}
-            placeholder="Search both providers…"
-          />
+      <section className="gb-card space-y-3 p-4">
+        <div className="flex items-center gap-3">
+          <h3 className="text-sm font-semibold tracking-wide uppercase">Screenshots</h3>
           <button
             type="button"
-            className="gb-btn-primary shrink-0"
-            onClick={() => setSubmitted(query.trim() || game.title)}
+            className="gb-btn-primary ml-auto"
+            onClick={() => setPickingScreenshots(true)}
           >
-            <Search className="h-4 w-4" aria-hidden />
-            Search
+            <Images className="h-4 w-4" aria-hidden />
+            Browse gallery
           </button>
         </div>
+        <p className="text-ink-400 text-xs">
+          Shown on the game page in the desktop client. Pick as many as you like — the picker stays
+          open until you close it.
+        </p>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          {/* A provider that failed is named, so a half-empty grid does not
-              read as "there is no artwork for this game". */}
-          {providerErrors.map((failure) => (
-            <p
-              key={failure.provider}
-              className="mb-3 rounded-lg border border-amber-900/60 bg-amber-950/40 px-3 py-2 text-sm text-amber-200"
-            >
-              {failure.provider === 'igdb' ? 'IGDB' : 'SteamGridDB'} could not be reached:{' '}
-              {failure.message}
-            </p>
-          ))}
-
-          {searchQuery.isLoading ? (
-            <PageLoader label="Searching for artwork" />
-          ) : candidates.length === 0 ? (
-            <EmptyState
-              title="Nothing found"
-              message="Try a different search term — the providers match on their own titles, not your filename."
-            />
-          ) : (
-            <div
-              className={
-                kind === 'cover'
-                  ? 'grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3'
-                  : 'grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3'
-              }
-            >
-              {candidates.map((candidate) => (
-                <button
-                  key={`${candidate.provider}-${candidate.url}`}
-                  type="button"
-                  className="group border-ink-700 hover:border-blade-500 overflow-hidden rounded-lg border text-left transition-colors"
-                  onClick={() => onChoose(candidate.url)}
-                  title={candidate.label ?? undefined}
-                >
+        {game.screenshots.length === 0 ? (
+          <p className="text-ink-500 text-xs">None yet.</p>
+        ) : (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2">
+            {game.screenshots.map((url, index) => {
+              const imageId = game.screenshotIds[index];
+              return (
+                <div key={url} className="group relative">
                   <img
-                    src={candidate.thumbnailUrl}
+                    src={url}
                     alt=""
                     loading="lazy"
-                    className={
-                      kind === 'cover'
-                        ? 'bg-ink-800 aspect-[2/3] w-full object-cover'
-                        : 'bg-ink-800 aspect-video w-full object-contain'
-                    }
+                    className="bg-ink-800 aspect-video w-full rounded-lg object-cover"
                   />
-                  <span className="text-ink-400 flex items-center gap-1.5 px-2 py-1.5 text-[11px]">
-                    <Badge tone={candidate.provider === 'igdb' ? 'info' : 'success'}>
-                      {candidate.provider === 'igdb' ? 'IGDB' : 'SGDB'}
-                    </Badge>
-                    {candidate.width && candidate.height ? (
-                      <span>
-                        {candidate.width}×{candidate.height}
-                      </span>
-                    ) : null}
-                    {candidate.label ? <span className="truncate">{candidate.label}</span> : null}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+                  <button
+                    type="button"
+                    className="gb-btn-danger absolute top-1 right-1 px-2 py-1"
+                    aria-label="Remove this screenshot"
+                    disabled={!imageId || removeScreenshot.isPending}
+                    onClick={() => imageId && removeScreenshot.mutate(imageId)}
+                  >
+                    <X className="h-3 w-3" aria-hidden />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {picking ? (
+        <ArtworkPicker
+          gameId={game.id}
+          title={game.title}
+          kind={picking}
+          heading={`${ART_SLOTS.find((slot) => slot.kind === picking)?.label ?? picking} artwork`}
+          onClose={() => setPicking(null)}
+          onChoose={(url) => setMutation.mutate({ kind: picking, url })}
+        />
+      ) : null}
+
+      {pickingScreenshots ? (
+        // Screenshots come out of the same search as the hero slot: IGDB
+        // contributes its screenshots and artwork there, which is exactly what
+        // this list wants.
+        <ArtworkPicker
+          gameId={game.id}
+          title={game.title}
+          kind="hero"
+          heading="Screenshots"
+          multiple
+          onClose={() => setPickingScreenshots(false)}
+          onChoose={(url) => addScreenshot.mutate(url)}
+        />
+      ) : null}
     </div>
   );
 }

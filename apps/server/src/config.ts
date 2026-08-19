@@ -103,6 +103,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     mediaDir: path.join(dataDir, 'media'),
     /** Cloud save archives, one immutable zip per version. */
     savesDir: path.join(dataDir, 'saves'),
+    /** The Windows client installer an administrator uploads, if any. */
+    installerDir: path.join(dataDir, 'client'),
     libraryPaths,
 
     mediaQuotaBytes: e.MEDIA_QUOTA_MB * 1024 * 1024,

@@ -2,6 +2,9 @@ import { HttpError, RateLimiter, withRetry } from '../../lib/ratelimit.js';
 
 const API_URL = 'https://www.steamgriddb.com/api/v2';
 
+/** The two wide capsule sizes Steam itself uses, largest first. */
+const BANNER_DIMENSIONS = '920x430,460x215';
+
 export interface SgdbGame {
   id: number;
   name: string;
@@ -114,15 +117,32 @@ export class SteamGridDbClient {
     return this.assets('icons', gameId);
   }
 
+  /** Wide Steam capsules, for the banner slot. */
+  async banners(gameId: number): Promise<SgdbAsset[]> {
+    const wide = await this.assets('grids', gameId, { dimensions: BANNER_DIMENSIONS });
+    if (wide.length > 0) return wide;
+
+    const all = await this.assets('grids', gameId);
+    return all.slice().sort((a, b) => landscapeRank(a) - landscapeRank(b) || b.score - a.score);
+  }
+
   /**
-   * Every asset of a kind, unfiltered, for the admin picker.
+   * Every asset of a kind for the admin picker, optionally narrowed to one
+   * style or set of dimensions.
    *
    * Distinct from `grids()` on purpose: the automatic path wants one sensible
    * poster, whereas someone choosing by hand wants to see everything on offer,
    * including the wide capsules a poster slot would normally reject.
    */
-  browse(kind: 'grids' | 'heroes' | 'logos' | 'icons', gameId: number): Promise<SgdbAsset[]> {
-    return this.assets(kind, gameId);
+  browse(
+    kind: 'grids' | 'heroes' | 'logos' | 'icons',
+    gameId: number,
+    options: { style?: string | null; dimensions?: string } = {},
+  ): Promise<SgdbAsset[]> {
+    const query: Record<string, string> = {};
+    if (options.style) query.styles = options.style;
+    if (options.dimensions) query.dimensions = options.dimensions;
+    return this.assets(kind, gameId, query);
   }
 
   async verify(): Promise<void> {
@@ -133,4 +153,9 @@ export class SteamGridDbClient {
 /** Taller-than-wide art sorts first; a wide capsule in a poster slot looks wrong. */
 function portraitRank(asset: SgdbAsset): number {
   return asset.height > asset.width ? 0 : 1;
+}
+
+/** The mirror of portraitRank, for the banner slot. */
+function landscapeRank(asset: SgdbAsset): number {
+  return asset.width > asset.height ? 0 : 1;
 }

@@ -9,6 +9,7 @@ import { CatalogService } from './services/catalog.js';
 import { ChecksumService } from './services/checksums.js';
 import { DownloadTokenService } from './services/downloads.js';
 import { FriendService } from './services/friends.js';
+import { InstallerService } from './services/installer.js';
 import { MediaStore } from './services/media.js';
 import { ImageCache } from './services/metadata/images.js';
 import { MetadataService } from './services/metadata/service.js';
@@ -32,6 +33,7 @@ export interface GamebladeContext {
   checksums: ChecksumService;
   downloadTokens: DownloadTokenService;
   images: ImageCache;
+  installer: InstallerService;
 
   presence: PresenceService;
   profiles: ProfileService;
@@ -65,11 +67,12 @@ declare module 'fastify' {
 export function createContext(config: Config, db: Db, logger: FastifyBaseLogger): GamebladeContext {
   const settings = new SettingsService(db, config);
   const images = new ImageCache(db, config.imageCacheDir, logger);
-  const metadata = new MetadataService(db, settings, images, logger);
+  const metadata = new MetadataService(db, settings, images, logger, config.basePath);
   const scanner = new ScannerService(db, metadata, logger);
   const checksums = new ChecksumService(db, logger);
   const auth = new AuthService(db);
   const downloadTokens = new DownloadTokenService(db, config.sessionSecret);
+  const installer = new InstallerService(db, config);
 
   const presence = new PresenceService();
   const profiles = new ProfileService(db, config, presence);
@@ -111,6 +114,7 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
     checksums,
     downloadTokens,
     images,
+    installer,
 
     presence,
     profiles,

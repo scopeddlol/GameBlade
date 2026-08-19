@@ -6,6 +6,8 @@ import {
   matchGameSchema,
   saveRuleSchema,
   setArtworkSchema,
+  setScreenshotSchema,
+  type ArtKind,
   type DownloadManifest,
   type GameFileEntry,
 } from '@gameblade/shared';
@@ -24,6 +26,15 @@ import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { isoNow } from '../lib/time.js';
 import { toGameDetail, toLaunchRule, toSaveRule } from './mappers.js';
+
+/** Which column on `games` backs each artwork slot. */
+const ART_COLUMNS = {
+  cover: 'coverImageId',
+  banner: 'bannerImageId',
+  hero: 'heroImageId',
+  logo: 'logoImageId',
+  icon: 'iconImageId',
+} as const satisfies Record<ArtKind, keyof typeof games.$inferInsert>;
 
 export async function gameRoutes(app: FastifyInstance): Promise<void> {
   const { db, config, metadata, downloadTokens, catalog, achievements, images } = app.gameblade;
@@ -245,13 +256,17 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
   app.get('/games/:id/artwork/search', async (request) => {
     requireAdmin(request);
     const { id } = request.params as { id: string };
-    const { kind, q } = request.query as { kind?: string; q?: string };
+    const { kind, q, style } = request.query as { kind?: string; q?: string; style?: string };
 
     const game = db.select().from(games).where(eq(games.id, id)).get();
     if (!game) throw ApiError.notFound('Game not found');
 
-    const parsed = artworkSearchSchema.parse({ kind, query: q?.trim() || game.searchTitle });
-    return metadata.searchArtwork(parsed.kind, parsed.query);
+    const parsed = artworkSearchSchema.parse({
+      kind,
+      query: q?.trim() || game.searchTitle,
+      style: style?.trim() || null,
+    });
+    return metadata.searchArtwork(parsed.kind, parsed.query, { style: parsed.style });
   });
 
   /** Replaces one artwork slot with an operator-supplied image. */
@@ -264,12 +279,11 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     if (!game) throw ApiError.notFound('Game not found');
 
     const imageId = input.url ? await images.cache(input.url, input.kind) : null;
-    const column = {
-      cover: 'coverImageId',
-      hero: 'heroImageId',
-      logo: 'logoImageId',
-      icon: 'iconImageId',
-    }[input.kind] as 'coverImageId' | 'heroImageId' | 'logoImageId' | 'iconImageId';
+    if (input.url && !imageId) {
+      throw ApiError.badRequest('That image could not be downloaded. Check the URL and try again.');
+    }
+
+    const column = ART_COLUMNS[input.kind];
 
     db.update(games)
       .set({ [column]: imageId, updatedAt: isoNow() })
@@ -277,6 +291,53 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
       .run();
 
     return { ok: true, imageId };
+  });
+
+  /**
+   * Adds one screenshot from the picker. Appending through its own route (and
+   * not the metadata PATCH) is what keeps the existing shots addressable: the
+   * PATCH takes provider URLs and re-downloads every one it is given, and the
+   * screenshots already on a game are local cache URLs it could not re-fetch.
+   */
+  app.post('/games/:id/screenshots', async (request, reply) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const input = setScreenshotSchema.parse(request.body);
+
+    const game = db.select().from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    const imageId = await images.cache(input.url, 'screenshot');
+    if (!imageId) {
+      throw ApiError.badRequest('That image could not be downloaded. Check the URL and try again.');
+    }
+
+    const existing = game.screenshots ?? [];
+    if (!existing.includes(imageId)) {
+      db.update(games)
+        .set({ screenshots: [...existing, imageId], updatedAt: isoNow() })
+        .where(eq(games.id, id))
+        .run();
+    }
+    return reply.code(201).send({ ok: true, imageId });
+  });
+
+  app.delete('/games/:id/screenshots/:imageId', async (request) => {
+    requireAdmin(request);
+    const { id, imageId } = request.params as { id: string; imageId: string };
+
+    const game = db.select().from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    const remaining = (game.screenshots ?? []).filter((value) => value !== imageId);
+    db.update(games)
+      .set({ screenshots: remaining, updatedAt: isoNow() })
+      .where(eq(games.id, id))
+      .run();
+
+    // The cached file itself stays: another game may well have been matched to
+    // the same provider image, and orphans are cheap next to a broken thumbnail.
+    return { ok: true };
   });
 
   app.post('/games/:id/refresh-artwork', async (request) => {

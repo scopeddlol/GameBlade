@@ -422,4 +422,13 @@ export const migrations: Migration[] = [
       ALTER TABLE notifications ADD COLUMN icon TEXT;
     `,
   },
+  {
+    id: '0004_banner_artwork',
+    sql: `
+      -- The wide Steam-style capsule is a different shape from the portrait
+      -- cover and SteamGridDB publishes different artwork for each, so it gets
+      -- its own slot rather than sharing one and looking wrong in both places.
+      ALTER TABLE games ADD COLUMN banner_image_id TEXT;
+    `,
+  },
 ];

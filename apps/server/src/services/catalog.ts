@@ -1,4 +1,5 @@
 import type {
+  CatalogGap,
   FeaturedEntry,
   FeaturedInput,
   GameQuery,
@@ -12,7 +13,9 @@ import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import {
   featuredGames,
+  gameLaunchRules,
   games,
+  gameSaveRules,
   userGameState,
   userGameStats,
   userLibrary,
@@ -27,6 +30,36 @@ import type { ActivityService } from './activity.js';
 import type { PresenceService } from './presence.js';
 import type { PlaytimeService } from './playtime.js';
 import type { ProfileService } from './profiles.js';
+
+/**
+ * One SQL condition per gap an administrator can filter on.
+ *
+ * These are deliberately written against the tables rather than derived from a
+ * decorated page: "show me everything with no launch rule" has to mean every
+ * such row in the catalog, not just the ones on the current page.
+ */
+const GAP_CONDITIONS: Record<CatalogGap, SQL> = {
+  'launch-rule': sql`NOT EXISTS (SELECT 1 FROM game_launch_rules r
+        WHERE r.game_id = ${games.id} AND r.executable IS NOT NULL AND r.executable <> '')`,
+  'save-rule': sql`NOT EXISTS (SELECT 1 FROM game_save_rules r WHERE r.game_id = ${games.id})`,
+  cover: isNull(games.coverImageId),
+  banner: isNull(games.bannerImageId),
+  hero: isNull(games.heroImageId),
+  logo: isNull(games.logoImageId),
+  icon: isNull(games.iconImageId),
+  // "No artwork at all" is the one worth triaging first; a game missing only
+  // its icon still looks finished everywhere a player sees it.
+  artwork: sql`(${games.coverImageId} IS NULL AND ${games.heroImageId} IS NULL
+        AND ${games.logoImageId} IS NULL AND ${games.iconImageId} IS NULL
+        AND ${games.bannerImageId} IS NULL)`,
+  achievements: sql`NOT EXISTS (SELECT 1 FROM achievements a WHERE a.game_id = ${games.id})`,
+  // Nothing a store page could render: never identified, or identified and
+  // still without a description.
+  // Parenthesised because these are ANDed with the rest of the filters, and an
+  // unbracketed OR would quietly swallow every other condition.
+  metadata: sql`(${games.matchStatus} = 'unmatched' OR ${games.summary} IS NULL
+        OR ${games.summary} = '')`,
+};
 
 /**
  * Reads the game catalog for a specific user.
@@ -78,6 +111,27 @@ export class CatalogService {
     const stats = this.playtime.statsFor(userId, ids);
     const achievementCounts = this.achievements.countsFor(userId, ids);
 
+    // Two more set lookups over the page, in the same spirit as the ones
+    // above: the admin catalog shows at a glance which entries a player could
+    // not actually launch or sync, and the desktop client uses the same flags
+    // to decide whether to offer a "play" button or a save-sync toggle.
+    const withLaunchRule = new Set(
+      this.db
+        .selectDistinct({ gameId: gameLaunchRules.gameId })
+        .from(gameLaunchRules)
+        .where(inArray(gameLaunchRules.gameId, ids))
+        .all()
+        .map((r) => r.gameId),
+    );
+    const withSaveRule = new Set(
+      this.db
+        .selectDistinct({ gameId: gameSaveRules.gameId })
+        .from(gameSaveRules)
+        .where(inArray(gameSaveRules.gameId, ids))
+        .all()
+        .map((r) => r.gameId),
+    );
+
     return rows.map((game) => {
       const stat = stats.get(game.id);
       const counts = achievementCounts.get(game.id);
@@ -94,6 +148,7 @@ export class CatalogService {
         platforms: game.platforms ?? [],
         art: {
           cover: this.imageUrl(game.coverImageId),
+          banner: this.imageUrl(game.bannerImageId),
           hero: this.imageUrl(game.heroImageId),
           logo: this.imageUrl(game.logoImageId),
           icon: this.imageUrl(game.iconImageId),
@@ -107,6 +162,8 @@ export class CatalogService {
         lastPlayedAt: stat?.last ?? null,
         achievementCount: counts?.total ?? 0,
         unlockedCount: counts?.unlocked ?? 0,
+        hasLaunchRule: withLaunchRule.has(game.id),
+        hasSaveRule: withSaveRule.has(game.id),
       };
     });
   }
@@ -132,6 +189,9 @@ export class CatalogService {
     if (query.developer) {
       conditions.push(sql`${games.developers} LIKE ${`%"${query.developer}"%`}`);
     }
+
+    const gap = query.missing ? GAP_CONDITIONS[query.missing] : null;
+    if (gap) conditions.push(gap);
 
     if (query.favoritesOnly) {
       conditions.push(
@@ -318,6 +378,25 @@ export class CatalogService {
     };
   }
 
+  /**
+   * How many entries fall into each gap, for the filter chips on the admin
+   * catalog. One grouped pass rather than a query per gap, so the count strip
+   * costs the same as the listing beside it.
+   */
+  gapCounts(): Record<CatalogGap, number> {
+    const columns = Object.fromEntries(
+      Object.entries(GAP_CONDITIONS).map(([gap, condition]) => [
+        gap,
+        sql<number>`sum(case when ${condition} then 1 else 0 end)`,
+      ]),
+    ) as Record<CatalogGap, SQL<number>>;
+
+    const row = this.db.select(columns).from(games).get();
+    return Object.fromEntries(
+      (Object.keys(GAP_CONDITIONS) as CatalogGap[]).map((gap) => [gap, Number(row?.[gap] ?? 0)]),
+    ) as Record<CatalogGap, number>;
+  }
+
   /* --------------------------------------------------------------- featured */
 
   listFeatured(userId: string, activeOnly: boolean): FeaturedEntry[] {
@@ -347,10 +426,23 @@ export class CatalogService {
           blurb: row.featured.blurb,
           // Falls back to the game's own hero art when no override is set.
           heroUrl: this.imageUrl(row.featured.heroImageId) ?? game.art.hero,
+          hasHeroOverride: row.featured.heroImageId !== null,
           sortOrder: row.featured.sortOrder,
         },
       ];
     });
+  }
+
+  /** Points one carousel slot at a hand-picked hero image, or clears the override. */
+  setFeaturedArtwork(id: string, imageId: string | null): void {
+    const existing = this.db.select().from(featuredGames).where(eq(featuredGames.id, id)).get();
+    if (!existing) throw ApiError.notFound('That featured entry no longer exists');
+
+    this.db
+      .update(featuredGames)
+      .set({ heroImageId: imageId })
+      .where(eq(featuredGames.id, id))
+      .run();
   }
 
   upsertFeatured(input: FeaturedInput): void {

@@ -137,6 +137,8 @@ export const games = sqliteTable(
     videos: text('videos', { mode: 'json' }).$type<string[]>(),
 
     coverImageId: text('cover_image_id'),
+    /** Wide Steam-style capsule; the portrait cover lives in coverImageId. */
+    bannerImageId: text('banner_image_id'),
     heroImageId: text('hero_image_id'),
     logoImageId: text('logo_image_id'),
     iconImageId: text('icon_image_id'),
@@ -180,7 +182,9 @@ export const images = sqliteTable(
   'images',
   {
     id: text('id').primaryKey(),
-    kind: text('kind', { enum: ['cover', 'hero', 'logo', 'icon', 'screenshot'] }).notNull(),
+    kind: text('kind', {
+      enum: ['cover', 'banner', 'hero', 'logo', 'icon', 'screenshot'],
+    }).notNull(),
     sourceUrl: text('source_url').notNull(),
     contentType: text('content_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),

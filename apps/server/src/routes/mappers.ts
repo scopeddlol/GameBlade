@@ -23,8 +23,11 @@ export function toGameDetail(
     igdbId: game.igdbId,
     sgdbId: game.sgdbId,
     // Screenshots are stored as cached image ids and served from this server,
-    // so no client request ever reaches a provider CDN.
+    // so no client request ever reaches a provider CDN. The ids ride along
+    // beside the URLs because the admin editor addresses them by id to remove
+    // one, and parsing an id back out of a URL is a worse contract.
     screenshots: (game.screenshots ?? []).map((id) => `${options.basePath}/api/images/${id}`),
+    screenshotIds: game.screenshots ?? [],
     videos: game.videos ?? [],
     updatedAt: game.updatedAt,
     scannedAt: game.scannedAt,

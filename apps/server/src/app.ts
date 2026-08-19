@@ -27,6 +27,7 @@ import { gameRoutes } from './routes/games.js';
 import { healthRoutes } from './routes/health.js';
 import { homeRoutes } from './routes/home.js';
 import { imageRoutes } from './routes/images.js';
+import { installerRoutes } from './routes/installer.js';
 import { playRoutes } from './routes/play.js';
 import { realtimeRoutes } from './routes/realtime.js';
 import { socialRoutes } from './routes/social.js';
@@ -64,6 +65,7 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
   await context.images.init();
   await context.media.init();
   await context.saves.init();
+  await context.installer.init();
   context.realtime.start();
 
   app.addHook('onClose', async () => {
@@ -165,6 +167,7 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
       await homeRoutes(api);
       await gameRoutes(api);
       await imageRoutes(api);
+      await installerRoutes(api);
       await downloadRoutes(api);
       await socialRoutes(api);
       await playRoutes(api);
@@ -198,6 +201,20 @@ function registerBinaryUploads(app: FastifyInstance): void {
   ) => done(null, payload);
 
   app.addContentTypeParser(['application/zip', 'application/octet-stream'], passthrough);
+  // What a browser labels a picked .exe or .msi varies by platform and by
+  // whatever the OS has registered, so every plausible label is accepted; the
+  // installer route validates the extension rather than trusting any of them.
+  app.addContentTypeParser(
+    [
+      'application/x-msdownload',
+      'application/x-msi',
+      'application/x-ms-installer',
+      'application/vnd.microsoft.portable-executable',
+      'application/exe',
+      'application/x-exe',
+    ],
+    passthrough,
+  );
   app.addContentTypeParser(/^image\//, passthrough);
   app.addContentTypeParser(/^video\//, passthrough);
 }

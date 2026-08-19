@@ -1,8 +1,11 @@
-import type { ServerSettings } from '@gameblade/shared';
+import type { ClientInstallerInfo, ServerSettings } from '@gameblade/shared';
+import { MAX_INSTALLER_BYTES } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { Trash2, Upload } from 'lucide-react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Badge, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
-import { api, ApiRequestError } from '../../lib/api.js';
+import { api, ApiRequestError, queryString, uploadFile } from '../../lib/api.js';
+import { formatBytes } from '../../lib/format.js';
 
 export function AdminSettingsPage() {
   const queryClient = useQueryClient();
@@ -121,10 +124,16 @@ export function AdminSettingsPage() {
             />
           </Field>
 
+          <InstallerField installer={settings?.installer ?? null} />
+
           <Field
             label="Windows client download URL"
             htmlFor="downloadUrl"
-            hint="Where the Download button points. Leave blank to hide it."
+            hint={
+              settings?.installer
+                ? 'Ignored while an installer is uploaded above. Kept so clearing the upload restores it.'
+                : 'Where the Download button points when no installer is uploaded. Leave blank to hide it.'
+            }
           >
             <input
               id="downloadUrl"
@@ -245,6 +254,124 @@ export function AdminSettingsPage() {
         </button>
       </form>
     </div>
+  );
+}
+
+/**
+ * Uploads the Windows installer straight to the server, so an operator does not
+ * have to host the build somewhere else and paste a link that will eventually
+ * rot. The uploaded file takes precedence over the URL field below it.
+ */
+function InstallerField({ installer }: { installer: ClientInstallerInfo | null }) {
+  const queryClient = useQueryClient();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['admin', 'settings'] });
+    await queryClient.invalidateQueries({ queryKey: ['public', 'info'] });
+  };
+
+  const upload = useMutation({
+    mutationFn: (file: File) =>
+      uploadFile<ClientInstallerInfo>(
+        `/admin/client-installer${queryString({ fileName: file.name })}`,
+        file,
+        { onProgress: (fraction) => setProgress(fraction) },
+      ),
+    onSuccess: async () => {
+      setError(null);
+      setProgress(null);
+      await refresh();
+    },
+    onError: (caught) => {
+      setProgress(null);
+      setError(caught instanceof ApiRequestError ? caught.message : 'The upload failed.');
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.delete('/admin/client-installer'),
+    onSuccess: refresh,
+  });
+
+  return (
+    <Field
+      label="Windows client installer"
+      htmlFor="installerFile"
+      hint={`Uploaded here and served from this server. Up to ${formatBytes(MAX_INSTALLER_BYTES)}.`}
+    >
+      {installer ? (
+        <div className="bg-ink-800 mb-2 flex flex-wrap items-center gap-3 rounded-lg px-3 py-2 text-sm">
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-medium">{installer.fileName}</p>
+            <p className="text-ink-400 text-xs">
+              {formatBytes(installer.sizeBytes)} · uploaded{' '}
+              {new Date(installer.uploadedAt).toLocaleDateString()}
+            </p>
+          </div>
+          <a className="gb-btn-ghost" href={installer.url}>
+            Download
+          </a>
+          <button
+            type="button"
+            className="gb-btn-danger"
+            disabled={remove.isPending}
+            onClick={() => {
+              if (
+                !confirm(
+                  'Remove the uploaded installer? The Download button falls back to the URL below.',
+                )
+              )
+                return;
+              remove.mutate();
+            }}
+          >
+            {remove.isPending ? (
+              <Spinner className="h-4 w-4" />
+            ) : (
+              <Trash2 className="h-4 w-4" aria-hidden />
+            )}
+            Remove
+          </button>
+        </div>
+      ) : null}
+
+      <input
+        id="installerFile"
+        ref={inputRef}
+        type="file"
+        className="gb-input"
+        accept=".exe,.msi,.msix,.appinstaller,.zip"
+        disabled={upload.isPending}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          setProgress(0);
+          upload.mutate(file);
+          // Clear the picker so choosing the same file twice re-uploads it.
+          if (inputRef.current) inputRef.current.value = '';
+        }}
+      />
+
+      {upload.isPending ? (
+        <div className="mt-2">
+          <div className="bg-ink-800 h-1.5 w-full overflow-hidden rounded-full">
+            <div
+              className="bg-blade-500 h-full transition-[width]"
+              style={{ width: `${Math.round((progress ?? 0) * 100)}%` }}
+            />
+          </div>
+          <p className="text-ink-400 mt-1 text-xs">
+            <Upload className="mr-1 inline h-3 w-3" aria-hidden />
+            Uploading… {Math.round((progress ?? 0) * 100)}%
+          </p>
+        </div>
+      ) : null}
+
+      {error ? <p className="mt-2 text-xs text-red-300">{error}</p> : null}
+    </Field>
   );
 }
 

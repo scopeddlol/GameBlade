@@ -2,6 +2,7 @@ import type {
   ACHIEVEMENT_SOURCE,
   ACTIVITY_KIND,
   ART_KIND,
+  CATALOG_GAP,
   FRIENDSHIP_STATUS,
   GAME_KIND,
   MATCH_STATUS,
@@ -18,6 +19,7 @@ export type Role = (typeof ROLES)[number];
 export type MatchStatus = (typeof MATCH_STATUS)[number];
 export type GameKind = (typeof GAME_KIND)[number];
 export type ArtKind = (typeof ART_KIND)[number];
+export type CatalogGap = (typeof CATALOG_GAP)[number];
 export type Visibility = (typeof VISIBILITY)[number];
 export type FriendshipStatus = (typeof FRIENDSHIP_STATUS)[number];
 export type PresenceStatus = (typeof PRESENCE_STATUS)[number];
@@ -46,6 +48,8 @@ export interface SessionInfo {
 
 export interface GameArt {
   cover: string | null;
+  /** Wide Steam-style capsule, distinct from the portrait cover. */
+  banner: string | null;
   hero: string | null;
   logo: string | null;
   icon: string | null;
@@ -75,6 +79,11 @@ export interface GameSummary {
   lastPlayedAt: string | null;
   achievementCount: number;
   unlockedCount: number;
+
+  /** Whether an admin has told the client what to run once this is installed. */
+  hasLaunchRule: boolean;
+  /** Whether this game's saves are covered by a cloud-sync rule. */
+  hasSaveRule: boolean;
 }
 
 export interface GameDetail extends GameSummary {
@@ -88,6 +97,12 @@ export interface GameDetail extends GameSummary {
   igdbId: number | null;
   sgdbId: number | null;
   screenshots: string[];
+  /**
+   * The cached-image ids behind `screenshots`, positionally aligned with it.
+   * The admin editor needs them to remove one; every other client only ever
+   * renders the URLs.
+   */
+  screenshotIds: string[];
   videos: string[];
   updatedAt: string;
   scannedAt: string | null;
@@ -178,6 +193,18 @@ export interface ServerSettings {
   igdbClientSecretSet?: boolean;
   steamGridDbKeySet?: boolean;
   steamApiKeySet?: boolean;
+  /** The uploaded Windows installer, when one has been stored. */
+  installer?: ClientInstallerInfo | null;
+}
+
+/** A Windows client installer held on the server rather than linked elsewhere. */
+export interface ClientInstallerInfo {
+  fileName: string;
+  sizeBytes: number;
+  sha256: string;
+  uploadedAt: string;
+  /** Where the landing page's Download button points once this exists. */
+  url: string;
 }
 
 /** The unauthenticated payload the landing page and sign-in screen read. */
@@ -190,6 +217,9 @@ export interface PublicServerInfo {
   downloadUrl: string | null;
   clientVersion: string | null;
   gameCount: number;
+  /** Set when the installer is hosted here, so the button can show its size. */
+  downloadFileName: string | null;
+  downloadSizeBytes: number | null;
 }
 
 /** One image an admin can choose for a game, from either provider. */
@@ -197,7 +227,11 @@ export interface ArtworkCandidate {
   provider: 'igdb' | 'steamgriddb';
   /** Full-size image, downloaded and cached locally when chosen. */
   url: string;
-  /** Smaller preview so a picker grid does not pull megabytes per thumbnail. */
+  /**
+   * Smaller preview so a picker grid does not pull megabytes per thumbnail.
+   * Served through this server rather than the provider's CDN, so the browser
+   * never talks to IGDB or SteamGridDB directly.
+   */
   thumbnailUrl: string;
   width: number | null;
   height: number | null;
@@ -210,6 +244,13 @@ export interface ArtworkCandidate {
 export interface ArtworkSearchResult {
   kind: ArtKind;
   query: string;
+  /** The SteamGridDB style the results were narrowed to, if any. */
+  style: string | null;
+  /**
+   * Which providers were actually consulted. An empty list means none are
+   * configured, which a picker must not report as "this game has no artwork".
+   */
+  providers: Array<'igdb' | 'steamgriddb'>;
   candidates: ArtworkCandidate[];
   /**
    * Providers that failed. Surfaced rather than swallowed so a half-empty
@@ -480,6 +521,8 @@ export interface FeaturedEntry {
   blurb: string | null;
   /** Overrides the game's own hero art on the Home carousel. */
   heroUrl: string | null;
+  /** True when `heroUrl` is a hand-picked override rather than the game's art. */
+  hasHeroOverride: boolean;
   sortOrder: number;
 }
 
