@@ -236,27 +236,64 @@ export class GameRequestService {
    *
    * One method rather than four endpoints: the client draws all of it on the
    * Home tab at once, and every panel comes out of the same two tables.
+   *
+   * Each panel is its own bounded query rather than one pass over the whole
+   * table sorted in memory. `/home` is the client's cold-start request and is
+   * re-read every half minute it stays open, so a queue that has accumulated a
+   * few thousand rows must not turn it into a full scan plus two more queries
+   * over every id.
    */
   digest(viewerId: string): GameRequestDigest {
-    const rows = this.selectBase().all() as RequestRow[];
-    const all = this.decorate(rows, viewerId, false);
+    // Ranking by votes has to happen in SQL for the limit to mean anything,
+    // so this panel joins the counts in rather than reading them afterwards.
+    const mostRequested = this.selectBase()
+      .leftJoin(gameRequestVotes, eq(gameRequestVotes.requestId, gameRequests.id))
+      .where(eq(gameRequests.status, 'pending'))
+      .groupBy(gameRequests.id)
+      .orderBy(desc(sql`count(${gameRequestVotes.userId})`), desc(gameRequests.createdAt))
+      .limit(DIGEST_LIMIT)
+      .all() as RequestRow[];
 
-    const byStatus = (status: GameRequestStatus) => all.filter((entry) => entry.status === status);
+    const comingSoon = this.selectBase()
+      .where(eq(gameRequests.status, 'coming-soon'))
+      .orderBy(desc(gameRequests.updatedAt))
+      .limit(DIGEST_LIMIT)
+      .all() as RequestRow[];
+
+    const recentlyAdded = this.selectBase()
+      .where(eq(gameRequests.status, 'added'))
+      .orderBy(desc(gameRequests.decidedAt))
+      .limit(DIGEST_LIMIT)
+      .all() as RequestRow[];
+
+    const yours = this.selectBase()
+      .innerJoin(gameRequestVotes, eq(gameRequestVotes.requestId, gameRequests.id))
+      .where(eq(gameRequestVotes.userId, viewerId))
+      .orderBy(desc(gameRequests.updatedAt))
+      .limit(DIGEST_LIMIT)
+      .all() as RequestRow[];
+
+    // Decorated in one pass over the union, so the vote counts and the
+    // caller's own votes are still two queries in total rather than eight.
+    const seen = new Map<string, GameRequestInfo>();
+    for (const entry of this.decorate(
+      [...mostRequested, ...comingSoon, ...recentlyAdded, ...yours],
+      viewerId,
+      false,
+    )) {
+      seen.set(entry.id, entry);
+    }
+    const take = (rows: RequestRow[]) =>
+      rows.flatMap((row) => {
+        const entry = seen.get(row.id);
+        return entry ? [entry] : [];
+      });
 
     return {
-      comingSoon: byStatus('coming-soon')
-        .sort((a, b) => b.votes - a.votes || b.updatedAt.localeCompare(a.updatedAt))
-        .slice(0, DIGEST_LIMIT),
-      mostRequested: byStatus('pending')
-        .sort((a, b) => b.votes - a.votes || b.createdAt.localeCompare(a.createdAt))
-        .slice(0, DIGEST_LIMIT),
-      recentlyAdded: byStatus('added')
-        .sort((a, b) => (b.decidedAt ?? '').localeCompare(a.decidedAt ?? ''))
-        .slice(0, DIGEST_LIMIT),
-      yours: all
-        .filter((entry) => entry.hasVoted)
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-        .slice(0, DIGEST_LIMIT),
+      comingSoon: take(comingSoon),
+      mostRequested: take(mostRequested),
+      recentlyAdded: take(recentlyAdded),
+      yours: take(yours),
       counts: this.counts(),
     };
   }

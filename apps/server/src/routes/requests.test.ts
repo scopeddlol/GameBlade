@@ -251,6 +251,43 @@ describe('requests and collections', () => {
     expect(digest.yours.map((entry) => entry.title)).toContain('Hollow Knight: Silksong');
   });
 
+  it('ranks the most-requested panel by votes, not by age', async () => {
+    // The popular one is filed *first*, so newest-first ordering would put it
+    // last. Only ordering by votes puts it on top.
+    const popular = await app.inject({
+      method: 'POST',
+      url: '/api/requests',
+      headers: auth(player),
+      payload: { title: 'A Widely Wanted Game' },
+    });
+    expect(popular.statusCode).toBe(201);
+    await app.inject({
+      method: 'POST',
+      url: `/api/requests/${(popular.json() as GameRequestInfo).id}/vote`,
+      headers: auth(admin),
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/requests',
+      headers: auth(player),
+      payload: { title: 'A Quietly Wanted Game' },
+    });
+
+    const digest = (
+      await app.inject({ method: 'GET', url: '/api/requests/digest', headers: auth(player) })
+    ).json() as GameRequestDigest;
+
+    const titles = digest.mostRequested.map((entry) => entry.title);
+    // The panel is capped, so the ranking has to happen in the query rather
+    // than over whatever the limit happened to return.
+    expect(titles[0]).toBe('A Widely Wanted Game');
+    expect(titles.indexOf('A Widely Wanted Game')).toBeLessThan(
+      titles.indexOf('A Quietly Wanted Game'),
+    );
+    expect(digest.mostRequested[0]?.votes).toBe(2);
+  });
+
   it('reopens a denied title when somebody else asks for it', async () => {
     const created = await app.inject({
       method: 'POST',
