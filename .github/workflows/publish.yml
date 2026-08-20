@@ -102,7 +102,40 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Replaces dtolnay/rust-toolchain@stable, which is a composite action
+      # whose every step runs under `shell: bash`. A self-hosted Windows runner
+      # has no bash on PATH unless Git's bin directory was added to it, and a
+      # Windows service does not pick up a machine PATH change without a reboot
+      # — so the toolchain is set up in PowerShell instead and the job stops
+      # depending on the machine having been prepared a particular way.
+      - name: Rust toolchain
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Invoke-WebRequest's progress bar makes a download take minutes
+          # instead of seconds on Windows PowerShell.
+          $ProgressPreference = 'SilentlyContinue'
+
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            Write-Host 'rustup is not on PATH; installing it for this account'
+            $installer = Join-Path $env:RUNNER_TEMP 'rustup-init.exe'
+            Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile $installer
+            & $installer -y --default-toolchain none --profile minimal
+            if ($LASTEXITCODE -ne 0) { throw "rustup-init exited with $LASTEXITCODE" }
+
+            # Available to the rest of this step, and to every step after it.
+            $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+            $env:PATH = "$cargoBin;$env:PATH"
+            Add-Content -Path $env:GITHUB_PATH -Value $cargoBin -Encoding utf8
+          }
+
+          rustup toolchain install stable --profile minimal --component clippy --component rustfmt --no-self-update
+          if ($LASTEXITCODE -ne 0) { throw "rustup toolchain install exited with $LASTEXITCODE" }
+
+          rustup default stable
+          if ($LASTEXITCODE -ne 0) { throw "rustup default exited with $LASTEXITCODE" }
+
+          rustc --version
+          cargo --version
 
       - uses: swatinem/rust-cache@v2
         with:
