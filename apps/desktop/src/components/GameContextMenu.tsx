@@ -36,6 +36,11 @@ export interface GameMenuActions {
   onError: (message: string) => void;
   /** Opens the group picker. Omitted where there is nowhere to render it. */
   onManageGroups?: (game: GameSummary) => void;
+  /**
+   * Opens the install dialog. Omitted where there is nowhere to render it, in
+   * which case Install falls back to the default location.
+   */
+  onInstall?: (game: GameSummary) => void;
 }
 
 /**
@@ -45,7 +50,7 @@ export interface GameMenuActions {
  * offer the same actions — a menu that changes depending on which grid the
  * same game is shown in is a menu nobody can learn.
  */
-export function useGameMenuItems({ onOpen, onError, onManageGroups }: GameMenuActions) {
+export function useGameMenuItems({ onOpen, onError, onManageGroups, onInstall }: GameMenuActions) {
   const queryClient = useQueryClient();
   const buttonsQuery = useClientButtons('game-menu');
   const addToLibrary = useAddToLibrary();
@@ -100,7 +105,7 @@ export function useGameMenuItems({ onOpen, onError, onManageGroups }: GameMenuAc
         icon: <Download size={14} />,
         disabled: game.isMissing,
         disabledReason: 'This game is no longer on the server',
-        onSelect: () => run(ipc.startDownload(game.id)),
+        onSelect: () => (onInstall ? onInstall(game) : run(ipc.startDownload(game.id))),
       });
     }
 

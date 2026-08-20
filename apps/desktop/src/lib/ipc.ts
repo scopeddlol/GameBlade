@@ -77,7 +77,7 @@ export interface ClientSettings {
   themePreset: string | null;
   /** A `#rrggbb` accent overriding the theme's own; only used with a preset. */
   themeAccent: string | null;
-  libraryView: 'grid' | 'list';
+  libraryView: 'grid' | 'list' | 'detailed';
   /** Prefer a game's logo artwork over its title on the detail page. */
   useLogoTitles: boolean;
 }

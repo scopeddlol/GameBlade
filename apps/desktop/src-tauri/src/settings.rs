@@ -58,7 +58,7 @@ pub struct Settings {
     #[serde(default)]
     pub theme_accent: Option<String>,
 
-    /// How the Library tab lays its games out: `grid` or `list`.
+    /// How the Library tab lays its games out: `grid`, `list` or `detailed`.
     #[serde(default = "default_library_view")]
     pub library_view: String,
 
@@ -101,7 +101,7 @@ impl Settings {
 
         // A hand-edited file could name a layout the client has no code for,
         // which would leave the Library rendering nothing at all.
-        if self.library_view != "grid" && self.library_view != "list" {
+        if !matches!(self.library_view.as_str(), "grid" | "list" | "detailed") {
             self.library_view = default_library_view();
         }
 

@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import { MessageSquarePlus, Search, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { CollectionPicker } from '../components/CollectionPicker.js';
+import { InstallDialog, useInstallDialog } from '../components/InstallDialog.js';
 import { ContextMenu, useContextMenu } from '../components/ContextMenu.js';
 import { GameCard } from '../components/GameCard.js';
 import { useGameMenuItems } from '../components/GameContextMenu.js';
@@ -49,10 +50,13 @@ export function StoreTab({
   const [grouping, setGrouping] = useState<GameSummary | null>(null);
 
   const menu = useContextMenu<GameSummary>();
+  const installDialog = useInstallDialog();
+
   const buildMenuItems = useGameMenuItems({
     onOpen: onOpenGame,
     onError: setError,
     onManageGroups: setGrouping,
+    onInstall: installDialog.request,
   });
 
   useEffect(() => {
@@ -203,6 +207,10 @@ export function StoreTab({
 
       {requesting ? (
         <RequestsDialog onClose={() => setRequesting(false)} onOpenGame={onOpenGameId} />
+      ) : null}
+
+      {installDialog.game ? (
+        <InstallDialog game={installDialog.game} onClose={installDialog.close} />
       ) : null}
 
       {grouping ? <CollectionPicker game={grouping} onClose={() => setGrouping(null)} /> : null}

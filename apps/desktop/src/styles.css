@@ -1009,6 +1009,18 @@ textarea:focus {
 
 /* ----------------------------------------------------------------- avatars */
 
+/*
+ * Doubled class on purpose. A container laying out its children commonly says
+ * `.thing > span { flex: 1 }` to make a text column fill the row, and that
+ * selector also matches the avatar's wrapper — flex-basis then overrides its
+ * width and stretches a 38px circle across the row, dragging the presence dot
+ * with it. `.avatar-wrap.avatar-wrap` outranks any `.class > span`, so the
+ * wrapper keeps its own size no matter what it is dropped into.
+ */
+.avatar-wrap.avatar-wrap {
+  flex: 0 0 auto;
+  display: inline-flex;
+}
 .avatar-wrap {
   position: relative;
   /* inline-flex rather than inline-block, with the line box collapsed. An
@@ -1050,9 +1062,11 @@ textarea:focus {
   position: absolute;
   right: 0;
   bottom: 0;
-  width: 30%;
+  /* Height drives it and aspect-ratio squares it, so the dot stays round even
+     if something does manage to stretch the wrapper. */
   height: 30%;
-  min-width: 9px;
+  width: auto;
+  aspect-ratio: 1;
   min-height: 9px;
   border-radius: 50%;
   transform: translate(10%, 10%);
@@ -1529,7 +1543,7 @@ textarea:focus {
 .post-author:disabled {
   cursor: default;
 }
-.post-author > span {
+.post-author > span:not(.avatar-wrap) {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -2775,4 +2789,151 @@ textarea:focus {
   padding: 6px 10px;
   display: inline-flex;
   align-items: center;
+}
+
+/* ------------------------------------------------------ detailed library */
+
+.game-detailed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.game-detailed {
+  display: grid;
+  /* Poster, everything else, action. The middle column is the only one that
+     flexes, so the artwork and the button stay put as the window resizes. */
+  grid-template-columns: 92px minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--ink-850);
+  border: 1px solid var(--ink-800);
+  transition: border-color 120ms ease;
+}
+.game-detailed:hover {
+  border-color: var(--ink-700);
+}
+.game-detailed.missing {
+  opacity: 0.55;
+}
+.game-detailed-art {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 8px;
+  overflow: hidden;
+  aspect-ratio: 2 / 3;
+  width: 92px;
+}
+.game-detailed-art .cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.game-detailed-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.game-detailed-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.game-detailed-title {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--ink-50);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.game-detailed-title:hover {
+  color: var(--blade-400);
+}
+.game-detailed-facts {
+  margin: 0;
+}
+.game-detailed-summary {
+  margin: 0;
+  color: var(--ink-300);
+  font-size: 13px;
+  line-height: 1.45;
+  /* Two lines keeps every row the same height whatever the blurb's length,
+     which is what stops the list looking ragged. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.game-detailed-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.game-detailed-action {
+  display: flex;
+  align-items: center;
+}
+.row-chip.missing-chip {
+  color: var(--danger);
+}
+
+/* Under about 900px the poster and the action stack out of the way rather
+   than squeezing the text into a column too narrow to read. */
+@media (max-width: 900px) {
+  .game-detailed {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+  .game-detailed-art {
+    width: 64px;
+  }
+  .game-detailed-action {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+}
+
+/* A short cross-fade so an advance reads as a change rather than a flicker.
+   Keyed on the game id in HomeTab, so the element is replaced and the
+   animation runs again on every slide. */
+.featured-img {
+  animation: featured-in 260ms ease-out;
+}
+@keyframes featured-in {
+  from {
+    opacity: 0;
+    transform: scale(1.015);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+/* Someone who has asked for less motion gets the swap without the movement. */
+@media (prefers-reduced-motion: reduce) {
+  .featured-img {
+    animation: none;
+  }
+}
+
+/* The size a game needs, stated before the drives are offered so the numbers
+   below it mean something. */
+.install-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+.storage-location-pick:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

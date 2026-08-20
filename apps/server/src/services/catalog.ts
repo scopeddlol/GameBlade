@@ -33,6 +33,25 @@ import type { PresenceService } from './presence.js';
 import type { PlaytimeService } from './playtime.js';
 import type { ProfileService } from './profiles.js';
 
+/** How much of a description a list row can show before it is clamped anyway. */
+const BLURB_CHARS = 280;
+
+/**
+ * Trims a description to something a row can render.
+ *
+ * Cut on a word boundary rather than mid-word: the CSS clamp hides the overflow
+ * either way, but the text is also read by screen readers and shown as a
+ * tooltip, where a severed word looks like corrupt data.
+ */
+function blurb(text: string | null): string | null {
+  if (!text) return null;
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= BLURB_CHARS) return flat || null;
+  const cut = flat.slice(0, BLURB_CHARS);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${lastSpace > BLURB_CHARS * 0.6 ? cut.slice(0, lastSpace) : cut}…`;
+}
+
 /**
  * One SQL condition per gap an administrator can filter on.
  *
@@ -158,6 +177,7 @@ export class CatalogService {
         rating: game.rating,
         genres: game.genres ?? [],
         platforms: game.platforms ?? [],
+        summary: blurb(game.summary),
         art: {
           cover: this.imageUrl(game.coverImageId),
           banner: this.imageUrl(game.bannerImageId),

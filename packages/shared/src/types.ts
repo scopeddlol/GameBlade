@@ -74,6 +74,13 @@ export interface GameSummary {
   rating: number | null;
   genres: string[];
   platforms: string[];
+  /**
+   * A short blurb for the detailed library layout, trimmed server-side.
+   *
+   * The full text lives on GameDetail; a list of 200 games does not want to
+   * carry 200 full descriptions to render three lines of each.
+   */
+  summary: string | null;
   art: GameArt;
   matchStatus: MatchStatus;
   isFavorite: boolean;

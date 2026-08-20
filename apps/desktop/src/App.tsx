@@ -29,7 +29,7 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useClientButtons } from './components/GameContextMenu.js';
 import { DownloadQueue } from './components/DownloadQueue.js';
 import { FriendsRail } from './components/FriendsRail.js';
@@ -219,7 +219,7 @@ function Shell() {
 
       <div className="main">
         <TitleBar>
-          <TopBar running={running} />
+          <TopBar running={running} tab={tab} />
         </TitleBar>
 
         <div className="scroll">
@@ -357,9 +357,10 @@ function CustomButtons({ placement }: { placement: 'sidebar' | 'home' }) {
   );
 }
 
-function TopBar({ running }: { running: RunningGame | null }) {
+function TopBar({ running, tab }: { running: RunningGame | null; tab: TabId }) {
   const { connected } = useRealtime();
   const queryClient = useQueryClient();
+  const wrapRef = useRef<HTMLDivElement>(null);
 
   const notificationsQuery = useQuery({
     queryKey: ['notifications'],
@@ -380,6 +381,30 @@ function TopBar({ running }: { running: RunningGame | null }) {
   const unread = notificationsQuery.data?.unreadCount ?? 0;
   const items = notificationsQuery.data?.items ?? [];
 
+  // Changing tab is leaving what the panel was opened over, so it goes with it
+  // rather than hanging above the new page until it is clicked away.
+  useEffect(() => setOpen(false), [tab]);
+
+  // The two ways any popover is expected to close. Bound only while it is
+  // open, so the app is not listening on the document for nothing.
+  useEffect(() => {
+    if (!open) return;
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [open]);
+
   return (
     <div className="topbar" data-tauri-drag-region>
       {running ? (
@@ -398,7 +423,7 @@ function TopBar({ running }: { running: RunningGame | null }) {
         {connected ? <Wifi size={14} aria-hidden /> : <WifiOff size={14} aria-hidden />}
       </span>
 
-      <div className="notif-wrap">
+      <div className="notif-wrap" ref={wrapRef}>
         <button
           type="button"
           className="icon-btn"
