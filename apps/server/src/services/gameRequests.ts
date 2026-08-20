@@ -8,10 +8,11 @@ import {
   type GameRequestInfo,
   type GameRequestQuery,
   type GameRequestStatus,
+  type GameRequestSuggestion,
 } from '@gameblade/shared';
 import { and, desc, eq, inArray, like, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { gameRequests, gameRequestVotes, users } from '../db/schema.js';
+import { gameRequests, gameRequestVotes, games, users } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { isoNow } from '../lib/time.js';
@@ -191,6 +192,66 @@ export class GameRequestService {
     const row = this.selectBase().where(eq(gameRequests.id, id)).get();
     if (!row) throw ApiError.notFound('That request no longer exists');
     return this.decorate([row as RequestRow], viewerId, includeRequester)[0] as GameRequestInfo;
+  }
+
+  /**
+   * Trending titles a player could ask for, marked against this archive.
+   *
+   * The point is one-click asking: someone browsing what is popular should not
+   * have to type a title the server already knows, nor request something that
+   * is already on the shelf. Each suggestion says which of those it is, so the
+   * button can read "Request", "Already here" or "Backed".
+   */
+  suggestions(
+    userId: string,
+    candidates: { title: string; coverUrl: string | null; releaseYear: number | null }[],
+  ): GameRequestSuggestion[] {
+    if (candidates.length === 0) return [];
+
+    const keys = candidates.map((entry) => requestKey(entry.title)).filter(Boolean);
+    if (keys.length === 0) return [];
+
+    // Two set lookups over the page rather than a query per suggestion.
+    const alreadyRequested = new Map(
+      this.db
+        .select({ id: gameRequests.id, key: gameRequests.titleKey, status: gameRequests.status })
+        .from(gameRequests)
+        .where(inArray(gameRequests.titleKey, keys))
+        .all()
+        .map((row) => [row.key, row]),
+    );
+
+    const inCatalog = new Set(
+      this.db
+        .select({ search: games.searchTitle })
+        .from(games)
+        .all()
+        .map((row) => requestKey(row.search ?? ''))
+        .filter(Boolean),
+    );
+
+    const backed = new Set(
+      this.db
+        .select({ requestId: gameRequestVotes.requestId })
+        .from(gameRequestVotes)
+        .where(eq(gameRequestVotes.userId, userId))
+        .all()
+        .map((row) => row.requestId),
+    );
+
+    return candidates.map((entry) => {
+      const key = requestKey(entry.title);
+      const request = alreadyRequested.get(key);
+      return {
+        title: entry.title,
+        coverUrl: entry.coverUrl,
+        releaseYear: entry.releaseYear,
+        inCatalog: inCatalog.has(key),
+        requestId: request?.id ?? null,
+        status: request?.status ?? null,
+        hasVoted: request ? backed.has(request.id) : false,
+      };
+    });
   }
 
   list(query: GameRequestQuery, viewerId: string, includeRequester: boolean): GameRequestInfo[] {

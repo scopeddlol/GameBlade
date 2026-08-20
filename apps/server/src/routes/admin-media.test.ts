@@ -231,17 +231,20 @@ describe('admin catalog gaps and the client installer', () => {
     ]) {
       const response = await app.inject({
         method: 'GET',
-        url: `/api/admin/artwork/thumbnail?url=${encodeURIComponent(url)}`,
+        url: `/api/artwork/thumbnail?url=${encodeURIComponent(url)}`,
         headers: auth(),
       });
       expect(response.statusCode, url).toBe(400);
     }
   });
 
+  // The proxy is open to any signed-in account, not just an administrator —
+  // the request page shows trending covers to everyone — so the guard that
+  // matters is that it is not open to the world.
   it('will not proxy a thumbnail for someone who is not signed in', async () => {
     const response = await app.inject({
       method: 'GET',
-      url: `/api/admin/artwork/thumbnail?url=${encodeURIComponent('https://images.igdb.com/a.jpg')}`,
+      url: `/api/artwork/thumbnail?url=${encodeURIComponent('https://images.igdb.com/a.jpg')}`,
     });
     expect(response.statusCode).toBe(401);
   });

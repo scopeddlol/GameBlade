@@ -755,3 +755,20 @@ export interface CollectionInfo {
   gameCount: number;
   createdAt: string;
 }
+
+/**
+ * A trending title offered on the request page, already checked against this
+ * archive so the button can say what it will actually do.
+ */
+export interface GameRequestSuggestion {
+  title: string;
+  /** A provider URL, fetched through the server's image proxy. */
+  coverUrl: string | null;
+  releaseYear: number | null;
+  /** Already on the shelf: asking for it would be pointless. */
+  inCatalog: boolean;
+  /** Set when somebody has already asked, so the button becomes a vote. */
+  requestId: string | null;
+  status: GameRequestStatus | null;
+  hasVoted: boolean;
+}

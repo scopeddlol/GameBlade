@@ -453,4 +453,65 @@ describe('requests and collections', () => {
     });
     expect((games.json() as { total: number }).total).toBe(1);
   });
+
+  /* ------------------------------------------------------- suggestions */
+
+  describe('trending suggestions', () => {
+    /**
+     * The strip offers one-click asking, so each card has to know what the
+     * click will do before it happens: request it, back an existing one, or
+     * nothing because the archive already has it.
+     */
+    const trending = [
+      { title: 'Bastion', coverUrl: null, releaseYear: 2011 },
+      { title: 'Silksong', coverUrl: 'https://images.igdb.com/x.jpg', releaseYear: 2026 },
+      { title: 'Some Unheard-Of Game', coverUrl: null, releaseYear: 2025 },
+    ];
+
+    it('marks what the archive already has', () => {
+      const results = app.gameblade.gameRequests.suggestions(player.id, trending);
+
+      const bastion = results.find((entry) => entry.title === 'Bastion');
+      expect(bastion?.inCatalog).toBe(true);
+      // Nothing to ask for, so no request should be attached either.
+      expect(bastion?.requestId).toBeNull();
+    });
+
+    it('points a title somebody already asked for at that request', async () => {
+      await app.inject({
+        method: 'POST',
+        url: '/api/requests',
+        headers: auth(player),
+        payload: { title: 'Silksong' },
+      });
+
+      const results = app.gameblade.gameRequests.suggestions(player.id, trending);
+      const silksong = results.find((entry) => entry.title === 'Silksong');
+
+      expect(silksong?.inCatalog).toBe(false);
+      expect(silksong?.requestId).not.toBeNull();
+      // The asker's own vote counts, so the card reads "Backed" not "Back it".
+      expect(silksong?.hasVoted).toBe(true);
+    });
+
+    it('leaves an unknown title as a plain request', () => {
+      const results = app.gameblade.gameRequests.suggestions('nobody', trending);
+      const unknown = results.find((entry) => entry.title === 'Some Unheard-Of Game');
+
+      expect(unknown).toMatchObject({ inCatalog: false, requestId: null, hasVoted: false });
+    });
+
+    it('matches on the same normalised key the queue uses', () => {
+      // "Bastion" and "bastion!" must not produce two different answers, or the
+      // strip would offer a game the archive already has.
+      const results = app.gameblade.gameRequests.suggestions('nobody', [
+        { title: '  BASTION! ', coverUrl: null, releaseYear: null },
+      ]);
+      expect(results[0]?.inCatalog).toBe(true);
+    });
+
+    it('returns nothing for an empty list rather than reading the catalog', () => {
+      expect(app.gameblade.gameRequests.suggestions('nobody', [])).toEqual([]);
+    });
+  });
 });

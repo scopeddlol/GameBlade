@@ -3090,3 +3090,117 @@ textarea:focus {
   align-items: center;
   gap: 6px;
 }
+
+/* ----------------------------------------------------------------- requests */
+
+.requests-tab {
+  max-width: 1100px;
+}
+.requests-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.requests-head h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.requests-head p {
+  margin: 2px 0 0;
+}
+.requests-tally {
+  display: flex;
+  gap: 20px;
+}
+.requests-tally-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.requests-tally-item strong {
+  font-size: 20px;
+  line-height: 1.1;
+}
+.requests-tally-item.accent strong {
+  color: var(--blade-400);
+}
+
+.requests-composer {
+  gap: 10px;
+}
+.requests-composer-row {
+  display: flex;
+  gap: 10px;
+}
+.requests-composer-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.trending h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+.trending h2 .muted {
+  margin-left: auto;
+  font-weight: 400;
+}
+/* A strip rather than a grid: it is a sideline to the queue below, and a grid
+   of twelve covers would push the actual requests off the screen. */
+.trending-strip {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+.trending-card {
+  flex: 0 0 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--ink-850);
+  border: 1px solid var(--ink-800);
+}
+.trending-cover {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+}
+.trending-body {
+  min-width: 0;
+}
+.trending-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trending-body p:last-child {
+  margin: 1px 0 0;
+}
+.trending-card .btn,
+.trending-card .row-chip {
+  margin-top: auto;
+  justify-content: center;
+}
+
+.requests-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.requests-queue {
+  margin-top: 4px;
+}
