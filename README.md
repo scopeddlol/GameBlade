@@ -270,12 +270,21 @@ placed there. Text fields keep the native menu, so copy and paste still work.
 
 Players ask for what is not there, and the archive keeps a queue of it.
 
-**Store → Request** in the client takes a title and an optional note. Two people
-asking for the same game strengthen one row rather than producing two the
-operator has to reconcile: titles are matched on a normalised key, so
-`Half-Life 2: Episode One` and `half life 2 episode one` collide, while `Halo`
-and `Halo Wars` stay apart. The asker's vote is counted automatically, and
-anyone else can back a row or take their backing away.
+The client's **Requests** tab is where players ask and vote: a tally of what is
+open, on the way and already added, a composer, filters by state, and the queue
+ranked by votes. Two people asking for the same game strengthen one row rather
+than producing two the operator has to reconcile — titles are matched on a
+normalised key, so `Half-Life 2: Episode One` and `half life 2 episode one`
+collide, while `Halo` and `Halo Wars` stay apart. The asker's vote is counted
+automatically, and anyone else can back a row or take their backing away.
+
+Above the queue sits **Trending right now**: what is actually being played
+elsewhere, from IGDB's popularity data ranked by Steam's 24-hour peak player
+count. Each card is checked against this archive first, so its button reads _In
+the archive_, _Backed_, _Back it_ or _Request_ — one click, no typing. It needs
+IGDB credentials; without them the strip simply does not appear, and the rest of
+the page works as normal. The list is cached for an hour, since it is the same
+for every player and IGDB's rate limit is shared with scanning and matching.
 
 **Admin → Requests** is the other side of it: the queue ranked by votes, with
 four states — pending, coming soon, added, denied — a note players will see, and
@@ -301,12 +310,41 @@ and the featured rail to shape the catalog, and a shared group would need its
 own permissions model to answer "who may rename this". Nothing is copied or
 moved, and deleting a group leaves every game in it alone.
 
+### News and announcements
+
+**Admin → Announcements**, or the composer on the client's **News** tab, sends a
+notification to every account _and_ publishes the same text as a post. The
+notification is read once and gone; the News tab is where it stays, and where
+people reply to it. Underneath it is an ordinary post, so comments, reactions,
+editing and deletion are the machinery the social feed already had.
+
+Two announcements are deliberately not published: one aimed at named accounts,
+which is a message rather than a notice, and one an operator marks as transient
+("back up in five minutes"). Players cannot author one — the post route derives
+its kind from what was attached, so asking for `kind: announcement` in a request
+body is ignored rather than trusted.
+
+### Keeping the client up to date
+
+Upload a new installer under **Admin → Client** and bump the client version
+beside it. Clients older than that version show a banner offering to update, and
+hand off to the installer when the user accepts — nothing is replaced behind
+their back. Declining is remembered per version, so saying no to 0.5.0 stays no
+while 0.5.1 asks again. Nothing is offered unless an installer has actually been
+uploaded, so a version typed in with no build behind it produces no prompt.
+
 ### Library layouts
 
-The Library tab lays its games out as posters or as a dense list of rows with
-icons, sizes, playtime and achievement progress — four or five times as many
-titles on screen, which is the shape a large library wants. The choice lives in
-the client's settings file, so it survives a restart.
+The Library tab has three layouts, switched from the toolbar rather than from
+Settings, because which one is right changes with what you are doing:
+
+| Layout       | For                                                                          |
+| ------------ | ---------------------------------------------------------------------------- |
+| **Grid**     | Browsing by artwork                                                          |
+| **List**     | Finding a title you already know — four or five times as many rows on screen |
+| **Detailed** | Deciding what to play: cover, blurb, genres and every stat spelled out       |
+
+The choice lives in the client's settings file, so it survives a restart.
 
 Game pages show a title's logo artwork in place of its name wherever the archive
 has one; **Settings → Appearance** turns that off for anyone who would rather
@@ -444,6 +482,19 @@ reconnects with backoff. Everything it carries is also readable over REST, so a
 dropped socket costs freshness, never correctness.
 
 ### Downloads
+
+Pressing **Install** asks where the game should go rather than silently using a
+default. Every configured drive is listed with what is free, what would be left
+after, and a plain refusal when the game will not fit — a download that dies at
+90% for want of disk is the worst way to find that out. Add more locations under
+**Settings → Storage**.
+
+**Settings → Downloads** has an optional artwork cache. With it on, a cover
+already on disk is handed straight to the webview and the server is not asked at
+all; a miss returns the remote URL immediately and fills the cache behind it, so
+a cache miss is never slower than having no cache. It is capped at 512 MB,
+evicts oldest-first, and the card shows what it is using with a button to empty
+it.
 
 A browser download of a 60 GB folder is a single connection that has to survive
 from start to finish; if it drops at 90%, it starts over. The desktop client
