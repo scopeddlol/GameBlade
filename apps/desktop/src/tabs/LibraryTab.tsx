@@ -1,17 +1,20 @@
 import type { GameSummary, Paginated } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { FolderSearch, Search } from 'lucide-react';
+import { FolderSearch, LayoutGrid, List, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { CollectionPicker } from '../components/CollectionPicker.js';
 import { ContextMenu, useContextMenu } from '../components/ContextMenu.js';
-import { GameCard } from '../components/GameCard.js';
+import { GameCard, GameRow } from '../components/GameCard.js';
 import { useGameMenuItems } from '../components/GameContextMenu.js';
 import { ImportGames } from '../components/ImportGames.js';
 import { Empty, ErrorNote, Loading } from '../components/ui.js';
+import { useCollections } from '../hooks/useCollections.js';
 import {
   errorMessage,
   ipc,
   queryString,
+  type ClientSettings,
   type InstalledGame,
   type RunningGame,
 } from '../lib/ipc.js';
@@ -45,6 +48,8 @@ export function LibraryTab({
   const [sort, setSort] = useState<(typeof SORTS)[number]['id']>('played');
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [grouping, setGrouping] = useState<GameSummary | null>(null);
+  const [collectionId, setCollectionId] = useState('');
 
   // Debounced so typing does not fire a request per keystroke.
   useEffect(() => {
@@ -52,14 +57,39 @@ export function LibraryTab({
     return () => clearTimeout(timer);
   }, [search]);
 
+  const collectionsQuery = useCollections();
+  const collections = collectionsQuery.data ?? [];
+
+  /**
+   * The layout lives in the client's own settings file rather than in
+   * component state, so the choice survives a restart — a view mode that
+   * resets every launch is one nobody bothers to set.
+   */
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => ipc.getSettings(),
+  });
+  const view = settingsQuery.data?.libraryView ?? 'grid';
+
+  const viewMutation = useMutation({
+    mutationFn: (next: ClientSettings['libraryView']) => {
+      const current = settingsQuery.data;
+      if (!current) throw new Error('Settings are still loading');
+      return ipc.updateSettings({ ...current, libraryView: next });
+    },
+    onSuccess: (saved) => queryClient.setQueryData(['settings'], saved),
+    onError: (caught) => setError(errorMessage(caught)),
+  });
+
   const gamesQuery = useQuery({
-    queryKey: ['games', 'library', debounced, filter, sort],
+    queryKey: ['games', 'library', debounced, filter, sort, collectionId],
     queryFn: () =>
       ipc.get<Paginated<GameSummary>>(
         `/games${queryString({
           scope: 'library',
           search: debounced,
           favoritesOnly: filter === 'favourites',
+          collectionId,
           sort,
           order: sort === 'title' ? 'asc' : 'desc',
           limit: 200,
@@ -86,12 +116,18 @@ export function LibraryTab({
   });
 
   const menu = useContextMenu<GameSummary>();
-  const buildMenuItems = useGameMenuItems({ onOpen: onOpenGame, onError: setError });
+  const buildMenuItems = useGameMenuItems({
+    onOpen: onOpenGame,
+    onError: setError,
+    onManageGroups: setGrouping,
+  });
 
   const installedIds = new Set(installed.map((game) => game.gameId));
   const items = (gamesQuery.data?.items ?? []).filter(
     (game) => filter !== 'installed' || installedIds.has(game.id),
   );
+
+  const activeCollection = collections.find((entry) => entry.id === collectionId);
 
   return (
     <div className="tab-content">
@@ -135,6 +171,29 @@ export function LibraryTab({
           ))}
         </select>
 
+        {/* Two layouts for the same list: posters when browsing by artwork, a
+            dense list when hunting for a title in a large library. */}
+        <div className="segmented" role="group" aria-label="Layout">
+          {(
+            [
+              { id: 'grid', label: 'Grid', Icon: LayoutGrid },
+              { id: 'list', label: 'List', Icon: List },
+            ] as const
+          ).map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className={clsx('segment icon-segment', view === option.id && 'active')}
+              aria-pressed={view === option.id}
+              aria-label={`${option.label} view`}
+              title={`${option.label} view`}
+              onClick={() => viewMutation.mutate(option.id)}
+            >
+              <option.Icon size={15} aria-hidden />
+            </button>
+          ))}
+        </div>
+
         <button
           type="button"
           className="btn btn-ghost"
@@ -146,19 +205,82 @@ export function LibraryTab({
         </button>
       </div>
 
+      {collections.length > 0 ? (
+        <div className="chip-row">
+          <button
+            type="button"
+            className={clsx('chip', collectionId === '' && 'active')}
+            onClick={() => setCollectionId('')}
+          >
+            All games
+          </button>
+          {collections.map((collection) => (
+            <button
+              key={collection.id}
+              type="button"
+              className={clsx('chip', collectionId === collection.id && 'active')}
+              onClick={() => setCollectionId(collectionId === collection.id ? '' : collection.id)}
+            >
+              <span className={`collection-dot ${collection.color}`} aria-hidden />
+              {collection.name}
+              <span className="muted small"> {collection.gameCount}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <ErrorNote message={error} />
 
       {gamesQuery.isLoading ? (
         <Loading label="Loading your library" />
       ) : items.length === 0 ? (
         <Empty
-          title={debounced ? 'Nothing matches' : 'Your library is empty'}
+          title={
+            activeCollection
+              ? `Nothing in ${activeCollection.name}`
+              : debounced
+                ? 'Nothing matches'
+                : 'Your library is empty'
+          }
           message={
-            debounced
-              ? 'Try a different search.'
-              : 'Head to the Store tab and add a few games to get started.'
+            activeCollection
+              ? 'Right-click a game and choose "Add to group…" to file it here.'
+              : debounced
+                ? 'Try a different search.'
+                : 'Head to the Store tab and add a few games to get started.'
           }
         />
+      ) : view === 'list' ? (
+        <div className="game-rows">
+          {/* Seven cells, one per column of the row grid below — including the
+              two the rows fill with an installed chip and an action button. */}
+          <div className="game-row-head muted small">
+            <span />
+            <span>Title</span>
+            <span>Size</span>
+            <span>Played</span>
+            <span>Achievements</span>
+            <span />
+            <span />
+          </div>
+          {items.map((game) => {
+            const isInstalled = installedIds.has(game.id);
+            return (
+              <GameRow
+                key={game.id}
+                game={game}
+                installed={isInstalled}
+                onOpen={onOpenGame}
+                primaryLabel={isInstalled ? 'play' : 'install'}
+                busy={running?.gameId === game.id}
+                onPrimary={() =>
+                  isInstalled ? launchMutation.mutate(game.id) : installMutation.mutate(game.id)
+                }
+                onContextMenu={menu.open}
+              />
+            );
+          })}
+        </div>
       ) : (
         <div className="grid">
           {items.map((game) => {
@@ -182,6 +304,8 @@ export function LibraryTab({
       )}
 
       {importing ? <ImportGames installed={installed} onClose={() => setImporting(false)} /> : null}
+
+      {grouping ? <CollectionPicker game={grouping} onClose={() => setGrouping(null)} /> : null}
 
       {menu.state ? (
         <ContextMenu

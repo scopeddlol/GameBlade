@@ -3,6 +3,8 @@ import {
   announcementSchema,
   createInviteSchema,
   clientButtonSchema,
+  decideGameRequestSchema,
+  gameRequestQuerySchema,
   createApiKeySchema,
   defaultLandingBlocks,
   landingPageSchema,
@@ -55,6 +57,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     images,
     installer,
     clientButtons,
+    gameRequests,
     apiKeys,
     analytics,
     bandwidth,
@@ -748,6 +751,45 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return { sent };
+  });
+
+  // ---- Game requests ----
+
+  /**
+   * The operator's view of the request queue.
+   *
+   * Unlike the player-facing list this names who asked, which is what makes a
+   * duplicate-looking pair of requests resolvable.
+   */
+  app.get('/admin/requests', async (request) => {
+    const context = requireAdmin(request);
+    const query = gameRequestQuerySchema.parse(request.query);
+    return {
+      items: gameRequests.list(query, context.user.id, true),
+      counts: gameRequests.counts(),
+    };
+  });
+
+  app.patch('/admin/requests/:id', async (request) => {
+    const context = requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const input = decideGameRequestSchema.parse(request.body);
+
+    // A request marked as added should point at something real; a stale id
+    // would render as a dead "open it" link in every client.
+    if (input.gameId) {
+      const game = db.select({ id: games.id }).from(games).where(eq(games.id, input.gameId)).get();
+      if (!game) throw ApiError.badRequest('That game is not in the catalog');
+    }
+
+    return gameRequests.decide(context.user.id, id, input);
+  });
+
+  app.delete('/admin/requests/:id', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    gameRequests.remove(id);
+    return { ok: true };
   });
 
   /** Profile moderation: an admin can reset a display name or hide a profile. */

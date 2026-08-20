@@ -1,10 +1,4 @@
-import {
-  themeCssVariables,
-  type GameSummary,
-  type NotificationInfo,
-  type NotificationKind,
-  type PublicServerInfo,
-} from '@gameblade/shared';
+import { type GameSummary, type NotificationInfo, type NotificationKind } from '@gameblade/shared';
 import {
   QueryClient,
   QueryClientProvider,
@@ -45,6 +39,7 @@ import { GameDetailPanel } from './components/GameDetail.js';
 import { Avatar, Loading } from './components/ui.js';
 import { RealtimeProvider, useRealtime } from './hooks/useRealtime.js';
 import { SessionProvider, useSession } from './hooks/useSession.js';
+import { useTheme } from './hooks/useTheme.js';
 import { buttonIcon } from './lib/buttonIcons.js';
 import { formatRelative } from './lib/format.js';
 import { ipc, type DownloadState, type RunningGame } from './lib/ipc.js';
@@ -99,33 +94,6 @@ export function App() {
   );
 }
 
-/**
- * Applies the server's theme to the client.
- *
- * The stylesheet is written against `--ink-*` and `--blade-*`, so overriding
- * those on the root restyles everything already on screen. The tokens come
- * from the server rather than being chosen locally: an operator sets the look
- * of their archive once, and both the web app and this client follow it.
- */
-function useServerTheme(enabled: boolean) {
-  const themeQuery = useQuery({
-    queryKey: ['public', 'info'],
-    queryFn: () => ipc.get<PublicServerInfo>('/public/info'),
-    enabled,
-    staleTime: 5 * 60_000,
-  });
-
-  const tokens = themeQuery.data?.theme?.tokens;
-  useEffect(() => {
-    if (!tokens) return;
-    const root = document.documentElement;
-    for (const [name, value] of Object.entries(themeCssVariables(tokens))) {
-      root.style.setProperty(name, value);
-    }
-    root.style.setProperty('color-scheme', tokens.scheme);
-  }, [tokens]);
-}
-
 function Shell() {
   const { session, isRestoring, setSession } = useSession();
   const [tab, setTab] = useState<TabId>('home');
@@ -135,7 +103,7 @@ function Shell() {
   const [friendsCollapsed, setFriendsCollapsed] = useState(false);
   const [profileId, setProfileId] = useState<string | null>(null);
 
-  useServerTheme(Boolean(session));
+  useTheme(Boolean(session));
 
   const installedQuery = useQuery({
     queryKey: ['installed'],
@@ -255,11 +223,11 @@ function Shell() {
         </TitleBar>
 
         <div className="scroll">
-          {tab === 'home' ? <HomeTab onOpenGame={openGame} /> : null}
+          {tab === 'home' ? <HomeTab onOpenGame={openGame} onOpenGameId={setOpenGameId} /> : null}
           {tab === 'library' ? (
             <LibraryTab onOpenGame={openGame} installed={installed} running={running} />
           ) : null}
-          {tab === 'store' ? <StoreTab onOpenGame={openGame} /> : null}
+          {tab === 'store' ? <StoreTab onOpenGame={openGame} onOpenGameId={setOpenGameId} /> : null}
           {tab === 'social' ? <SocialTab onOpenProfile={setProfileId} /> : null}
           {tab === 'settings' ? <SettingsTab /> : null}
         </div>

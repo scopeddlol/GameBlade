@@ -73,6 +73,13 @@ export interface ClientSettings {
   minimizeOnLaunch: boolean;
   downloadConcurrency: number;
   verifyDownloads: boolean;
+  /** Null follows whatever theme the server is set to. */
+  themePreset: string | null;
+  /** A `#rrggbb` accent overriding the theme's own; only used with a preset. */
+  themeAccent: string | null;
+  libraryView: 'grid' | 'list';
+  /** Prefer a game's logo artwork over its title on the detail page. */
+  useLogoTitles: boolean;
 }
 
 /** Mirrors the Rust `StorageLocation` struct, which serialises with snake_case. */

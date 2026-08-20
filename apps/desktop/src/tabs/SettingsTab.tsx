@@ -1,7 +1,17 @@
-import type { DeviceInfo, ProfileDetail, SaveSlotInfo } from '@gameblade/shared';
+import {
+  resolveTheme,
+  THEME_PRESETS,
+  THEMES,
+  type DeviceInfo,
+  type ProfileDetail,
+  type PublicServerInfo,
+  type SaveSlotInfo,
+  type ThemePreset,
+} from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import clsx from 'clsx';
 import { open } from '@tauri-apps/plugin-dialog';
-import { FolderPlus, LogOut, Star, Trash2 } from 'lucide-react';
+import { Check, FolderPlus, LayoutGrid, List, LogOut, RotateCcw, Star, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import {
   Artwork,
@@ -13,6 +23,7 @@ import {
   SectionHeader,
 } from '../components/ui.js';
 import { useSession } from '../hooks/useSession.js';
+import { themeStyle } from '../hooks/useTheme.js';
 import { formatBytes, formatRelative } from '../lib/format.js';
 import { errorMessage, ipc, type ClientSettings } from '../lib/ipc.js';
 
@@ -39,7 +50,10 @@ export function SettingsTab() {
       setDraft(saved);
       setNotice('Saved.');
       setError(null);
-      void queryClient.invalidateQueries({ queryKey: ['settings'] });
+      // Written into the cache rather than only invalidated: the theme is
+      // applied from this query, so waiting for a refetch would leave the
+      // window on the old palette for a beat after the click.
+      queryClient.setQueryData(['settings'], saved);
       void queryClient.invalidateQueries({ queryKey: ['storage-locations'] });
     },
     onError: (caught) => setError(errorMessage(caught)),
@@ -60,6 +74,8 @@ export function SettingsTab() {
       {notice ? <p className="notice">{notice}</p> : null}
 
       <ProfileSection onError={setError} />
+
+      <AppearanceSection draft={draft} onUpdate={update} />
 
       <section className="card">
         <SectionHeader
@@ -145,6 +161,152 @@ export function SettingsTab() {
         </button>
       </section>
     </div>
+  );
+}
+
+/**
+ * How this machine looks, independent of the server.
+ *
+ * The operator picks the archive's own theme and most players never touch
+ * this; the point is that a player who does is not restyled the next time the
+ * operator changes their mind. "Follow the server" stays the default and is
+ * one click away again.
+ */
+function AppearanceSection({
+  draft,
+  onUpdate,
+}: {
+  draft: ClientSettings;
+  onUpdate: (patch: Partial<ClientSettings>) => void;
+}) {
+  const infoQuery = useQuery({
+    queryKey: ['public', 'info'],
+    queryFn: () => ipc.get<PublicServerInfo>('/public/info'),
+    staleTime: 5 * 60_000,
+  });
+
+  const serverPreset = infoQuery.data?.theme?.preset;
+  const following = !draft.themePreset;
+
+  return (
+    <section className="card">
+      <SectionHeader
+        title="Appearance"
+        subtitle="Themes apply to this machine only. Nothing here changes what anyone else sees."
+        action={
+          following ? undefined : (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => onUpdate({ themePreset: null, themeAccent: null })}
+            >
+              <RotateCcw size={14} aria-hidden />
+              Follow the server
+            </button>
+          )
+        }
+      />
+
+      <div className="theme-grid">
+        {THEME_PRESETS.map((preset) => {
+          const theme = THEMES[preset];
+          const active = following ? false : draft.themePreset === preset;
+          return (
+            <button
+              key={preset}
+              type="button"
+              className={clsx('theme-swatch', active && 'active')}
+              aria-pressed={active}
+              title={theme.description}
+              onClick={() => onUpdate({ themePreset: preset, themeAccent: null })}
+              style={themeStyle(theme.tokens)}
+            >
+              {/* The swatch is painted with the theme's own tokens, so it shows
+                  the surfaces and the accent together rather than a single hue
+                  that says nothing about how the app will look. */}
+              <span className="theme-preview" aria-hidden>
+                <span className="theme-preview-bar" />
+                <span className="theme-preview-body">
+                  <span className="theme-preview-card" />
+                  <span className="theme-preview-accent" />
+                </span>
+              </span>
+              <span className="theme-swatch-label">
+                {theme.label}
+                {active ? <Check size={13} aria-hidden /> : null}
+                {following && serverPreset === preset ? (
+                  <span className="muted small">server</span>
+                ) : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {following ? (
+        <p className="muted small">
+          Currently following the server{serverPreset ? ` (${THEMES[serverPreset]?.label})` : ''}.
+          Pick a theme above to override it here.
+        </p>
+      ) : (
+        <label className="field accent-field">
+          <span>Accent colour</span>
+          <span className="accent-row">
+            <input
+              type="color"
+              value={
+                draft.themeAccent ?? resolveTheme(draft.themePreset as ThemePreset, null).accent500
+              }
+              aria-label="Accent colour"
+              onChange={(event) => onUpdate({ themeAccent: event.target.value })}
+            />
+            {draft.themeAccent ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => onUpdate({ themeAccent: null })}
+              >
+                Use the theme&rsquo;s own
+              </button>
+            ) : null}
+          </span>
+          <span className="muted small">
+            The lighter and darker steps are derived from this, so hover and focus states keep
+            working.
+          </span>
+        </label>
+      )}
+
+      <div className="field">
+        <span>Library layout</span>
+        <div className="segmented" role="group" aria-label="Library layout">
+          {(
+            [
+              { id: 'grid', label: 'Grid', Icon: LayoutGrid },
+              { id: 'list', label: 'List', Icon: List },
+            ] as const
+          ).map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className={clsx('segment', draft.libraryView === option.id && 'active')}
+              aria-pressed={draft.libraryView === option.id}
+              onClick={() => onUpdate({ libraryView: option.id })}
+            >
+              <option.Icon size={14} aria-hidden />
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <Toggle
+        label="Use logo artwork for game titles"
+        hint="Show a game's wordmark in place of its name where the archive has one."
+        checked={draft.useLogoTitles}
+        onChange={(useLogoTitles) => onUpdate({ useLogoTitles })}
+      />
+    </section>
   );
 }
 

@@ -114,3 +114,104 @@ export function GameShelf({
     </div>
   );
 }
+
+/**
+ * One game as a row rather than a poster.
+ *
+ * A dense list is the right shape for a large library: it fits four or five
+ * times as many titles on screen, and it can carry the columns a poster has no
+ * room for — size, last played, whether it is installed — as text rather than
+ * as badges layered over artwork.
+ */
+export function GameRow({
+  game,
+  installed,
+  onOpen,
+  onPrimary,
+  primaryLabel,
+  busy,
+  onContextMenu,
+}: {
+  game: GameSummary;
+  installed?: boolean;
+  onOpen: (game: GameSummary) => void;
+  onPrimary?: (game: GameSummary) => void;
+  primaryLabel?: 'install' | 'play' | 'add';
+  busy?: boolean;
+  onContextMenu?: (event: MouseEvent, game: GameSummary) => void;
+}) {
+  const year = formatYear(game.releaseDate);
+
+  return (
+    <div
+      className={clsx('game-row', game.isMissing && 'missing')}
+      onContextMenu={onContextMenu ? (event) => onContextMenu(event, game) : undefined}
+    >
+      <button
+        type="button"
+        className="game-row-main"
+        onClick={() => onOpen(game)}
+        aria-label={`Open ${game.title}`}
+      >
+        {/* The square icon where a game has one; its cover, cropped, otherwise.
+            A row this short cannot show a portrait cover without either
+            squashing it or making every row three times as tall. */}
+        <Artwork
+          path={game.art.icon ?? game.art.cover}
+          alt=""
+          className="row-icon"
+          fallbackText={game.title}
+        />
+
+        <span className="game-row-title">{game.title}</span>
+
+        <span className="game-row-meta muted small">
+          {[year, formatBytes(game.sizeBytes)].filter(Boolean).join(' · ')}
+        </span>
+
+        <span className="game-row-meta muted small">
+          {game.playSeconds > 0 ? formatPlaytime(game.playSeconds) : '—'}
+        </span>
+
+        <span className="game-row-meta muted small">
+          {game.achievementCount > 0 ? (
+            <span className="row-chip">
+              <Trophy size={12} aria-hidden />
+              {game.unlockedCount}/{game.achievementCount}
+            </span>
+          ) : (
+            '—'
+          )}
+        </span>
+
+        <span className="game-row-meta">
+          {installed ? <span className="row-chip installed">Installed</span> : null}
+        </span>
+      </button>
+
+      {onPrimary && primaryLabel ? (
+        <button
+          type="button"
+          className={clsx('btn', primaryLabel === 'play' ? 'btn-primary' : 'btn-ghost')}
+          onClick={() => onPrimary(game)}
+          disabled={busy}
+        >
+          {primaryLabel === 'play' ? (
+            <>
+              <Play size={14} aria-hidden /> Play
+            </>
+          ) : primaryLabel === 'install' ? (
+            <>
+              <Download size={14} aria-hidden /> {installed ? 'Installed' : 'Install'}
+            </>
+          ) : (
+            <>
+              {game.inLibrary ? <Check size={14} aria-hidden /> : null}
+              {game.inLibrary ? 'In library' : 'Add'}
+            </>
+          )}
+        </button>
+      ) : null}
+    </div>
+  );
+}

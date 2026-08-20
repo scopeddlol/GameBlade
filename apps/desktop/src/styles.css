@@ -861,6 +861,11 @@ textarea:focus {
 
 .featured-hero {
   position: relative;
+  /* Explicit, because the hero is no longer a direct flex child of `.featured`
+     — it sits in the arrow wrapper, where a bare <button> would shrink to its
+     content, and every child of the hero is absolutely positioned. */
+  display: block;
+  width: 100%;
   border: 0;
   padding: 0;
   border-radius: 16px;
@@ -1006,7 +1011,14 @@ textarea:focus {
 
 .avatar-wrap {
   position: relative;
-  display: inline-block;
+  /* inline-flex rather than inline-block, with the line box collapsed. An
+     inline-block sits on the text baseline, so the wrapper carried a few
+     pixels of descender space below the image — enough that `align-items:
+     center` on the row centred the wrapper rather than the avatar, and the
+     name and its status bubble sat visibly low against it. */
+  display: inline-flex;
+  vertical-align: middle;
+  line-height: 0;
   flex-shrink: 0;
 }
 .avatar {
@@ -1021,14 +1033,55 @@ textarea:focus {
   color: #fff;
   font-weight: 600;
 }
+/*
+ * The presence badge sits on the avatar's rim, not at the corner of its box.
+ *
+ * A circle's edge at 4:30 is inset from the bounding-box corner by about 15%
+ * of its diameter, so a fixed `-1px` offset left the bubble floating clear of
+ * a 38px avatar while overlapping a 24px one. Sizing and placing it as a
+ * fraction of the avatar keeps it in the same place at every size.
+ *
+ * The ring is a shadow rather than a border so it does not eat into the dot,
+ * and it takes its colour from the surface the avatar is on: a hard-coded
+ * `--ink-900` read as a dark hole punched through every card, which are a step
+ * lighter.
+ */
 .presence-dot {
   position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 10px;
-  height: 10px;
+  right: 0;
+  bottom: 0;
+  width: 30%;
+  height: 30%;
+  min-width: 9px;
+  min-height: 9px;
   border-radius: 50%;
-  border: 2px solid var(--ink-900);
+  transform: translate(10%, 10%);
+  box-shadow: 0 0 0 2px var(--avatar-ring, var(--ink-850));
+}
+
+/* Surfaces that are not a card announce their own ring colour. */
+.friends-rail,
+.sidebar,
+.drawer {
+  --avatar-ring: var(--ink-950);
+}
+.friend-row:hover,
+.notif,
+.modal {
+  --avatar-ring: var(--ink-850);
+}
+
+/*
+ * The name and its status line sit beside a circle, so their combined block
+ * has to centre on it. Left to the default line height the two different font
+ * sizes stack to a box whose optical centre drifts a couple of pixels above
+ * the avatar's.
+ */
+.person-link > span:not(.avatar-wrap),
+.post-author > span:not(.avatar-wrap),
+.friend-row-text,
+.activity-text {
+  line-height: 1.35;
 }
 .presence-dot.online {
   background: var(--success);
@@ -2179,4 +2232,547 @@ textarea:focus {
   flex-shrink: 0;
   font-size: 12px;
   color: #6ee7b7;
+}
+
+/* ------------------------------------------------------------------ themes */
+
+/*
+ * Status colours cannot be derived from the surface ramp, and the dark ones
+ * are illegible on a light theme, so they are switched by the scheme the
+ * active theme reports rather than by the palette itself.
+ */
+:root[data-scheme='light'] {
+  --danger: #c02626;
+  --success: #10784f;
+  --warning: #94620a;
+}
+:root[data-scheme='light'] .badge.success {
+  background: rgba(16, 120, 79, 0.12);
+}
+:root[data-scheme='light'] .badge.warning {
+  background: rgba(148, 98, 10, 0.12);
+}
+:root[data-scheme='light'] .badge.danger {
+  background: rgba(192, 38, 38, 0.1);
+}
+:root[data-scheme='light'] .badge.info {
+  background: rgba(10, 118, 173, 0.12);
+}
+:root[data-scheme='light'] .segment.active {
+  /* White on a pale fill is invisible; the active pill takes text ink instead. */
+  color: var(--ink-100);
+}
+:root[data-scheme='light'] .featured-overlay {
+  /* The gradient exists so white text stays readable over artwork; it has to
+     stay dark for that to work, whatever the surrounding chrome does. */
+  background: linear-gradient(
+    100deg,
+    rgba(12, 14, 20, 0.88) 0%,
+    rgba(12, 14, 20, 0.66) 42%,
+    rgba(12, 14, 20, 0.08) 100%
+  );
+}
+:root[data-scheme='light'] .featured-text {
+  color: #fff;
+}
+:root[data-scheme='light'] .featured-blurb {
+  color: rgba(255, 255, 255, 0.82);
+}
+:root[data-scheme='light'] .detail-hero-text {
+  color: #fff;
+}
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+}
+.theme-swatch {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid var(--ink-700);
+  border-radius: 12px;
+  background: var(--ink-850);
+  cursor: pointer;
+  text-align: left;
+}
+.theme-swatch:hover {
+  border-color: var(--ink-500);
+}
+.theme-swatch.active {
+  border-color: var(--blade-500);
+  box-shadow: 0 0 0 1px var(--blade-500);
+}
+/* The preview is painted with the theme's own tokens rather than a single
+   swatch of its accent, so it shows how the surfaces stack as well. */
+.theme-preview {
+  display: flex;
+  height: 54px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--ink-900);
+  border: 1px solid var(--ink-700);
+}
+.theme-preview-bar {
+  width: 22%;
+  background: var(--ink-950);
+  border-right: 1px solid var(--ink-700);
+}
+.theme-preview-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 6px;
+  gap: 5px;
+}
+.theme-preview-card {
+  height: 14px;
+  border-radius: 4px;
+  background: var(--ink-800);
+}
+.theme-preview-accent {
+  height: 8px;
+  width: 60%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--blade-500), var(--violet));
+}
+.theme-swatch-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-100);
+}
+
+.accent-field .accent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.accent-field input[type='color'] {
+  width: 46px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid var(--ink-700);
+  border-radius: 8px;
+  background: var(--ink-850);
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------- library list */
+
+.game-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+/*
+ * The header and every row share one column template, and the row's clickable
+ * area is a nested grid over the first six of them. Two grids with different
+ * paddings will not line up — which is what put "Achievements" over the
+ * playtime column the first time round.
+ */
+.game-row-head,
+.game-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 130px 96px 96px 84px 116px;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 10px;
+}
+.game-row-head {
+  padding-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+}
+.game-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.game-row {
+  border-radius: 9px;
+  border: 1px solid transparent;
+}
+.game-row:hover {
+  background: var(--ink-850);
+  border-color: var(--ink-700);
+}
+.game-row.missing {
+  opacity: 0.5;
+}
+/* Spans the first six columns and repeats their widths, so the nested grid
+   resolves to exactly the same track sizes as the header's. */
+.game-row-main {
+  grid-column: 1 / 7;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 130px 96px 96px 84px;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+.row-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  object-fit: cover;
+}
+.game-row-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+.game-row-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--ink-800);
+  font-size: 11px;
+}
+.row-chip.installed {
+  background: rgba(52, 211, 153, 0.14);
+  color: var(--success);
+}
+@media (max-width: 900px) {
+  /* Playtime and achievements are the first columns worth losing: the title
+     and the action are what the row is for. */
+  .game-row-head,
+  .game-row {
+    grid-template-columns: 34px minmax(0, 1fr) 110px 116px;
+  }
+  .game-row-main {
+    grid-column: 1 / 4;
+    grid-template-columns: 34px minmax(0, 1fr) 110px;
+  }
+  .game-row-head > :nth-child(n + 4):nth-child(-n + 6),
+  .game-row-main > :nth-child(n + 4) {
+    display: none;
+  }
+}
+
+/* -------------------------------------------------------------- collections */
+
+.collection-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--blade-500);
+}
+.collection-dot.blade,
+.collection-swatch.blade {
+  background: var(--blade-500);
+}
+.collection-dot.violet,
+.collection-swatch.violet {
+  background: var(--violet);
+}
+.collection-dot.emerald,
+.collection-swatch.emerald {
+  background: #34d399;
+}
+.collection-dot.amber,
+.collection-swatch.amber {
+  background: #fbbf24;
+}
+.collection-dot.rose,
+.collection-swatch.rose {
+  background: #fb7185;
+}
+.collection-dot.cyan,
+.collection-swatch.cyan {
+  background: #22d3ee;
+}
+.collection-dot.slate,
+.collection-swatch.slate {
+  background: #94a3b8;
+}
+
+.collection-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.collection-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.collection-row {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border: 1px solid var(--ink-700);
+  border-radius: var(--radius);
+  background: var(--ink-850);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+}
+.collection-row:hover {
+  border-color: var(--ink-500);
+}
+.collection-row.active {
+  border-color: var(--blade-500);
+  color: var(--blade-400);
+}
+.collection-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-new {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ink-800);
+}
+.collection-colors {
+  display: flex;
+  gap: 7px;
+}
+.collection-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.collection-swatch.active {
+  border-color: var(--ink-100);
+}
+.collection-new-row {
+  display: flex;
+  gap: 8px;
+}
+
+/* ----------------------------------------------------------------- requests */
+
+.request-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.request-panel h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.request-panel-icon {
+  color: var(--blade-400);
+  display: inline-flex;
+}
+.request-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.request-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 11px;
+  background: var(--ink-850);
+  border: 1px solid var(--ink-700);
+  border-radius: var(--radius);
+}
+.request-vote {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  min-width: 42px;
+  padding: 4px 0;
+  border: 1px solid var(--ink-700);
+  border-radius: 8px;
+  background: var(--ink-800);
+  color: var(--ink-300);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.request-vote:hover {
+  border-color: var(--ink-500);
+  color: var(--ink-100);
+}
+.request-vote.active {
+  border-color: var(--blade-500);
+  color: var(--blade-400);
+  background: rgba(43, 183, 245, 0.1);
+}
+.request-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+.request-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  min-width: 0;
+}
+.request-form {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-bottom: 14px;
+}
+.request-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+  margin-top: 12px;
+}
+
+/* --------------------------------------------------------------- home extras */
+
+.home-greeting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+.home-greeting h1 {
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.home-greeting p {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+.home-you {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.you-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 74px;
+}
+.you-stat-value {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* A feed with no ceiling pushes everything under it off the screen; the
+   server caps how many rows arrive and this caps how tall they may get. */
+.activity-list.capped {
+  max-height: 268px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.featured-logo,
+.detail-logo-img {
+  /* A wordmark is transparent by design; the base artwork fill would put a
+     grey plate behind it. */
+  background: transparent;
+}
+.featured-logo {
+  display: block;
+  max-height: 84px;
+  max-width: min(340px, 100%);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  object-position: left bottom;
+  margin: 0;
+}
+.detail-logo {
+  margin: 0;
+}
+.detail-logo-img {
+  display: block;
+  max-height: 74px;
+  max-width: min(400px, 100%);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  object-position: left bottom;
+}
+
+.featured-frame {
+  position: relative;
+}
+.featured-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(10, 12, 16, 0.6);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.featured:hover .featured-arrow,
+.featured-arrow:focus-visible {
+  opacity: 1;
+}
+.featured-arrow.left {
+  left: 12px;
+}
+.featured-arrow.right {
+  right: 12px;
+}
+
+.icon-segment {
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
 }

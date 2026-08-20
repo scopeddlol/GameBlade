@@ -16,6 +16,7 @@ import {
   gameLaunchRules,
   games,
   gameSaveRules,
+  userAchievements,
   userGameState,
   userGameStats,
   userLibrary,
@@ -24,9 +25,10 @@ import {
 } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
-import { isoNow } from '../lib/time.js';
+import { isoNow, isoSecondsAgo } from '../lib/time.js';
 import type { AchievementService } from './achievements.js';
 import type { ActivityService } from './activity.js';
+import type { GameRequestService } from './gameRequests.js';
 import type { PresenceService } from './presence.js';
 import type { PlaytimeService } from './playtime.js';
 import type { ProfileService } from './profiles.js';
@@ -38,6 +40,15 @@ import type { ProfileService } from './profiles.js';
  * decorated page: "show me everything with no launch rule" has to mean every
  * such row in the catalog, not just the ones on the current page.
  */
+/**
+ * How many friend-activity rows the Home tab carries.
+ *
+ * Low deliberately: the panel sits beside three other sections and an
+ * unbounded feed pushes everything below it off the screen. The Social tab is
+ * where the full history is read.
+ */
+const HOME_ACTIVITY_LIMIT = 8;
+
 const GAP_CONDITIONS: Record<CatalogGap, SQL> = {
   'launch-rule': sql`NOT EXISTS (SELECT 1 FROM game_launch_rules r
         WHERE r.game_id = ${games.id} AND r.executable IS NOT NULL AND r.executable <> '')`,
@@ -77,6 +88,7 @@ export class CatalogService {
     private readonly profiles: ProfileService,
     private readonly presence: PresenceService,
     private readonly activity: ActivityService,
+    private readonly gameRequests: GameRequestService,
   ) {}
 
   /** Turns rows into summaries with everything the client renders. */
@@ -208,6 +220,18 @@ export class CatalogService {
       conditions.push(
         sql`NOT EXISTS (SELECT 1 FROM user_library ul
               WHERE ul.game_id = ${games.id} AND ul.user_id = ${userId})`,
+      );
+    }
+
+    // Groups are per-account, so the join checks ownership as well as
+    // membership: passing somebody else's group id matches nothing rather
+    // than listing their games.
+    if (query.collectionId) {
+      conditions.push(
+        sql`EXISTS (SELECT 1 FROM collection_games cg
+              JOIN collections c ON c.id = cg.collection_id
+              WHERE cg.game_id = ${games.id} AND cg.collection_id = ${query.collectionId}
+                AND c.user_id = ${userId})`,
       );
     }
 
@@ -372,9 +396,13 @@ export class CatalogService {
       ),
       recentlyAdded: this.decorate(recentRows, userId),
       friendsPlaying,
-      friendActivity: this.activity.list(userId, { scope: 'friends', limit: 15 }),
+      // Capped low on purpose: this is a glance on a crowded screen, and the
+      // Social tab is where the full history lives.
+      friendActivity: this.activity.list(userId, { scope: 'friends', limit: HOME_ACTIVITY_LIMIT }),
       recentAchievements: this.achievements.recentForUser(userId, 6),
+      requests: this.gameRequests.digest(userId),
       stats: this.serverStats(),
+      you: this.personalStats(userId),
     };
   }
 
@@ -502,10 +530,60 @@ export class CatalogService {
       .where(eq(users.isActive, true))
       .get();
 
+    const fresh = this.db
+      .select({
+        count: sql<number>`count(*)`,
+        bytes: sql<number>`coalesce(sum(${games.sizeBytes}), 0)`,
+      })
+      .from(games)
+      .where(and(isNull(games.missingAt), sql`${games.addedAt} >= ${isoSecondsAgo(7 * 86_400)}`))
+      .get();
+
+    const archive = this.db
+      .select({ bytes: sql<number>`coalesce(sum(${games.sizeBytes}), 0)` })
+      .from(games)
+      .where(isNull(games.missingAt))
+      .get();
+
     return {
       games: gameCount?.count ?? 0,
       users: userCount?.count ?? 0,
       totalPlayHours: this.playtime.totalHours(),
+      newThisWeek: Number(fresh?.count ?? 0),
+      archiveBytes: Number(archive?.bytes ?? 0),
+    };
+  }
+
+  /**
+   * The caller's own totals, so the Home tab can open with something true
+   * about them rather than only with server-wide numbers.
+   */
+  private personalStats(userId: string) {
+    const library = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(userLibrary)
+      .where(eq(userLibrary.userId, userId))
+      .get();
+
+    const played = this.db
+      .select({
+        seconds: sql<number>`coalesce(sum(${userGameStats.totalSeconds}), 0)`,
+      })
+      .from(userGameStats)
+      .where(eq(userGameStats.userId, userId))
+      .get();
+
+    const unlocked = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(userAchievements)
+      .where(eq(userAchievements.userId, userId))
+      .get();
+
+    return {
+      libraryCount: Number(library?.count ?? 0),
+      playSeconds: Number(played?.seconds ?? 0),
+      unlockedCount: unlocked?.count ?? 0,
+      friendCount: this.profiles.friendIds(userId).size,
     };
   }
 

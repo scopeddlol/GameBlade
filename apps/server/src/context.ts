@@ -10,9 +10,11 @@ import { BandwidthService } from './services/bandwidth.js';
 import { ActivityService } from './services/activity.js';
 import { CatalogService } from './services/catalog.js';
 import { ClientButtonService } from './services/clientButtons.js';
+import { CollectionService } from './services/collections.js';
 import { ChecksumService } from './services/checksums.js';
 import { DownloadTokenService } from './services/downloads.js';
 import { FriendService } from './services/friends.js';
+import { GameRequestService } from './services/gameRequests.js';
 import { InstallerService } from './services/installer.js';
 import { MediaStore } from './services/media.js';
 import { ImageCache } from './services/metadata/images.js';
@@ -39,6 +41,8 @@ export interface GamebladeContext {
   images: ImageCache;
   installer: InstallerService;
   clientButtons: ClientButtonService;
+  collections: CollectionService;
+  gameRequests: GameRequestService;
   apiKeys: ApiKeyService;
   bandwidth: BandwidthService;
   analytics: AnalyticsService;
@@ -82,6 +86,8 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
   const downloadTokens = new DownloadTokenService(db, config.sessionSecret);
   const installer = new InstallerService(db, config);
   const clientButtons = new ClientButtonService(db);
+  const collections = new CollectionService(db);
+  const gameRequests = new GameRequestService(db);
   const apiKeys = new ApiKeyService(db);
   const bandwidth = new BandwidthService(db, settings);
   const analytics = new AnalyticsService(db, bandwidth);
@@ -112,6 +118,7 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
     profiles,
     presence,
     activity,
+    gameRequests,
   );
 
   const cookiePath = config.basePath === '' ? '/' : config.basePath;
@@ -128,6 +135,8 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
     images,
     installer,
     clientButtons,
+    collections,
+    gameRequests,
     apiKeys,
     bandwidth,
     analytics,

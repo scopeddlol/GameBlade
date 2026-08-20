@@ -224,6 +224,25 @@ function Announcements() {
             onChange={(e) => setBody(e.target.value)}
           />
         </Field>
+        {/* What lands in the client, drawn the way the client draws it. An
+            announcement is written once and read by everybody, so seeing the
+            icon and the wrapping before sending is worth the few lines. */}
+        <div>
+          <p className="gb-label">Preview</p>
+          <div className="border-ink-700 bg-ink-900 flex items-start gap-2.5 rounded-lg border p-3">
+            <span className="bg-ink-800 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-base">
+              {icon.trim() || <Megaphone className="h-4 w-4" aria-hidden />}
+            </span>
+            <span className="min-w-0 text-sm">
+              <strong className="block truncate">{title.trim() || 'Your announcement'}</strong>
+              {body.trim() ? (
+                <span className="text-ink-400 block text-xs whitespace-pre-wrap">{body}</span>
+              ) : null}
+              <span className="text-ink-500 block text-xs">just now</span>
+            </span>
+          </div>
+        </div>
+
         <button type="submit" className="gb-btn-primary" disabled={sendMutation.isPending}>
           {sendMutation.isPending ? <Spinner className="h-4 w-4" /> : null}
           Send to everyone

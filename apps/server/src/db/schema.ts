@@ -714,6 +714,102 @@ export const notifications = sqliteTable(
   (t) => [index('notifications_user_idx').on(t.userId, t.readAt, t.createdAt)],
 );
 
+/**
+ * Games players have asked for.
+ *
+ * One row per wanted title with a status the operator moves through, rather
+ * than a table per outcome: a request that is denied and later reconsidered
+ * keeps its votes, its original wording and its history.
+ */
+export const gameRequests = sqliteTable(
+  'game_requests',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+    title: text('title').notNull(),
+    /** Lower-cased and squashed, so two people asking for the same game collide. */
+    titleKey: text('title_key').notNull(),
+    note: text('note'),
+    status: text('status', { enum: ['pending', 'coming-soon', 'added', 'denied'] })
+      .notNull()
+      .default('pending'),
+    adminNote: text('admin_note'),
+    /** The catalog entry that fulfilled this, once one exists. */
+    gameId: text('game_id').references(() => games.id, { onDelete: 'set null' }),
+    decidedBy: text('decided_by').references(() => users.id, { onDelete: 'set null' }),
+    decidedAt: text('decided_at'),
+    createdAt: text('created_at').notNull().default(now),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('game_requests_title_key_idx').on(t.titleKey),
+    index('game_requests_status_idx').on(t.status, t.createdAt),
+  ],
+);
+
+/**
+ * Who is backing a request. The requester gets one automatically, so "votes"
+ * is a single count rather than "1 + everyone who agreed".
+ */
+export const gameRequestVotes = sqliteTable(
+  'game_request_votes',
+  {
+    requestId: text('request_id')
+      .notNull()
+      .references(() => gameRequests.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('game_request_votes_idx').on(t.requestId, t.userId),
+    index('game_request_votes_user_idx').on(t.userId),
+  ],
+);
+
+/**
+ * A player's own grouping of games — "Co-op night", "Finished", "Install next".
+ *
+ * Per-account rather than server-wide: an operator already has genres and the
+ * featured rail to shape the catalog, and a shared group would need its own
+ * permissions model to answer "who may rename this".
+ */
+export const collections = sqliteTable(
+  'collections',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    color: text('color').notNull().default('blade'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    index('collections_user_idx').on(t.userId, t.sortOrder),
+    uniqueIndex('collections_user_name_idx').on(t.userId, t.name),
+  ],
+);
+
+export const collectionGames = sqliteTable(
+  'collection_games',
+  {
+    collectionId: text('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    addedAt: text('added_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('collection_games_idx').on(t.collectionId, t.gameId),
+    index('collection_games_game_idx').on(t.gameId),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
@@ -739,3 +835,5 @@ export type ApiKeyRow = typeof apiKeys.$inferSelect;
 export type ActivityEvent = typeof activityEvents.$inferSelect;
 export type NotificationRow = typeof notifications.$inferSelect;
 export type PlaySession = typeof playSessions.$inferSelect;
+export type GameRequestRow = typeof gameRequests.$inferSelect;
+export type CollectionRow = typeof collections.$inferSelect;

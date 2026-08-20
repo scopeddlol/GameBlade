@@ -7,6 +7,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, ExternalLink, Plus, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
+import { Icon, IconPicker } from '../../components/icons.js';
 import { Badge, EmptyState, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 
@@ -141,20 +142,14 @@ export function AdminClientPage() {
             />
           </Field>
 
-          <Field label="Icon" htmlFor="btnIcon">
-            <select
-              id="btnIcon"
-              className="gb-input"
-              value={form.icon}
-              onChange={(e) => setForm({ ...form, icon: e.target.value as typeof form.icon })}
-            >
-              {CLIENT_BUTTON_ICONS.map((icon) => (
-                <option key={icon} value={icon}>
-                  {icon}
-                </option>
-              ))}
-            </select>
-          </Field>
+          {/* Picked by looking at it: a dropdown of names asks an operator to
+              know what "life-buoy" looks like before they can choose it. */}
+          <IconPicker
+            id="btnIcon"
+            value={form.icon}
+            options={CLIENT_BUTTON_ICONS}
+            onChange={(icon) => setForm({ ...form, icon: icon as typeof form.icon })}
+          />
         </div>
 
         <Field label="Link" htmlFor="btnUrl" hint="Must start with http:// or https://">
@@ -249,8 +244,18 @@ export function AdminClientPage() {
               </h2>
               <div className="divide-ink-700/70 gb-card divide-y">
                 {group.map((button, index) => (
-                  <div key={button.id} className="flex items-center gap-3 px-4 py-3">
-                    <div className="min-w-0 flex-1">
+                  <div
+                    key={button.id}
+                    // Wraps rather than overflowing: with an icon preview, a
+                    // label and five controls this row does not fit a phone.
+                    className="flex flex-wrap items-center gap-3 px-4 py-3"
+                  >
+                    {/* The same mark the client will draw, so the list reads as
+                        a preview of the sidebar rather than as a table of URLs. */}
+                    <span className="border-ink-700 bg-ink-800 text-ink-200 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border">
+                      <Icon name={button.icon} />
+                    </span>
+                    <div className="min-w-[8rem] flex-1">
                       <p className="flex items-center gap-2 text-sm font-medium">
                         {button.label}
                         {button.active ? null : <Badge tone="neutral">Hidden</Badge>}

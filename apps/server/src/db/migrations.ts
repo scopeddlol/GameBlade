@@ -488,4 +488,60 @@ export const migrations: Migration[] = [
       CREATE INDEX download_events_started_idx ON download_events(started_at);
     `,
   },
+  {
+    id: '0008_requests_and_collections',
+    sql: /* sql */ `
+      -- Games players have asked for. One row per wanted title with a status
+      -- the operator moves through: a request that is denied and later
+      -- reconsidered keeps its votes and its original wording.
+      CREATE TABLE game_requests (
+        id TEXT PRIMARY KEY,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        title TEXT NOT NULL,
+        title_key TEXT NOT NULL,
+        note TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        admin_note TEXT,
+        game_id TEXT REFERENCES games(id) ON DELETE SET NULL,
+        decided_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        decided_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX game_requests_title_key_idx ON game_requests(title_key);
+      CREATE INDEX game_requests_status_idx ON game_requests(status, created_at);
+
+      -- The requester is given a vote on creation, so the count is a single
+      -- number rather than "one, plus everyone who agreed".
+      CREATE TABLE game_request_votes (
+        request_id TEXT NOT NULL REFERENCES game_requests(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX game_request_votes_idx ON game_request_votes(request_id, user_id);
+      CREATE INDEX game_request_votes_user_idx ON game_request_votes(user_id);
+
+      -- Per-account groupings of games. Private to the account that made them:
+      -- a shared group would need its own permissions model to answer "who may
+      -- rename this", and the operator already has genres and the featured rail.
+      CREATE TABLE collections (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL DEFAULT 'blade',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX collections_user_idx ON collections(user_id, sort_order);
+      CREATE UNIQUE INDEX collections_user_name_idx ON collections(user_id, name);
+
+      CREATE TABLE collection_games (
+        collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        added_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX collection_games_idx ON collection_games(collection_id, game_id);
+      CREATE INDEX collection_games_game_idx ON collection_games(game_id);
+    `,
+  },
 ];

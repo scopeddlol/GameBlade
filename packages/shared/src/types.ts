@@ -7,8 +7,10 @@ import type {
   ART_KIND,
   CATALOG_GAP,
   CLIENT_BUTTON_PLACEMENT,
+  COLLECTION_COLORS,
   FRIENDSHIP_STATUS,
   GAME_KIND,
+  GAME_REQUEST_STATUS,
   MATCH_STATUS,
   MEDIA_KIND,
   NOTIFICATION_KIND,
@@ -603,8 +605,25 @@ export interface HomeFeed {
   friendsPlaying: Array<{ profile: ProfileSummary; game: GameSummary }>;
   friendActivity: ActivityEntry[];
   recentAchievements: AchievementProgress[];
+  /** What the operator has promised, and what players are asking for. */
+  requests: GameRequestDigest;
   /** Server-wide counts shown as a small stat strip. */
-  stats: { games: number; users: number; totalPlayHours: number };
+  stats: {
+    games: number;
+    users: number;
+    totalPlayHours: number;
+    /** Games added in the last seven days, so "recently added" has a number. */
+    newThisWeek: number;
+    /** Bytes in the archive, for the "how big is this place" line. */
+    archiveBytes: number;
+  };
+  /** The caller's own totals, so the greeting can say something true. */
+  you: {
+    libraryCount: number;
+    playSeconds: number;
+    unlockedCount: number;
+    friendCount: number;
+  };
 }
 
 export interface StoreFacets {
@@ -659,4 +678,73 @@ export interface ApiErrorBody {
     message: string;
     details?: unknown;
   };
+}
+
+/* ------------------------------------------------------------------- requests */
+
+export type GameRequestStatus = (typeof GAME_REQUEST_STATUS)[number];
+
+/**
+ * A game somebody wants added to the archive.
+ *
+ * The requester is kept for the admin view but exposed to other players only
+ * as a count — a request list is a wish list, not a public record of who
+ * wants what.
+ */
+export interface GameRequestInfo {
+  id: string;
+  title: string;
+  note: string | null;
+  status: GameRequestStatus;
+  /** How many accounts have backed it, including the original requester. */
+  votes: number;
+  /** True when the caller is one of them. */
+  hasVoted: boolean;
+  createdAt: string;
+  updatedAt: string;
+  /** The operator's reply, shown to everyone once a decision is made. */
+  adminNote: string | null;
+  /** Only populated for administrators. */
+  requestedBy: { id: string; username: string } | null;
+  decidedAt: string | null;
+  /** Set once a request is fulfilled and matched to a catalog entry. */
+  gameId: string | null;
+}
+
+/**
+ * What came back from filing a request.
+ *
+ * `created` distinguishes a new row from a vote added to somebody else's —
+ * the same call does both, and only the client can say which one happened in
+ * words the person will understand.
+ */
+export interface CreatedGameRequest extends GameRequestInfo {
+  created: boolean;
+}
+
+/** Counts per status, for the admin triage chips. */
+export type GameRequestCounts = Record<GameRequestStatus, number>;
+
+/** The digest the desktop client shows: what is coming, and what is wanted. */
+export interface GameRequestDigest {
+  comingSoon: GameRequestInfo[];
+  mostRequested: GameRequestInfo[];
+  recentlyAdded: GameRequestInfo[];
+  /** The caller's own open requests, whatever their status. */
+  yours: GameRequestInfo[];
+  counts: GameRequestCounts;
+}
+
+/* ---------------------------------------------------------------- collections */
+
+export type CollectionColor = (typeof COLLECTION_COLORS)[number];
+
+/** A player's own grouping of games. Private to that account. */
+export interface CollectionInfo {
+  id: string;
+  name: string;
+  color: CollectionColor;
+  sortOrder: number;
+  gameCount: number;
+  createdAt: string;
 }

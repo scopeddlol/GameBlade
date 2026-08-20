@@ -5,7 +5,6 @@ import type {
   SaveRule,
 } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { openPath, openUrl } from '@tauri-apps/plugin-opener';
 import clsx from 'clsx';
 import {
   CloudDownload,
@@ -30,6 +29,7 @@ import {
   type SaveRulePayload,
   type StorageLocation,
 } from '../lib/ipc.js';
+import { useAddToLibrary } from '../hooks/useLibrary.js';
 import { Artwork, Badge, ErrorNote, Loading, Modal, ProgressBar, Spinner } from './ui.js';
 
 interface Rules {
@@ -82,7 +82,15 @@ export function GameDetailPanel({
     queryFn: () => ipc.get<Rules>(`/games/${gameId}/rules`),
   });
 
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => ipc.getSettings(),
+  });
+
   const game = gameQuery.data;
+  // On by default, and off for anyone who would rather read the title: a
+  // wordmark is artwork, and some of them are hard to read at this size.
+  const useLogo = Boolean(game?.art.logo) && (settingsQuery.data?.useLogoTitles ?? true);
   const saveRule = rulesQuery.data?.save[0];
   const launchRule = rulesQuery.data?.launch[0];
 
@@ -139,14 +147,9 @@ export function GameDetailPanel({
     onError: (caught) => setError(errorMessage(caught)),
   });
 
-  const addMutation = useMutation({
-    mutationFn: () => ipc.post(`/games/${gameId}/library`),
-    onSuccess: () => {
-      setError(null);
-      refresh();
-    },
-    onError: (caught) => setError(errorMessage(caught)),
-  });
+  // Shared with the grid's own button so both flip instantly and roll back
+  // the same way.
+  const addMutation = useAddToLibrary();
 
   const uninstallMutation = useMutation({
     mutationFn: () => ipc.uninstall(gameId),
@@ -172,7 +175,17 @@ export function GameDetailPanel({
               <Artwork path={game.art.hero ?? game.art.cover} alt="" className="hero-img" />
               <div className="detail-hero-overlay" />
               <div className="detail-hero-text">
-                <h1>{game.title}</h1>
+                {/* A wordmark where the game has one, and the plain title
+                    otherwise. The logo is artwork drawn for exactly this job,
+                    so it beats setting the name in the app's own typeface —
+                    but it stays an <h1> for anything reading the page aloud. */}
+                {useLogo ? (
+                  <h1 className="detail-logo">
+                    <Artwork path={game.art.logo} alt={game.title} className="detail-logo-img" />
+                  </h1>
+                ) : (
+                  <h1>{game.title}</h1>
+                )}
                 <p className="muted">
                   {[
                     game.developers[0],
@@ -228,7 +241,12 @@ export function GameDetailPanel({
                   <button
                     type="button"
                     className="btn btn-ghost"
-                    onClick={() => addMutation.mutate()}
+                    onClick={() => {
+                      setError(null);
+                      addMutation.mutate(gameId, {
+                        onError: (caught) => setError(errorMessage(caught)),
+                      });
+                    }}
                     disabled={addMutation.isPending}
                   >
                     Add to library
@@ -240,9 +258,15 @@ export function GameDetailPanel({
                     type="button"
                     className="btn btn-ghost"
                     onClick={() => {
-                      void openPath(installed.installPath).catch((caught) =>
-                        setError(errorMessage(caught)),
-                      );
+                      // Through the Rust command rather than the opener
+                      // plugin's JS binding: `open_path` is not in the app's
+                      // capability set, so calling it from here failed with
+                      // "not allowed by ACL". The command already exists, runs
+                      // with the app's own permissions, and checks the folder
+                      // is still there before asking the OS to show it.
+                      void ipc
+                        .openInstallFolder(game.id)
+                        .catch((caught) => setError(errorMessage(caught)));
                     }}
                   >
                     <FolderOpen size={16} aria-hidden />
@@ -447,7 +471,7 @@ function TrailerList({ videoIds }: { videoIds: string[] }) {
             key={id}
             type="button"
             className="trailer-card"
-            onClick={() => void openUrl(`https://www.youtube.com/watch?v=${id}`)}
+            onClick={() => void ipc.openExternal(`https://www.youtube.com/watch?v=${id}`)}
             title="Watch on YouTube"
           >
             <img src={`https://img.youtube.com/vi/${id}/hqdefault.jpg`} alt="" loading="lazy" />
