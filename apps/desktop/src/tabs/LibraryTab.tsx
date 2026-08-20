@@ -1,13 +1,14 @@
 import type { GameSummary, Paginated } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { FolderSearch, LayoutGrid, List, Search } from 'lucide-react';
+import { FolderSearch, LayoutGrid, List, Rows3, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { CollectionPicker } from '../components/CollectionPicker.js';
 import { ContextMenu, useContextMenu } from '../components/ContextMenu.js';
-import { GameCard, GameRow } from '../components/GameCard.js';
+import { GameCard, GameDetailedRow, GameRow } from '../components/GameCard.js';
 import { useGameMenuItems } from '../components/GameContextMenu.js';
 import { ImportGames } from '../components/ImportGames.js';
+import { InstallDialog, useInstallDialog } from '../components/InstallDialog.js';
 import { Empty, ErrorNote, Loading } from '../components/ui.js';
 import { useCollections } from '../hooks/useCollections.js';
 import {
@@ -106,20 +107,15 @@ export function LibraryTab({
     onError: (caught) => setError(errorMessage(caught)),
   });
 
-  const installMutation = useMutation({
-    mutationFn: (gameId: string) => ipc.startDownload(gameId),
-    onSuccess: () => {
-      setError(null);
-      void queryClient.invalidateQueries({ queryKey: ['downloads'] });
-    },
-    onError: (caught) => setError(errorMessage(caught)),
-  });
+  // Where a game goes is asked, not assumed; the dialog owns the download.
+  const installDialog = useInstallDialog();
 
   const menu = useContextMenu<GameSummary>();
   const buildMenuItems = useGameMenuItems({
     onOpen: onOpenGame,
     onError: setError,
     onManageGroups: setGrouping,
+    onInstall: installDialog.request,
   });
 
   const installedIds = new Set(installed.map((game) => game.gameId));
@@ -171,13 +167,16 @@ export function LibraryTab({
           ))}
         </select>
 
-        {/* Two layouts for the same list: posters when browsing by artwork, a
-            dense list when hunting for a title in a large library. */}
+        {/* Three shapes for the same list, chosen here rather than in Settings
+            because which one is right changes with what you are doing: posters
+            to browse by artwork, a dense list to find a known title, panels to
+            decide what to play. */}
         <div className="segmented" role="group" aria-label="Layout">
           {(
             [
               { id: 'grid', label: 'Grid', Icon: LayoutGrid },
               { id: 'list', label: 'List', Icon: List },
+              { id: 'detailed', label: 'Detailed', Icon: Rows3 },
             ] as const
           ).map((option) => (
             <button
@@ -274,7 +273,27 @@ export function LibraryTab({
                 primaryLabel={isInstalled ? 'play' : 'install'}
                 busy={running?.gameId === game.id}
                 onPrimary={() =>
-                  isInstalled ? launchMutation.mutate(game.id) : installMutation.mutate(game.id)
+                  isInstalled ? launchMutation.mutate(game.id) : installDialog.request(game)
+                }
+                onContextMenu={menu.open}
+              />
+            );
+          })}
+        </div>
+      ) : view === 'detailed' ? (
+        <div className="game-detailed-list">
+          {items.map((game) => {
+            const isInstalled = installedIds.has(game.id);
+            return (
+              <GameDetailedRow
+                key={game.id}
+                game={game}
+                installed={isInstalled}
+                onOpen={onOpenGame}
+                primaryLabel={isInstalled ? 'play' : 'install'}
+                busy={running?.gameId === game.id}
+                onPrimary={() =>
+                  isInstalled ? launchMutation.mutate(game.id) : installDialog.request(game)
                 }
                 onContextMenu={menu.open}
               />
@@ -294,7 +313,7 @@ export function LibraryTab({
                 primaryLabel={isInstalled ? 'play' : 'install'}
                 busy={running?.gameId === game.id}
                 onPrimary={() =>
-                  isInstalled ? launchMutation.mutate(game.id) : installMutation.mutate(game.id)
+                  isInstalled ? launchMutation.mutate(game.id) : installDialog.request(game)
                 }
                 onContextMenu={menu.open}
               />
@@ -302,6 +321,10 @@ export function LibraryTab({
           })}
         </div>
       )}
+
+      {installDialog.game ? (
+        <InstallDialog game={installDialog.game} onClose={installDialog.close} />
+      ) : null}
 
       {importing ? <ImportGames installed={installed} onClose={() => setImporting(false)} /> : null}
 

@@ -19,6 +19,7 @@ import {
   Megaphone,
   MessageSquare,
   Settings,
+  Sparkles,
   Store,
   Swords,
   Trophy,
@@ -29,7 +30,7 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useClientButtons } from './components/GameContextMenu.js';
 import { DownloadQueue } from './components/DownloadQueue.js';
 import { FriendsRail } from './components/FriendsRail.js';
@@ -49,6 +50,9 @@ import { LibraryTab } from './tabs/LibraryTab.js';
 import { SettingsTab } from './tabs/SettingsTab.js';
 import { SocialTab } from './tabs/SocialTab.js';
 import { StoreTab } from './tabs/StoreTab.js';
+import { UpdateBanner } from './components/UpdateBanner.js';
+import { NewsTab } from './tabs/NewsTab.js';
+import { RequestsTab } from './tabs/RequestsTab.js';
 
 /** Falls back to this whenever a notification has no custom icon of its own. */
 const NOTIFICATION_ICONS: Record<NotificationKind, typeof Bell> = {
@@ -64,6 +68,8 @@ const TABS = [
   { id: 'home', label: 'Home', icon: Home },
   { id: 'library', label: 'Library', icon: LibraryBig },
   { id: 'store', label: 'Store', icon: Store },
+  { id: 'requests', label: 'Requests', icon: Sparkles },
+  { id: 'news', label: 'News', icon: Megaphone },
   { id: 'social', label: 'Social', icon: Users },
   { id: 'settings', label: 'Settings', icon: Settings },
 ] as const;
@@ -219,8 +225,10 @@ function Shell() {
 
       <div className="main">
         <TitleBar>
-          <TopBar running={running} />
+          <TopBar running={running} tab={tab} />
         </TitleBar>
+
+        <UpdateBanner />
 
         <div className="scroll">
           {tab === 'home' ? <HomeTab onOpenGame={openGame} onOpenGameId={setOpenGameId} /> : null}
@@ -228,6 +236,8 @@ function Shell() {
             <LibraryTab onOpenGame={openGame} installed={installed} running={running} />
           ) : null}
           {tab === 'store' ? <StoreTab onOpenGame={openGame} onOpenGameId={setOpenGameId} /> : null}
+          {tab === 'requests' ? <RequestsTab onOpenGameId={setOpenGameId} /> : null}
+          {tab === 'news' ? <NewsTab onOpenProfile={setProfileId} /> : null}
           {tab === 'social' ? <SocialTab onOpenProfile={setProfileId} /> : null}
           {tab === 'settings' ? <SettingsTab /> : null}
         </div>
@@ -357,9 +367,10 @@ function CustomButtons({ placement }: { placement: 'sidebar' | 'home' }) {
   );
 }
 
-function TopBar({ running }: { running: RunningGame | null }) {
+function TopBar({ running, tab }: { running: RunningGame | null; tab: TabId }) {
   const { connected } = useRealtime();
   const queryClient = useQueryClient();
+  const wrapRef = useRef<HTMLDivElement>(null);
 
   const notificationsQuery = useQuery({
     queryKey: ['notifications'],
@@ -380,6 +391,30 @@ function TopBar({ running }: { running: RunningGame | null }) {
   const unread = notificationsQuery.data?.unreadCount ?? 0;
   const items = notificationsQuery.data?.items ?? [];
 
+  // Changing tab is leaving what the panel was opened over, so it goes with it
+  // rather than hanging above the new page until it is clicked away.
+  useEffect(() => setOpen(false), [tab]);
+
+  // The two ways any popover is expected to close. Bound only while it is
+  // open, so the app is not listening on the document for nothing.
+  useEffect(() => {
+    if (!open) return;
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [open]);
+
   return (
     <div className="topbar" data-tauri-drag-region>
       {running ? (
@@ -398,7 +433,7 @@ function TopBar({ running }: { running: RunningGame | null }) {
         {connected ? <Wifi size={14} aria-hidden /> : <WifiOff size={14} aria-hidden />}
       </span>
 
-      <div className="notif-wrap">
+      <div className="notif-wrap" ref={wrapRef}>
         <button
           type="button"
           className="icon-btn"

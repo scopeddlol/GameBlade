@@ -529,7 +529,7 @@ export const posts = sqliteTable(
     authorId: text('author_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    kind: text('kind', { enum: ['text', 'image', 'clip'] })
+    kind: text('kind', { enum: ['text', 'image', 'clip', 'announcement'] })
       .notNull()
       .default('text'),
     title: text('title'),

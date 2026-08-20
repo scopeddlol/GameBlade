@@ -17,9 +17,16 @@ import { Artwork, Avatar, Empty, Loading, SectionHeader } from '../components/ui
 import { useSession } from '../hooks/useSession.js';
 import { formatBytes, formatPlaytime, formatRelative } from '../lib/format.js';
 import { ipc } from '../lib/ipc.js';
+import { useArtwork } from '../hooks/useArtwork.js';
 
-/** How long the featured hero rests on one entry before advancing. */
-const CAROUSEL_MS = 7000;
+/**
+ * How long the featured hero rests on one entry before advancing.
+ *
+ * Seven seconds read as broken — long enough that the first slide looked like
+ * the only slide. Four and a half is enough to take in a title and a line of
+ * copy without the shelf feeling stalled, and the pointer still pauses it.
+ */
+const CAROUSEL_MS = 4500;
 
 /**
  * The landing screen. Everything here comes from a single `/home` request —
@@ -322,6 +329,18 @@ function FeaturedCarousel({
     return () => clearInterval(timer);
   }, [count, paused]);
 
+  // The next slide's artwork is fetched while the current one is still up, so
+  // advancing swaps a decoded image instead of showing the placeholder for as
+  // long as the download takes. Chasing the same URL the <img> will ask for
+  // means the browser serves the second request from cache.
+  const upcoming = entries[(index + 1) % Math.max(count, 1)];
+  const nextUrl = useArtwork(upcoming ? (upcoming.heroUrl ?? upcoming.game.art.cover) : null);
+  useEffect(() => {
+    if (!nextUrl) return;
+    const image = new Image();
+    image.src = nextUrl;
+  }, [nextUrl]);
+
   const current = entries[Math.min(index, count - 1)];
   if (!current) return null;
 
@@ -344,6 +363,7 @@ function FeaturedCarousel({
           aria-label={`Open ${current.game.title}`}
         >
           <Artwork
+            key={current.game.id}
             path={current.heroUrl ?? current.game.art.cover}
             alt=""
             className="featured-img"

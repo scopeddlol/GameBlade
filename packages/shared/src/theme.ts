@@ -30,6 +30,14 @@ export interface ThemeTokens {
   ink700: string;
   ink600: string;
   ink500: string;
+  /**
+   * Muted text, not a stroke.
+   *
+   * Every value on this row is chosen to clear 4.5:1 against the *lightest*
+   * surface in its own theme — cards sit a step above the page, so text that
+   * passes on the page can still fail on a card. The ramp used to be picked by
+   * eye and every theme failed, between 2.93:1 and 4.55:1.
+   */
   ink400: string;
   ink300: string;
   ink200: string;
@@ -64,7 +72,7 @@ export const THEMES: Record<ThemePreset, ThemeDefinition> = {
       ink700: '#1f2430',
       ink600: '#2b3242',
       ink500: '#3d465a',
-      ink400: '#5b6478',
+      ink400: '#7b8497',
       ink300: '#8a93a6',
       ink200: '#b8bfcd',
       ink100: '#e2e6ee',
@@ -88,7 +96,7 @@ export const THEMES: Record<ThemePreset, ThemeDefinition> = {
       ink700: '#28343f',
       ink600: '#35434f',
       ink500: '#475766',
-      ink400: '#657585',
+      ink400: '#81909f',
       ink300: '#93a1af',
       ink200: '#c0cad3',
       ink100: '#e8eef3',
@@ -112,7 +120,7 @@ export const THEMES: Record<ThemePreset, ThemeDefinition> = {
       ink700: '#282828',
       ink600: '#363636',
       ink500: '#4a4a4a',
-      ink400: '#6b6b6b',
+      ink400: '#868686',
       ink300: '#9a9a9a',
       ink200: '#c4c4c4',
       ink100: '#ededed',
@@ -136,7 +144,7 @@ export const THEMES: Record<ThemePreset, ThemeDefinition> = {
       ink700: '#2b2145',
       ink600: '#3b2f5c',
       ink500: '#514279',
-      ink400: '#71619b',
+      ink400: '#8b7db1',
       ink300: '#9c8fc0',
       ink200: '#c6bde0',
       ink100: '#ece7f7',
@@ -160,7 +168,7 @@ export const THEMES: Record<ThemePreset, ThemeDefinition> = {
       ink700: '#173832',
       ink600: '#204a43',
       ink500: '#2e6259',
-      ink400: '#4a8477',
+      ink400: '#62988b',
       ink300: '#7fb0a3',
       ink200: '#b4d6cc',
       ink100: '#e3f2ed',
@@ -184,7 +192,7 @@ export const THEMES: Record<ThemePreset, ThemeDefinition> = {
       ink700: '#33261e',
       ink600: '#45342a',
       ink500: '#5d483b',
-      ink400: '#816558',
+      ink400: '#9b8174',
       ink300: '#ab9285',
       ink200: '#d3c1b7',
       ink100: '#f2e9e3',
@@ -208,7 +216,7 @@ export const THEMES: Record<ThemePreset, ThemeDefinition> = {
       ink700: '#222d1c',
       ink600: '#2f3d27',
       ink500: '#415235',
-      ink400: '#5e714f',
+      ink400: '#7a8d6b',
       ink300: '#8ea07e',
       ink200: '#bfcbb2',
       ink100: '#e9efe2',
@@ -232,7 +240,7 @@ export const THEMES: Record<ThemePreset, ThemeDefinition> = {
       ink700: '#182a45',
       ink600: '#22385a',
       ink500: '#2f4c78',
-      ink400: '#4a6b9d',
+      ink400: '#6a88b4',
       ink300: '#7f9bc4',
       ink200: '#b6c9e2',
       ink100: '#e5edf7',
@@ -261,7 +269,7 @@ export const THEMES: Record<ThemePreset, ThemeDefinition> = {
       ink700: '#dde2ea',
       ink600: '#c5ccd8',
       ink500: '#9aa4b4',
-      ink400: '#6b7688',
+      ink400: '#626c7d',
       ink300: '#4d5666',
       ink200: '#2c3340',
       ink100: '#10141b',
@@ -287,7 +295,7 @@ export const THEMES: Record<ThemePreset, ThemeDefinition> = {
       ink700: '#e2d8c7',
       ink600: '#cbbea9',
       ink500: '#a2947e',
-      ink400: '#736753',
+      ink400: '#726653',
       ink300: '#554b3b',
       ink200: '#332c22',
       ink100: '#171310',

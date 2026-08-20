@@ -400,7 +400,7 @@ export function PostCard({
         </button>
       </footer>
 
-      {showComments ? <Comments postId={post.id} onError={onError} /> : null}
+      {showComments ? <Comments postId={post.id} onError={onError} onChanged={onChanged} /> : null}
 
       {editing ? (
         <EditPostDialog
@@ -501,7 +501,22 @@ function Attachment({ media }: { media: MediaInfo }) {
   );
 }
 
-function Comments({ postId, onError }: { postId: string; onError: (message: string) => void }) {
+function Comments({
+  postId,
+  onError,
+  onChanged,
+}: {
+  postId: string;
+  onError: (message: string) => void;
+  /**
+   * Refreshes whichever list this card is in.
+   *
+   * The card is shown from the social feed, a profile and the news page, each
+   * keyed differently — invalidating a hard-coded ['feed'] left the comment
+   * count on the other two stale until something else refetched them.
+   */
+  onChanged: () => void;
+}) {
   const queryClient = useQueryClient();
   const [body, setBody] = useState('');
 
@@ -515,7 +530,7 @@ function Comments({ postId, onError }: { postId: string; onError: (message: stri
     onSuccess: () => {
       setBody('');
       void queryClient.invalidateQueries({ queryKey: ['comments', postId] });
-      void queryClient.invalidateQueries({ queryKey: ['feed'] });
+      onChanged();
     },
     onError: (caught) => onError(errorMessage(caught)),
   });

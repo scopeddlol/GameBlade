@@ -15,6 +15,9 @@ import { IgdbClient, igdbImageUrl, normalizeIgdbGame } from './igdb.js';
 import { ImageCache } from './images.js';
 import { SteamGridDbClient } from './steamgriddb.js';
 
+/** How long the trending list is held before IGDB is asked again. */
+const TRENDING_TTL_MS = 60 * 60_000;
+
 export interface Logger {
   info: (obj: unknown, msg?: string) => void;
   warn: (obj: unknown, msg?: string) => void;
@@ -62,6 +65,12 @@ interface ProviderHealth {
 
 export class MetadataService {
   private igdb: { client: IgdbClient; key: string } | null = null;
+
+  /** The trending list is identical for every caller, so it is held once. */
+  private trendingCache: {
+    at: number;
+    items: { title: string; coverUrl: string | null; releaseYear: number | null }[];
+  } | null = null;
   private sgdb: { client: SteamGridDbClient; key: string } | null = null;
   private health: Record<'igdb' | 'steamgriddb', ProviderHealth> = {
     igdb: { reachable: null, lastError: null, lastCheckedAt: null },
@@ -85,7 +94,49 @@ export class MetadataService {
    * security policy and the project's no-third-party-requests stance rule out.
    */
   private proxied(url: string): string {
-    return `${this.basePath}/api/admin/artwork/thumbnail?url=${encodeURIComponent(url)}`;
+    return `${this.basePath}/api/artwork/thumbnail?url=${encodeURIComponent(url)}`;
+  }
+
+  /**
+   * Titles that are being played right now, as request suggestions.
+   *
+   * Cached for an hour: it is the same list for every player on the server,
+   * it moves slowly, and IGDB's rate limit is four requests a second shared
+   * across everything the server does — a request page that asked on every
+   * open would spend that budget on identical answers.
+   *
+   * Returns an empty list rather than throwing when IGDB is not configured or
+   * is unreachable: suggestions are a convenience on a page that works without
+   * them, so a provider outage must not take the page down with it.
+   */
+  async trending(
+    limit = 12,
+  ): Promise<{ title: string; coverUrl: string | null; releaseYear: number | null }[]> {
+    const now = Date.now();
+    if (this.trendingCache && now - this.trendingCache.at < TRENDING_TTL_MS) {
+      return this.trendingCache.items.slice(0, limit);
+    }
+
+    const igdb = this.getIgdb();
+    if (!igdb) return [];
+
+    try {
+      const games = await igdb.popular(24);
+      const items = games.map((game) => ({
+        title: game.name,
+        coverUrl: game.cover?.image_id
+          ? this.proxied(igdbImageUrl(game.cover.image_id, 'cover_big'))
+          : null,
+        releaseYear: game.first_release_date
+          ? new Date(game.first_release_date * 1000).getUTCFullYear()
+          : null,
+      }));
+      this.trendingCache = { at: now, items };
+      return items.slice(0, limit);
+    } catch {
+      // Hold the stale list rather than nothing if we ever had one.
+      return this.trendingCache?.items.slice(0, limit) ?? [];
+    }
   }
 
   /** Clients are rebuilt whenever the stored credentials change. */

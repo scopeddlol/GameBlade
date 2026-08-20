@@ -200,6 +200,39 @@ export class IgdbClient {
   }
 
   /**
+   * What people are playing right now, for the request page's suggestions.
+   *
+   * IGDB keeps popularity as a separate resource keyed by game id rather than
+   * a field on the game, so this is two round trips: the ranking, then the
+   * names and covers for the ids it returned. Ranked by Steam's 24-hour peak
+   * player count, which is the one primitive that reflects what is actually
+   * being played rather than what is being clicked on IGDB itself.
+   */
+  async popular(limit = 12): Promise<IgdbGame[]> {
+    const capped = Math.min(Math.max(limit, 1), 30);
+
+    const ranking = await this.query<{ game_id: number; value: number }>(
+      'popularity_primitives',
+      // 5 is Steam 24hr peak players. Asking for more than we need leaves room
+      // to drop ids IGDB has no game record for.
+      `fields game_id,value; where popularity_type = 5; sort value desc; limit ${capped * 2};`,
+    );
+
+    const ids = [...new Set(ranking.map((entry) => entry.game_id))].slice(0, capped);
+    if (ids.length === 0) return [];
+
+    const games = await this.queryGames(
+      (fields) => `fields ${fields}; where id = (${ids.join(',')}); limit ${ids.length};`,
+    );
+
+    // IGDB returns the games in its own order, so the ranking is reapplied.
+    const rank = new Map(ids.map((id, index) => [id, index]));
+    return games
+      .slice()
+      .sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
+  }
+
+  /**
    * Every image IGDB has for the top matches on a title, for the admin picker.
    *
    * Uses its own narrow field list rather than the shared one: `artworks` is

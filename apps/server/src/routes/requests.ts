@@ -17,7 +17,7 @@ import { requireUser } from '../auth/middleware.js';
  * asked, and deciding — stays behind the admin scope.
  */
 export async function requestRoutes(app: FastifyInstance): Promise<void> {
-  const { gameRequests, collections } = app.gameblade;
+  const { gameRequests, collections, metadata } = app.gameblade;
 
   /* -------------------------------------------------------------- requests */
 
@@ -32,6 +32,19 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const query = gameRequestQuerySchema.parse(request.query);
     // Who asked is admin-only; an ordinary account sees titles and counts.
     return gameRequests.list(query, context.user.id, context.user.role === 'admin');
+  });
+
+  /**
+   * Trending titles to ask for, each already checked against this archive.
+   *
+   * On its own route rather than folded into the digest: it depends on an
+   * external provider and the digest is on the client's cold-start path, so a
+   * slow IGDB must not hold up the Home tab.
+   */
+  app.get('/requests/suggestions', async (request) => {
+    const context = requireUser(request);
+    const candidates = await metadata.trending(12);
+    return gameRequests.suggestions(context.user.id, candidates);
   });
 
   app.post('/requests', async (request, reply) => {

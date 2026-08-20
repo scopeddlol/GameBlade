@@ -228,6 +228,8 @@ export type ReactionInput = z.infer<typeof reactionSchema>;
 
 export const feedQuerySchema = z.object({
   scope: z.enum(['friends', 'mine', 'everyone']).default('friends'),
+  /** One kind, or `not-announcement` to read the ordinary feed without them. */
+  kind: z.enum([...POST_KIND, 'not-announcement']).optional(),
   gameId: z.string().trim().max(64).optional(),
   before: z.string().trim().max(40).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
@@ -534,6 +536,16 @@ export const announcementSchema = z.object({
   icon: z.string().trim().max(8).nullable().optional(),
   /** Empty targets everyone. */
   userIds: z.array(z.string().trim().max(64)).max(500).default([]),
+  /**
+   * Also publish it to the News page, where it stays and can be replied to.
+   *
+   * On by default: a notification is read once and gone, which is the whole
+   * reason announcements felt like they went nowhere. Turned off for the
+   * genuinely transient ones ("back up in five minutes"), and forced off when
+   * the announcement is aimed at named accounts rather than everyone — a
+   * public page is the wrong place for a message to three people.
+   */
+  publish: z.boolean().default(true),
 });
 export type AnnouncementInput = z.infer<typeof announcementSchema>;
 

@@ -175,7 +175,12 @@ export const FRIENDSHIP_STATUS = ['pending', 'accepted', 'blocked'] as const;
 /** What the desktop client reports it is doing, broadcast to friends. */
 export const PRESENCE_STATUS = ['offline', 'online', 'away', 'in-game'] as const;
 
-export const POST_KIND = ['text', 'image', 'clip'] as const;
+/**
+ * `announcement` is written by an operator and read by everyone; the other
+ * three are ordinary posts. Keeping it in the same table is what gives
+ * announcements comments, edits and reactions without building any of it twice.
+ */
+export const POST_KIND = ['text', 'image', 'clip', 'announcement'] as const;
 
 export const MEDIA_KIND = ['avatar', 'banner', 'image', 'clip'] as const;
 

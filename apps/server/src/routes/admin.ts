@@ -61,6 +61,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     apiKeys,
     analytics,
     bandwidth,
+    social,
   } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
@@ -750,7 +751,18 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       actorId: context.user.id,
     });
 
-    return { sent };
+    // A notification is read once and gone. Publishing keeps the announcement
+    // somewhere people can come back to and reply to — never for one aimed at
+    // named accounts, which is a message rather than a notice.
+    const post =
+      input.publish && input.userIds.length === 0
+        ? social.publishAnnouncement(context.user.id, {
+            title: input.title,
+            body: input.body ?? null,
+          })
+        : null;
+
+    return { sent, postId: post?.id ?? null };
   });
 
   // ---- Game requests ----

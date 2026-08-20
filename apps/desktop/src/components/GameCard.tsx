@@ -215,3 +215,106 @@ export function GameRow({
     </div>
   );
 }
+
+/**
+ * One game as a wide panel: artwork, blurb and every stat spelled out.
+ *
+ * Between the poster grid and the dense list. The grid is for recognising a
+ * game by its cover and the list is for finding one by name; this is for
+ * deciding what to play, which needs the things neither of those has room for
+ * — what the game actually is, when it came out, who made it.
+ */
+export function GameDetailedRow({
+  game,
+  installed,
+  onOpen,
+  onPrimary,
+  primaryLabel,
+  busy,
+  onContextMenu,
+}: {
+  game: GameSummary;
+  installed?: boolean;
+  onOpen: (game: GameSummary) => void;
+  onPrimary?: (game: GameSummary) => void;
+  primaryLabel?: 'install' | 'play' | 'add';
+  busy?: boolean;
+  onContextMenu?: (event: MouseEvent, game: GameSummary) => void;
+}) {
+  const year = formatYear(game.releaseDate);
+  const facts = [
+    year,
+    formatBytes(game.sizeBytes),
+    game.playSeconds > 0 ? formatPlaytime(game.playSeconds) : null,
+  ].filter(Boolean) as string[];
+
+  return (
+    <div
+      className={clsx('game-detailed', game.isMissing && 'missing')}
+      onContextMenu={onContextMenu ? (event) => onContextMenu(event, game) : undefined}
+    >
+      <button
+        type="button"
+        className="game-detailed-art"
+        onClick={() => onOpen(game)}
+        aria-label={`Open ${game.title}`}
+      >
+        <Artwork path={game.art.cover} alt={game.title} className="cover" />
+      </button>
+
+      <div className="game-detailed-body">
+        <div className="game-detailed-head">
+          <button type="button" className="game-detailed-title" onClick={() => onOpen(game)}>
+            {game.title}
+          </button>
+          {installed ? <span className="row-chip installed">Installed</span> : null}
+          {game.isMissing ? <span className="row-chip missing-chip">Missing</span> : null}
+        </div>
+
+        <p className="game-detailed-facts muted small">{facts.join(' · ')}</p>
+
+        {game.summary ? <p className="game-detailed-summary">{game.summary}</p> : null}
+
+        <div className="game-detailed-tags">
+          {game.genres.slice(0, 4).map((genre) => (
+            <span key={genre} className="row-chip">
+              {genre}
+            </span>
+          ))}
+          {game.achievementCount > 0 ? (
+            <span className="row-chip">
+              <Trophy size={12} aria-hidden />
+              {game.unlockedCount}/{game.achievementCount}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      {onPrimary && primaryLabel ? (
+        <div className="game-detailed-action">
+          <button
+            type="button"
+            className={clsx('btn', primaryLabel === 'play' ? 'btn-primary' : 'btn-ghost')}
+            onClick={() => onPrimary(game)}
+            disabled={busy}
+          >
+            {primaryLabel === 'play' ? (
+              <>
+                <Play size={14} aria-hidden /> Play
+              </>
+            ) : primaryLabel === 'install' ? (
+              <>
+                <Download size={14} aria-hidden /> {installed ? 'Installed' : 'Install'}
+              </>
+            ) : (
+              <>
+                {game.inLibrary ? <Check size={14} aria-hidden /> : null}
+                {game.inLibrary ? 'In library' : 'Add'}
+              </>
+            )}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}

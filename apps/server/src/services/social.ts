@@ -7,7 +7,7 @@ import {
   type ReactionKind,
   type UpdatePostInput,
 } from '@gameblade/shared';
-import { and, desc, eq, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, ne, or, sql } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import { comments, games, media, postMedia, posts, reactions } from '../db/schema.js';
@@ -87,6 +87,35 @@ export class SocialService {
     return this.get(record.id, authorId);
   }
 
+  /**
+   * Publishes an operator's announcement as a post people can reply to.
+   *
+   * Separate from `create` because that one derives the kind from what was
+   * attached — which is exactly the guard that stops a player posting
+   * something that looks official — so the one caller allowed to set
+   * `announcement` says so explicitly. The route is what checks the role.
+   */
+  publishAnnouncement(authorId: string, input: { title: string; body: string | null }): PostInfo {
+    const record = {
+      id: newId('pst'),
+      authorId,
+      kind: 'announcement' as const,
+      title: input.title.trim(),
+      body: input.body?.trim() ? input.body.trim() : null,
+      gameId: null,
+      // Public by design: an announcement nobody but the operator's friends
+      // can read is not an announcement.
+      visibility: 'public' as const,
+      createdAt: isoNow(),
+      editedAt: null,
+    };
+
+    this.db.insert(posts).values(record).run();
+    this.activity.record({ userId: authorId, kind: 'posted', postId: record.id, gameId: null });
+
+    return this.get(record.id, authorId);
+  }
+
   update(postId: string, userId: string, input: UpdatePostInput): PostInfo {
     const post = this.requireOwnPost(postId, userId);
 
@@ -142,6 +171,15 @@ export class SocialService {
 
     if (query.gameId) conditions.push(eq(posts.gameId, query.gameId));
     if (query.before) conditions.push(lt(posts.createdAt, query.before));
+
+    // The News page asks for announcements alone; the social feed asks for
+    // everything except them, so an operator's notice does not sit in the
+    // middle of what friends are posting.
+    if (query.kind === 'not-announcement') {
+      conditions.push(ne(posts.kind, 'announcement'));
+    } else if (query.kind) {
+      conditions.push(eq(posts.kind, query.kind));
+    }
 
     const visible = or(
       eq(posts.authorId, viewerId),

@@ -58,13 +58,21 @@ pub struct Settings {
     #[serde(default)]
     pub theme_accent: Option<String>,
 
-    /// How the Library tab lays its games out: `grid` or `list`.
+    /// How the Library tab lays its games out: `grid`, `list` or `detailed`.
     #[serde(default = "default_library_view")]
     pub library_view: String,
 
     /// Show a game's logo artwork in place of its title where one exists.
     #[serde(default = "default_true")]
     pub use_logo_titles: bool,
+
+    /// Keep a copy of artwork on this machine so browsing does not re-fetch it.
+    ///
+    /// Off by default: it trades disk for speed, and that is the user's call to
+    /// make rather than ours. Absent from any settings file written before this
+    /// existed, hence the default.
+    #[serde(default)]
+    pub cache_images: bool,
 }
 
 fn default_library_view() -> String {
@@ -89,6 +97,7 @@ impl Default for Settings {
             theme_preset: None,
             theme_accent: None,
             library_view: default_library_view(),
+            cache_images: false,
             use_logo_titles: true,
         }
     }
@@ -101,7 +110,7 @@ impl Settings {
 
         // A hand-edited file could name a layout the client has no code for,
         // which would leave the Library rendering nothing at all.
-        if self.library_view != "grid" && self.library_view != "list" {
+        if !matches!(self.library_view.as_str(), "grid" | "list" | "detailed") {
             self.library_view = default_library_view();
         }
 

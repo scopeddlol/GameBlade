@@ -28,8 +28,14 @@ export function CollectionPicker({ game, onClose }: { game: GameSummary; onClose
 
   const collections = collectionsQuery.data ?? [];
   const memberOf = new Set(membershipQuery.data ?? []);
-  const busy = addGames.isPending || removeGames.isPending || create.isPending;
 
+  /**
+   * Files or unfiles the game straight away.
+   *
+   * The tick and the count come from the cache, which the mutation patches
+   * before it sends, so a row responds on the click rather than on the reply
+   * and several can be toggled in a row without waiting.
+   */
   const toggle = (id: string) => {
     setError(null);
     const mutation = memberOf.has(id) ? removeGames : addGames;
@@ -58,7 +64,6 @@ export function CollectionPicker({ game, onClose }: { game: GameSummary; onClose
                   type="button"
                   className={clsx('collection-row', inGroup && 'active')}
                   onClick={() => toggle(collection.id)}
-                  disabled={busy}
                   aria-pressed={inGroup}
                 >
                   <span className={`collection-dot ${collection.color}`} aria-hidden />
@@ -131,7 +136,11 @@ export function CollectionPicker({ game, onClose }: { game: GameSummary; onClose
             aria-label="New group name"
             onChange={(event) => setName(event.target.value)}
           />
-          <button type="submit" className="btn btn-primary" disabled={!name.trim() || busy}>
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={!name.trim() || create.isPending}
+          >
             {create.isPending ? (
               <Loader2 size={14} className="spin" aria-hidden />
             ) : (

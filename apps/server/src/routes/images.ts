@@ -2,7 +2,6 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
-import { requireAdmin } from '../auth/middleware.js';
 import { allowCrossOriginEmbed } from '../lib/assets.js';
 import { ApiError } from '../lib/errors.js';
 
@@ -28,18 +27,29 @@ export async function imageRoutes(app: FastifyInstance): Promise<void> {
   const { images, auth } = app.gameblade;
 
   /**
-   * Streams one provider thumbnail through the server for the admin picker.
+   * Streams one provider thumbnail through the server.
    *
    * The page's content security policy allows images from this origin only,
    * and deliberately so: it is what keeps a player's browser from ever talking
    * to IGDB or SteamGridDB directly. Rather than punching two CDN hosts into
-   * that policy for every page on the site, the picker's previews come through
+   * that policy for every page on the site, provider previews come through
    * here. Nothing is written to disk — only the image an admin actually
    * chooses gets cached, by the artwork route.
    */
-  app.get('/admin/artwork/thumbnail', { config: { rateLimit: false } }, async (request, reply) => {
-    requireAdmin(request);
-    const { url } = request.query as { url?: string };
+  app.get('/artwork/thumbnail', { config: { rateLimit: false } }, async (request, reply) => {
+    // Any signed-in account, not just an administrator: the request page shows
+    // trending covers to whoever is deciding what to ask for. The guards that
+    // matter are below — https only, two known provider hosts, a size cap —
+    // and none of them depend on the caller's role.
+    //
+    // A `token` query parameter is accepted for the same reason /images/:id
+    // accepts one: the desktop client points plain <img> tags at these URLs,
+    // and an image element cannot send an Authorization header.
+    const { url, token } = request.query as { url?: string; token?: string };
+    const authorised =
+      request.auth !== null || (token ? auth.resolveDeviceToken(token) !== null : false);
+    if (!authorised) throw ApiError.unauthorized();
+
     if (!url) throw ApiError.badRequest('A url is required');
 
     let target: URL;

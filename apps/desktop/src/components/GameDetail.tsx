@@ -27,10 +27,10 @@ import {
   type DownloadState,
   type InstalledGame,
   type SaveRulePayload,
-  type StorageLocation,
 } from '../lib/ipc.js';
 import { useAddToLibrary } from '../hooks/useLibrary.js';
 import { Artwork, Badge, ErrorNote, Loading, Modal, ProgressBar, Spinner } from './ui.js';
+import { InstallDialog } from './InstallDialog.js';
 
 interface Rules {
   save: SaveRule[];
@@ -61,11 +61,6 @@ export function GameDetailPanel({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showStoragePicker, setShowStoragePicker] = useState(false);
-
-  const locationsQuery = useQuery({
-    queryKey: ['storage-locations'],
-    queryFn: () => ipc.listStorageLocations(),
-  });
 
   const gameQuery = useQuery({
     queryKey: ['games', gameId],
@@ -120,15 +115,9 @@ export function GameDetailPanel({
     onError: (caught) => setError(errorMessage(caught)),
   });
 
-  const locations = locationsQuery.data ?? [];
-
-  const startInstall = () => {
-    if (locations.length > 1) {
-      setShowStoragePicker(true);
-    } else {
-      installMutation.mutate(undefined);
-    }
-  };
+  // Always ask. A single configured drive is still a choice worth confirming
+  // when the answer is tens of gigabytes landing somewhere.
+  const startInstall = () => setShowStoragePicker(true);
 
   const launchMutation = useMutation({
     mutationFn: async () => {
@@ -351,58 +340,14 @@ export function GameDetailPanel({
         )}
       </div>
 
-      {showStoragePicker ? (
-        <StoragePickerModal
-          locations={locations}
-          pending={installMutation.isPending}
-          onChoose={(path) => installMutation.mutate(path)}
+      {showStoragePicker && game ? (
+        <InstallDialog
+          game={game}
           onClose={() => setShowStoragePicker(false)}
+          onStarted={() => setNotice('Download started — track it from the Downloads panel.')}
         />
       ) : null}
     </div>
-  );
-}
-
-function StoragePickerModal({
-  locations,
-  pending,
-  onChoose,
-  onClose,
-}: {
-  locations: StorageLocation[];
-  pending: boolean;
-  onChoose: (path: string) => void;
-  onClose: () => void;
-}) {
-  return (
-    <Modal title="Install to…" onClose={onClose}>
-      <div className="storage-locations">
-        {locations.map((location) => {
-          const usedPercent =
-            location.total_bytes > 0
-              ? ((location.total_bytes - location.available_bytes) / location.total_bytes) * 100
-              : 0;
-          return (
-            <button
-              key={location.path}
-              type="button"
-              className="storage-location storage-location-pick"
-              onClick={() => onChoose(location.path)}
-              disabled={pending}
-            >
-              <div className="storage-location-head">
-                <span className="path">{location.path}</span>
-                {location.is_default ? <Badge tone="info">Default</Badge> : null}
-              </div>
-              <ProgressBar value={usedPercent} />
-              <span className="muted small">
-                {formatBytes(location.available_bytes)} free of {formatBytes(location.total_bytes)}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </Modal>
   );
 }
 
