@@ -202,13 +202,9 @@ export class GameRequestService {
 
     const rows = this.selectBase()
       .where(conditions.length > 0 ? and(...conditions) : undefined)
-      .orderBy(
-        query.sort === 'title'
-          ? gameRequests.title
-          : query.sort === 'newest'
-            ? desc(gameRequests.createdAt)
-            : desc(gameRequests.createdAt),
-      )
+      // Newest-first is the tiebreak for `votes` too, which is re-sorted in
+      // memory below once the counts are known.
+      .orderBy(query.sort === 'title' ? gameRequests.title : desc(gameRequests.createdAt))
       .limit(query.limit)
       .offset(query.offset)
       .all() as RequestRow[];

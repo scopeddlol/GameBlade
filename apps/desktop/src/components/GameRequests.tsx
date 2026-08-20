@@ -5,7 +5,7 @@ import {
 } from '@gameblade/shared';
 import clsx from 'clsx';
 import { ArrowBigUp, CheckCircle2, Clock, Loader2, Send, Sparkles } from 'lucide-react';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useRequestList, useRequestMutations } from '../hooks/useRequests.js';
 import { errorMessage } from '../lib/ipc.js';
 import { formatRelative } from '../lib/format.js';
@@ -93,7 +93,7 @@ export function RequestPanel({
 }: {
   title: string;
   hint?: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   requests: GameRequestInfo[];
   emptyMessage: string;
   onOpenGame?: (gameId: string) => void;

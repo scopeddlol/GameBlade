@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Maximize2, Minimize2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { AreaChart, ColumnChart, Meter, RankedBars, StatTile } from '../../components/charts.js';
 import { Badge, EmptyState, PageLoader } from '../../components/ui.js';
 import { api } from '../../lib/api.js';
@@ -76,7 +76,7 @@ function formatMonth(month: string): string {
 }
 
 /** A panel heading, sized to whichever density is active. */
-function PanelTitle({ children }: { children: React.ReactNode }) {
+function PanelTitle({ children }: { children: ReactNode }) {
   return <h2 className="text-[11px] font-semibold tracking-wide uppercase">{children}</h2>;
 }
 
