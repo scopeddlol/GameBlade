@@ -5,19 +5,22 @@ import { ipc } from '../lib/ipc.js';
 /** Every cached page that could be holding this game, plus its detail record. */
 type Snapshot = Array<[readonly unknown[], unknown]>;
 
+/** True for a page of games; false for the detail record under the same prefix. */
+function isPage(data: unknown): data is Paginated<GameSummary> {
+  return Boolean(data) && Array.isArray((data as Paginated<GameSummary>).items);
+}
+
 /**
  * Rewrites `inLibrary` on every cached copy of one game.
  *
- * The same game appears in the store list, the library list, several Home
- * shelves and possibly an open detail panel. Patching them all in place is what
- * makes the button flip instantly; invalidating instead would blank every list
- * on screen while it refetched.
+ * The same game is in the store list, the library list and possibly an open
+ * detail panel at once. Patching them all in place is what makes the button
+ * flip instantly; invalidating instead would blank every list on screen while
+ * it refetched.
  */
 function patchCaches(client: QueryClient, gameId: string, inLibrary: boolean): void {
-  for (const [key, data] of client.getQueriesData<Paginated<GameSummary>>({
-    queryKey: ['games'],
-  })) {
-    if (!data?.items) continue;
+  for (const [key, data] of client.getQueriesData({ queryKey: ['games'] })) {
+    if (!isPage(data)) continue;
     client.setQueryData(key, {
       ...data,
       items: data.items.map((game) => (game.id === gameId ? { ...game, inLibrary } : game)),
