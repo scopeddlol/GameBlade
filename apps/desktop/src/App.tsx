@@ -49,6 +49,7 @@ import { LibraryTab } from './tabs/LibraryTab.js';
 import { SettingsTab } from './tabs/SettingsTab.js';
 import { SocialTab } from './tabs/SocialTab.js';
 import { StoreTab } from './tabs/StoreTab.js';
+import { UpdateBanner } from './components/UpdateBanner.js';
 
 /** Falls back to this whenever a notification has no custom icon of its own. */
 const NOTIFICATION_ICONS: Record<NotificationKind, typeof Bell> = {
@@ -221,6 +222,8 @@ function Shell() {
         <TitleBar>
           <TopBar running={running} tab={tab} />
         </TitleBar>
+
+        <UpdateBanner />
 
         <div className="scroll">
           {tab === 'home' ? <HomeTab onOpenGame={openGame} onOpenGameId={setOpenGameId} /> : null}

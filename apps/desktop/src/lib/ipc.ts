@@ -80,6 +80,8 @@ export interface ClientSettings {
   libraryView: 'grid' | 'list' | 'detailed';
   /** Prefer a game's logo artwork over its title on the detail page. */
   useLogoTitles: boolean;
+  /** Keep artwork on disk so browsing does not re-fetch it every time. */
+  cacheImages: boolean;
 }
 
 /** Mirrors the Rust `StorageLocation` struct, which serialises with snake_case. */
@@ -138,6 +140,17 @@ export const ipc = {
 
   /** Artwork paths need the device token appended before an <img> can load them. */
   imageUrl: (path: string) => invoke<string>('image_url', { path }),
+
+  /** Bytes the artwork cache is using on this machine. */
+  imageCacheSize: () => invoke<number>('image_cache_size'),
+  clearImageCache: () => invoke<void>('clear_image_cache'),
+
+  /* --------------------------------------------------------------- updates */
+
+  /** The version this client was built as. */
+  clientVersion: () => invoke<string>('client_version'),
+  /** Downloads the published installer and hands off to it. */
+  runClientInstaller: () => invoke<string>('run_client_installer'),
 
   /* ------------------------------------------------------------- settings */
 

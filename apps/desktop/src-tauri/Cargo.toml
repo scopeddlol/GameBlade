@@ -76,3 +76,7 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[dev-dependencies]
+# Only the tests touch the filesystem for real; the app writes under app_data.
+tempfile = "3"

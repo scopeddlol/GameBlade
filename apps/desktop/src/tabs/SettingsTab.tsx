@@ -129,6 +129,8 @@ export function SettingsTab() {
               checked={draft.verifyDownloads}
               onChange={(verifyDownloads) => update({ verifyDownloads })}
             />
+
+            <ImageCacheField draft={draft} onUpdate={update} />
           </section>
 
           <section className="card" id="settings-saves">
@@ -764,5 +766,64 @@ function DevicesSection({ onError }: { onError: (message: string) => void }) {
         </ul>
       )}
     </section>
+  );
+}
+
+/**
+ * The artwork cache: a toggle, what it is costing, and a way to empty it.
+ *
+ * Turning a cache on without showing its size is how a client quietly eats a
+ * user's disk, so the number and the button live with the switch rather than
+ * somewhere else entirely.
+ */
+function ImageCacheField({
+  draft,
+  onUpdate,
+}: {
+  draft: ClientSettings;
+  onUpdate: (patch: Partial<ClientSettings>) => void;
+}) {
+  const queryClient = useQueryClient();
+
+  const sizeQuery = useQuery({
+    queryKey: ['image-cache-size'],
+    queryFn: () => ipc.imageCacheSize(),
+    // It grows as you browse, so a figure read once at mount goes stale.
+    refetchInterval: 15_000,
+  });
+
+  const clearMutation = useMutation({
+    mutationFn: () => ipc.clearImageCache(),
+    onSuccess: () => queryClient.setQueryData(['image-cache-size'], 0),
+  });
+
+  const bytes = sizeQuery.data ?? 0;
+
+  return (
+    <>
+      <Toggle
+        label="Cache artwork on this PC"
+        hint="Covers and banners are kept on disk after the first look, so browsing does not fetch them again. Uses up to 512 MB."
+        checked={draft.cacheImages}
+        onChange={(cacheImages) => onUpdate({ cacheImages })}
+      />
+
+      {draft.cacheImages ? (
+        <div className="cache-row">
+          <span className="muted small">
+            {bytes > 0 ? `${formatBytes(bytes)} cached` : 'Nothing cached yet'}
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={bytes === 0 || clearMutation.isPending}
+            onClick={() => clearMutation.mutate()}
+          >
+            <Trash2 size={14} aria-hidden />
+            Empty cache
+          </button>
+        </div>
+      ) : null}
+    </>
   );
 }

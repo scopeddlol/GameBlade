@@ -126,6 +126,30 @@ impl ApiClient {
         Ok(response.json().await?)
     }
 
+    /// Raw bytes for one path, used to fill the artwork cache.
+    ///
+    /// Capped: the endpoint only ever serves artwork, and a body larger than
+    /// this is a misconfiguration rather than a cover, which should not be
+    /// pulled entirely into memory before it is noticed.
+    pub async fn get_bytes(&self, path: &str) -> AppResult<Vec<u8>> {
+        const MAX_ARTWORK_BYTES: usize = 24 * 1024 * 1024;
+
+        let request = self.authorised(self.http.get(self.endpoint(path)))?;
+        let response = check_status(request.send().await?).await?;
+
+        if let Some(length) = response.content_length() {
+            if length as usize > MAX_ARTWORK_BYTES {
+                return Ok(Vec::new());
+            }
+        }
+
+        let bytes = response.bytes().await?;
+        if bytes.len() > MAX_ARTWORK_BYTES {
+            return Ok(Vec::new());
+        }
+        Ok(bytes.to_vec())
+    }
+
     pub async fn post_json(
         &self,
         path: &str,

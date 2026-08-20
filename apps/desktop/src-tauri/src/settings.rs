@@ -65,6 +65,14 @@ pub struct Settings {
     /// Show a game's logo artwork in place of its title where one exists.
     #[serde(default = "default_true")]
     pub use_logo_titles: bool,
+
+    /// Keep a copy of artwork on this machine so browsing does not re-fetch it.
+    ///
+    /// Off by default: it trades disk for speed, and that is the user's call to
+    /// make rather than ours. Absent from any settings file written before this
+    /// existed, hence the default.
+    #[serde(default)]
+    pub cache_images: bool,
 }
 
 fn default_library_view() -> String {
@@ -89,6 +97,7 @@ impl Default for Settings {
             theme_preset: None,
             theme_accent: None,
             library_view: default_library_view(),
+            cache_images: false,
             use_logo_titles: true,
         }
     }

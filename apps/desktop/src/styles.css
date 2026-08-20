@@ -3031,3 +3031,34 @@ textarea:focus {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* What the artwork cache is costing, next to the switch that fills it. */
+.cache-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* ------------------------------------------------------------ update prompt */
+
+/*
+ * Sits between the title bar and the page rather than floating over it: an
+ * update is worth noticing but never worth covering what someone is doing, and
+ * pushing the page down means it cannot be missed either.
+ */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--ink-850);
+  border-bottom: 1px solid var(--ink-700);
+}
+.update-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
