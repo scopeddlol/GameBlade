@@ -3062,3 +3062,31 @@ textarea:focus {
   flex: 1;
   min-width: 0;
 }
+
+/* --------------------------------------------------------------------- news */
+
+.news {
+  max-width: 760px;
+}
+.news-head h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.news-head p {
+  margin: 2px 0 0;
+}
+.news-composer {
+  gap: 12px;
+}
+.news-composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.news-composer-actions .muted {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

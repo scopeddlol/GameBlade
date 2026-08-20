@@ -50,6 +50,7 @@ import { SettingsTab } from './tabs/SettingsTab.js';
 import { SocialTab } from './tabs/SocialTab.js';
 import { StoreTab } from './tabs/StoreTab.js';
 import { UpdateBanner } from './components/UpdateBanner.js';
+import { NewsTab } from './tabs/NewsTab.js';
 
 /** Falls back to this whenever a notification has no custom icon of its own. */
 const NOTIFICATION_ICONS: Record<NotificationKind, typeof Bell> = {
@@ -65,6 +66,7 @@ const TABS = [
   { id: 'home', label: 'Home', icon: Home },
   { id: 'library', label: 'Library', icon: LibraryBig },
   { id: 'store', label: 'Store', icon: Store },
+  { id: 'news', label: 'News', icon: Megaphone },
   { id: 'social', label: 'Social', icon: Users },
   { id: 'settings', label: 'Settings', icon: Settings },
 ] as const;
@@ -231,6 +233,7 @@ function Shell() {
             <LibraryTab onOpenGame={openGame} installed={installed} running={running} />
           ) : null}
           {tab === 'store' ? <StoreTab onOpenGame={openGame} onOpenGameId={setOpenGameId} /> : null}
+          {tab === 'news' ? <NewsTab onOpenProfile={setProfileId} /> : null}
           {tab === 'social' ? <SocialTab onOpenProfile={setProfileId} /> : null}
           {tab === 'settings' ? <SettingsTab /> : null}
         </div>
