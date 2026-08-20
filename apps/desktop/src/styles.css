@@ -2937,3 +2937,97 @@ textarea:focus {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ------------------------------------------------- settings, wide layout */
+
+/*
+ * The page used to be a 680px column whatever the window was, so on a normal
+ * monitor two thirds of the width sat empty while the settings themselves ran
+ * three screens deep. Now the column grows with the window, short cards pair
+ * up once there is room for two, and a jump list down the side means a
+ * preference is one click away rather than a scroll away.
+ */
+.settings {
+  max-width: 1240px;
+}
+.settings-layout {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.settings-nav {
+  position: sticky;
+  /* Clear of the drag region at the top of the window. */
+  top: 8px;
+}
+.settings-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-nav-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-300);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+.settings-nav-item:hover {
+  background: var(--ink-850);
+  color: var(--ink-100);
+}
+.settings-nav-item.active {
+  background: var(--ink-800);
+  color: var(--ink-50);
+  font-weight: 600;
+}
+
+.settings-sections {
+  display: grid;
+  /* Two columns once a card can still be read at that width, one before. */
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+/* Profile and Appearance carry a banner and a theme grid; neither reads well
+   in half a row, so they take the whole one. */
+.settings-wide {
+  grid-column: 1 / -1;
+}
+
+/* Below this the jump list costs more width than it earns, so the page goes
+   back to a single column with the sections stacked. */
+@media (max-width: 1080px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-nav {
+    position: static;
+  }
+  .settings-nav ul {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .settings-nav-item {
+    width: auto;
+  }
+}
+@media (max-width: 760px) {
+  .settings-sections {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

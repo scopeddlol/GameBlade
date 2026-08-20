@@ -11,7 +11,23 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Check, FolderPlus, LayoutGrid, List, LogOut, RotateCcw, Star, Trash2 } from 'lucide-react';
+import {
+  Check,
+  CloudUpload,
+  Download,
+  EyeOff,
+  FolderPlus,
+  HardDrive,
+  LayoutGrid,
+  List,
+  LogOut,
+  MonitorSmartphone,
+  Palette,
+  RotateCcw,
+  Star,
+  Trash2,
+  UserRound,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 import {
   Artwork,
@@ -73,94 +89,192 @@ export function SettingsTab() {
       <ErrorNote message={error} />
       {notice ? <p className="notice">{notice}</p> : null}
 
-      <ProfileSection onError={setError} />
+      <div className="settings-layout">
+        <SettingsNav />
 
-      <AppearanceSection draft={draft} onUpdate={update} />
+        <div className="settings-sections">
+          <ProfileSection onError={setError} />
 
-      <section className="card">
-        <SectionHeader
-          title="Storage locations"
-          subtitle="Where games install to. Installing a game offers a choice whenever more than one is set up."
-        />
-        <StorageLocationsField draft={draft} onUpdate={update} />
-      </section>
+          <AppearanceSection draft={draft} onUpdate={update} />
 
-      <section className="card">
-        <SectionHeader title="Downloads and installs" />
+          <section className="card" id="settings-storage">
+            <SectionHeader
+              title="Storage locations"
+              subtitle="Where games install to. Installing a game offers a choice whenever more than one is set up."
+            />
+            <StorageLocationsField draft={draft} onUpdate={update} />
+          </section>
 
-        <label className="field">
-          <span>Simultaneous transfers</span>
-          <input
-            type="range"
-            min={1}
-            max={16}
-            value={draft.downloadConcurrency}
-            onChange={(e) => update({ downloadConcurrency: Number(e.target.value) })}
-          />
-          <span className="muted small">
-            {draft.downloadConcurrency} at a time. More helps on a fast connection with many small
-            files, and hurts on a slow one.
-          </span>
-        </label>
+          <section className="card" id="settings-downloads">
+            <SectionHeader title="Downloads and installs" />
 
-        <Toggle
-          label="Verify downloads"
-          hint="Check each file against the server's checksum after downloading."
-          checked={draft.verifyDownloads}
-          onChange={(verifyDownloads) => update({ verifyDownloads })}
-        />
-      </section>
+            <label className="field">
+              <span>Simultaneous transfers</span>
+              <input
+                type="range"
+                min={1}
+                max={16}
+                value={draft.downloadConcurrency}
+                onChange={(e) => update({ downloadConcurrency: Number(e.target.value) })}
+              />
+              <span className="muted small">
+                {draft.downloadConcurrency} at a time. More helps on a fast connection with many
+                small files, and hurts on a slow one.
+              </span>
+            </label>
 
-      <section className="card">
-        <SectionHeader title="Cloud saves" />
+            <Toggle
+              label="Verify downloads"
+              hint="Check each file against the server's checksum after downloading."
+              checked={draft.verifyDownloads}
+              onChange={(verifyDownloads) => update({ verifyDownloads })}
+            />
+          </section>
 
-        <Toggle
-          label="Sync saves automatically"
-          hint="Pull before launching and push after quitting."
-          checked={draft.syncSaves}
-          onChange={(syncSaves) => update({ syncSaves })}
-        />
+          <section className="card" id="settings-saves">
+            <SectionHeader title="Cloud saves" />
 
-        <Toggle
-          label="Ask before overwriting"
-          hint="When both this machine and the cloud have changed, choose which copy to keep instead of picking the newer one."
-          checked={draft.promptOnSaveConflict}
-          onChange={(promptOnSaveConflict) => update({ promptOnSaveConflict })}
-        />
+            <Toggle
+              label="Sync saves automatically"
+              hint="Pull before launching and push after quitting."
+              checked={draft.syncSaves}
+              onChange={(syncSaves) => update({ syncSaves })}
+            />
 
-        <SaveUsage />
-      </section>
+            <Toggle
+              label="Ask before overwriting"
+              hint="When both this machine and the cloud have changed, choose which copy to keep instead of picking the newer one."
+              checked={draft.promptOnSaveConflict}
+              onChange={(promptOnSaveConflict) => update({ promptOnSaveConflict })}
+            />
 
-      <section className="card">
-        <SectionHeader title="Privacy and presence" />
+            <SaveUsage />
+          </section>
 
-        <Toggle
-          label="Share what I'm playing"
-          hint="Turn this off to appear online without naming the game. Your profile's own privacy setting still applies on top."
-          checked={draft.shareActivity}
-          onChange={(shareActivity) => update({ shareActivity })}
-        />
+          <section className="card" id="settings-privacy">
+            <SectionHeader title="Privacy and presence" />
 
-        <Toggle
-          label="Minimize when a game starts"
-          checked={draft.minimizeOnLaunch}
-          onChange={(minimizeOnLaunch) => update({ minimizeOnLaunch })}
-        />
-      </section>
+            <Toggle
+              label="Share what I'm playing"
+              hint="Turn this off to appear online without naming the game. Your profile's own privacy setting still applies on top."
+              checked={draft.shareActivity}
+              onChange={(shareActivity) => update({ shareActivity })}
+            />
 
-      <DevicesSection onError={setError} />
+            <Toggle
+              label="Minimize when a game starts"
+              checked={draft.minimizeOnLaunch}
+              onChange={(minimizeOnLaunch) => update({ minimizeOnLaunch })}
+            />
+          </section>
 
-      <section className="card">
-        <SectionHeader title="Account" />
-        <p className="muted small">
-          Signed in as <strong>{session?.username}</strong>
-        </p>
-        <button type="button" className="btn btn-danger" onClick={() => void signOut()}>
-          <LogOut size={15} aria-hidden />
-          Sign out
-        </button>
-      </section>
+          <DevicesSection onError={setError} />
+
+          <section className="card" id="settings-account">
+            <SectionHeader title="Account" />
+            <p className="muted small">
+              Signed in as <strong>{session?.username}</strong>
+            </p>
+            <button type="button" className="btn btn-danger" onClick={() => void signOut()}>
+              <LogOut size={15} aria-hidden />
+              Sign out
+            </button>
+          </section>
+        </div>
+      </div>
     </div>
+  );
+}
+
+/** The sections, in the order they are laid out, for the jump list. */
+const SETTINGS_SECTIONS = [
+  { id: 'settings-profile', label: 'Profile', Icon: UserRound },
+  { id: 'settings-appearance', label: 'Appearance', Icon: Palette },
+  { id: 'settings-storage', label: 'Storage', Icon: HardDrive },
+  { id: 'settings-downloads', label: 'Downloads', Icon: Download },
+  { id: 'settings-saves', label: 'Cloud saves', Icon: CloudUpload },
+  { id: 'settings-privacy', label: 'Privacy', Icon: EyeOff },
+  { id: 'settings-devices', label: 'Devices', Icon: MonitorSmartphone },
+  { id: 'settings-account', label: 'Account', Icon: LogOut },
+] as const;
+
+/** Noted once so the bottom clamp does not index past the end of the list. */
+const LAST_SECTION: string = SETTINGS_SECTIONS[SETTINGS_SECTIONS.length - 1]?.id ?? '';
+
+/**
+ * Jump list down the side of the settings page.
+ *
+ * The page is several screens tall whatever is done to it — there are simply
+ * that many preferences — so the fix for "I cannot find the one I want" is a
+ * way to go straight to it, not more scrolling. It tracks what is on screen so
+ * the list also answers "where am I".
+ */
+function SettingsNav() {
+  const [active, setActive] = useState<string>(SETTINGS_SECTIONS[0].id);
+
+  useEffect(() => {
+    // Whichever section's top has most recently passed the reading line near
+    // the top of the page. Computed from scroll position rather than observed
+    // intersections: an observer reports whatever the layout happened to be
+    // when it first ran, which with artwork still loading is the wrong answer
+    // and stays wrong until the next scroll.
+    const LINE = 120;
+
+    // The tab body scrolls, not the window. Looked up directly rather than
+    // walked up from a section: the first one is still loading when this runs,
+    // so starting from it would bind the listener to the window, which never
+    // scrolls, and the highlight would never move again.
+    const scroller: HTMLElement | Window = document.querySelector<HTMLElement>('.scroll') ?? window;
+
+    const recompute = () => {
+      // The last sections can never reach the reading line — there is not
+      // enough page below them to scroll — so at the bottom the final one is
+      // what the reader is looking at, whatever the geometry says.
+      const box = scroller instanceof Window ? document.documentElement : scroller;
+      if (box.scrollTop + box.clientHeight >= box.scrollHeight - 4) {
+        setActive(LAST_SECTION);
+        return;
+      }
+
+      let current: string = SETTINGS_SECTIONS[0].id;
+      for (const entry of SETTINGS_SECTIONS) {
+        const node = document.getElementById(entry.id);
+        if (node && node.getBoundingClientRect().top <= LINE) current = entry.id;
+      }
+      setActive(current);
+    };
+
+    recompute();
+    scroller.addEventListener('scroll', recompute, { passive: true });
+    window.addEventListener('resize', recompute);
+    return () => {
+      scroller.removeEventListener('scroll', recompute);
+      window.removeEventListener('resize', recompute);
+    };
+  }, []);
+
+  return (
+    <nav className="settings-nav" aria-label="Settings sections">
+      <ul>
+        {SETTINGS_SECTIONS.map((entry) => (
+          <li key={entry.id}>
+            <button
+              type="button"
+              className={clsx('settings-nav-item', active === entry.id && 'active')}
+              aria-current={active === entry.id ? 'true' : undefined}
+              onClick={() =>
+                document
+                  .getElementById(entry.id)
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              }
+            >
+              <entry.Icon size={15} aria-hidden />
+              {entry.label}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }
 
@@ -189,7 +303,7 @@ function AppearanceSection({
   const following = !draft.themePreset;
 
   return (
-    <section className="card">
+    <section className="card settings-wide" id="settings-appearance">
       <SectionHeader
         title="Appearance"
         subtitle="Themes apply to this machine only. Nothing here changes what anyone else sees."
@@ -480,7 +594,7 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
   const profile = profileQuery.data;
 
   return (
-    <section className="card">
+    <section className="card settings-wide" id="settings-profile">
       <SectionHeader
         title="Profile"
         subtitle="Shown to friends and anyone who opens your profile from a post or the member list."
@@ -616,7 +730,7 @@ function DevicesSection({ onError }: { onError: (message: string) => void }) {
   });
 
   return (
-    <section className="card">
+    <section className="card" id="settings-devices">
       <SectionHeader
         title="Signed-in devices"
         subtitle="Revoking a device signs it out immediately."
