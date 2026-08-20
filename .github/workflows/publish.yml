@@ -34,7 +34,7 @@ env:
 jobs:
   image:
     name: Push image to GHCR
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     permissions:
       contents: read
       packages: write
@@ -88,7 +88,7 @@ jobs:
     # Built on every main push as well as on tags: the server image and the
     # client that talks to it are one release, and an image published without a
     # matching installer leaves users nothing to connect with.
-    runs-on: windows-latest
+    runs-on: [self-hosted, windows, x64]
     permissions:
       contents: write
     steps:
@@ -132,7 +132,7 @@ jobs:
       startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' && inputs.version != '')
     needs: [image, desktop]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     permissions:
       contents: write
     steps:
