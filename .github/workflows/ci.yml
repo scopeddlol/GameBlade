@@ -13,7 +13,7 @@ concurrency:
 jobs:
   verify:
     name: Typecheck, test and build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +48,7 @@ jobs:
 
   docker:
     name: Build image
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     steps:
       - uses: actions/checkout@v4
 
@@ -92,7 +92,7 @@ jobs:
 
   desktop:
     name: Build desktop client
-    runs-on: windows-latest
+    runs-on: [self-hosted, windows, x64]
     steps:
       - uses: actions/checkout@v4
 
