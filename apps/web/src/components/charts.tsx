@@ -267,27 +267,33 @@ export function ColumnChart({
  */
 export function RankedBars({
   points,
+  limit,
   emptyMessage = 'Nothing recorded yet.',
 }: {
   points: Point[];
+  /** Trims the tail; the ranking is what matters, not the long list. */
+  limit?: number;
   emptyMessage?: string;
 }) {
   if (points.length === 0) {
     return <p className="text-ink-400 py-6 text-center text-sm">{emptyMessage}</p>;
   }
 
+  // Scaled against the whole series, not the visible slice, so trimming the
+  // list never rescales the bars that stay.
   const max = Math.max(...points.map((point) => point.value), 1);
+  const shown = limit ? points.slice(0, limit) : points;
 
   return (
-    <ol className="space-y-2">
-      {points.map((point) => (
+    <ol className="space-y-1.5">
+      {shown.map((point) => (
         <li key={point.label} className="space-y-1">
-          <div className="flex items-baseline justify-between gap-3 text-sm">
+          <div className="flex items-baseline justify-between gap-3 text-[13px]">
             <span className="text-ink-200 min-w-0 truncate">{point.label}</span>
             {/* Value is text-token ink, never the series colour. */}
             <span className="text-ink-400 shrink-0 text-xs">{point.display}</span>
           </div>
-          <div className="bg-ink-800 h-2 overflow-hidden rounded-full">
+          <div className="bg-ink-800 h-1.5 overflow-hidden rounded-full">
             <div
               className="h-full rounded-full"
               style={{
@@ -351,13 +357,36 @@ export function Meter({
   );
 }
 
-/** A headline number. Not a one-bar chart. */
-export function StatTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
+/**
+ * A headline number. Not a one-bar chart.
+ *
+ * `dense` trades the breathing room for rows on screen — on a page of a dozen
+ * panels the padding is what pushes half of them below the fold.
+ */
+export function StatTile({
+  label,
+  value,
+  hint,
+  dense = false,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  dense?: boolean;
+}) {
   return (
-    <div className="gb-card p-4">
-      <p className="text-ink-400 text-xs font-medium tracking-wide uppercase">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{value}</p>
-      {hint ? <p className="text-ink-500 mt-0.5 text-xs">{hint}</p> : null}
+    <div className={dense ? 'gb-card px-3 py-2.5' : 'gb-card p-4'}>
+      <p className="text-ink-400 text-[11px] font-medium tracking-wide uppercase">{label}</p>
+      <p
+        className={
+          dense
+            ? 'text-lg font-semibold tracking-tight tabular-nums'
+            : 'mt-1 text-2xl font-semibold tracking-tight tabular-nums'
+        }
+      >
+        {value}
+      </p>
+      {hint ? <p className="text-ink-500 text-xs">{hint}</p> : null}
     </div>
   );
 }

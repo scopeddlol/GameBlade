@@ -5,6 +5,7 @@ import {
   Download,
   ExternalLink,
   FolderOpen,
+  FolderPlus,
   Heart,
   HeartOff,
   Info,
@@ -13,6 +14,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { useAddToLibrary, useRemoveFromLibrary } from '../hooks/useLibrary.js';
 import { buttonIcon } from '../lib/buttonIcons.js';
 import { errorMessage, ipc, type DownloadState, type InstalledGame } from '../lib/ipc.js';
 import type { MenuItem } from './ContextMenu.js';
@@ -32,6 +34,8 @@ export function useClientButtons(placement?: ClientButton['placement']) {
 export interface GameMenuActions {
   onOpen: (game: GameSummary) => void;
   onError: (message: string) => void;
+  /** Opens the group picker. Omitted where there is nowhere to render it. */
+  onManageGroups?: (game: GameSummary) => void;
 }
 
 /**
@@ -41,9 +45,11 @@ export interface GameMenuActions {
  * offer the same actions — a menu that changes depending on which grid the
  * same game is shown in is a menu nobody can learn.
  */
-export function useGameMenuItems({ onOpen, onError }: GameMenuActions) {
+export function useGameMenuItems({ onOpen, onError, onManageGroups }: GameMenuActions) {
   const queryClient = useQueryClient();
   const buttonsQuery = useClientButtons('game-menu');
+  const addToLibrary = useAddToLibrary();
+  const removeFromLibrary = useRemoveFromLibrary();
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['games'] });
@@ -115,13 +121,22 @@ export function useGameMenuItems({ onOpen, onError }: GameMenuActions) {
     items.push({
       label: game.inLibrary ? 'Remove from library' : 'Add to library',
       icon: game.inLibrary ? <X size={14} /> : <Check size={14} />,
+      // Optimistic, like the card's own button: the menu closes on select, so
+      // waiting on the round trip would leave nothing on screen acknowledging
+      // the click.
       onSelect: () =>
-        run(
-          game.inLibrary
-            ? ipc.del(`/games/${game.id}/library`)
-            : ipc.post(`/games/${game.id}/library`),
-        ),
+        (game.inLibrary ? removeFromLibrary : addToLibrary).mutate(game.id, {
+          onError: (caught) => onError(errorMessage(caught)),
+        }),
     });
+
+    if (onManageGroups) {
+      items.push({
+        label: 'Add to group…',
+        icon: <FolderPlus size={14} />,
+        onSelect: () => onManageGroups(game),
+      });
+    }
 
     if (installed) {
       items.push({ kind: 'separator' });

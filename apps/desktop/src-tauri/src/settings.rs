@@ -45,6 +45,34 @@ pub struct Settings {
 
     /// Verify each downloaded file against the server's SHA-256 when it has one.
     pub verify_downloads: bool,
+
+    /// Theme the user picked for this machine, or `None` to follow whatever the
+    /// server is set to. Machine-local on purpose: an operator chooses the look
+    /// of their archive, and a player gets to disagree on their own PC without
+    /// changing it for everyone.
+    #[serde(default)]
+    pub theme_preset: Option<String>,
+
+    /// A `#rrggbb` accent overriding the theme's own. Only meaningful once
+    /// `theme_preset` is set — following the server means following its accent.
+    #[serde(default)]
+    pub theme_accent: Option<String>,
+
+    /// How the Library tab lays its games out: `grid` or `list`.
+    #[serde(default = "default_library_view")]
+    pub library_view: String,
+
+    /// Show a game's logo artwork in place of its title where one exists.
+    #[serde(default = "default_true")]
+    pub use_logo_titles: bool,
+}
+
+fn default_library_view() -> String {
+    "grid".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -58,6 +86,10 @@ impl Default for Settings {
             minimize_on_launch: true,
             download_concurrency: 4,
             verify_downloads: true,
+            theme_preset: None,
+            theme_accent: None,
+            library_view: default_library_view(),
+            use_logo_titles: true,
         }
     }
 }
@@ -66,6 +98,25 @@ impl Settings {
     /// Clamp anything a hand-edited file could get wrong.
     pub fn sanitised(mut self) -> Self {
         self.download_concurrency = self.download_concurrency.clamp(1, 16);
+
+        // A hand-edited file could name a layout the client has no code for,
+        // which would leave the Library rendering nothing at all.
+        if self.library_view != "grid" && self.library_view != "list" {
+            self.library_view = default_library_view();
+        }
+
+        // An accent is written straight into a CSS custom property, so it is
+        // checked here rather than trusted: anything but a plain hex colour is
+        // dropped back to the theme's own.
+        if let Some(accent) = &self.theme_accent {
+            let valid = accent.len() == 7
+                && accent.starts_with('#')
+                && accent[1..].chars().all(|c| c.is_ascii_hexdigit());
+            if !valid {
+                self.theme_accent = None;
+            }
+        }
+
         if self.install_dir.as_os_str().is_empty() {
             self.install_dir = default_install_dir();
         }
@@ -157,6 +208,33 @@ mod tests {
                 PathBuf::from("/games/default"),
                 PathBuf::from("/games/second")
             ],
+        );
+    }
+
+    #[test]
+    fn sanitised_drops_a_layout_and_an_accent_the_client_cannot_render() {
+        let settings = Settings {
+            library_view: "carousel".to_string(),
+            theme_accent: Some("red".to_string()),
+            ..Settings::default()
+        };
+
+        let sanitised = settings.sanitised();
+
+        assert_eq!(sanitised.library_view, "grid");
+        assert_eq!(sanitised.theme_accent, None);
+    }
+
+    #[test]
+    fn sanitised_keeps_a_real_hex_accent() {
+        let settings = Settings {
+            theme_accent: Some("#ff0066".to_string()),
+            ..Settings::default()
+        };
+
+        assert_eq!(
+            settings.sanitised().theme_accent,
+            Some("#ff0066".to_string())
         );
     }
 

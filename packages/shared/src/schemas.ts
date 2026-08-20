@@ -7,7 +7,10 @@ import {
   CATALOG_GAP,
   CLIENT_BUTTON_ICONS,
   CLIENT_BUTTON_PLACEMENT,
+  COLLECTION_COLORS,
+  GAME_REQUEST_STATUS,
   MAX_CLIP_BYTES,
+  MAX_COLLECTIONS_PER_USER,
   MAX_IMAGE_BYTES,
   POST_KIND,
   PRESENCE_STATUS,
@@ -109,6 +112,8 @@ export const gameQuerySchema = z.object({
   favoritesOnly: z.coerce.boolean().optional(),
   /** Restrict to games the caller has added (Library) or excluded them (Store). */
   scope: z.enum(['all', 'library', 'not-in-library']).default('all'),
+  /** Narrows to one of the caller's own groups. */
+  collectionId: z.string().trim().max(64).optional(),
   includeMissing: z.coerce.boolean().default(false),
   sort: z
     .enum(['title', 'added', 'released', 'size', 'rating', 'played', 'playtime'])
@@ -551,3 +556,59 @@ export const purgeMissingSchema = z.object({
   olderThanDays: z.coerce.number().int().min(0).max(3650).default(0),
 });
 export type PurgeMissingInput = z.infer<typeof purgeMissingSchema>;
+
+/* --------------------------------------------------------- game requests */
+
+/**
+ * A player asking for a game to be added.
+ *
+ * Only a title is required. Anything more structured — a store link, a
+ * platform, a version — is guesswork the operator has to check anyway, so the
+ * free-text note carries it instead of six fields that are usually blank.
+ */
+export const createGameRequestSchema = z.object({
+  title: z.string().trim().min(2, 'Name the game').max(120),
+  note: z.string().trim().max(500).nullable().optional(),
+});
+export type CreateGameRequestInput = z.infer<typeof createGameRequestSchema>;
+
+export const gameRequestQuerySchema = z.object({
+  status: z.enum(GAME_REQUEST_STATUS).optional(),
+  search: z.string().trim().max(120).optional(),
+  sort: z.enum(['votes', 'newest', 'title']).default('votes'),
+  offset: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+export type GameRequestQuery = z.infer<typeof gameRequestQuerySchema>;
+
+/**
+ * An operator's decision on a request.
+ *
+ * `gameId` links a fulfilled request to the catalog entry that satisfied it,
+ * which is what lets the client show "you asked for this, here it is" rather
+ * than just marking the row done.
+ */
+export const decideGameRequestSchema = z.object({
+  status: z.enum(GAME_REQUEST_STATUS),
+  adminNote: z.string().trim().max(500).nullable().optional(),
+  gameId: z.string().trim().max(64).nullable().optional(),
+});
+export type DecideGameRequestInput = z.infer<typeof decideGameRequestSchema>;
+
+/* ----------------------------------------------------------- collections */
+
+export const collectionSchema = z.object({
+  name: z.string().trim().min(1, 'Name the group').max(60),
+  color: z.enum(COLLECTION_COLORS).default('blade'),
+});
+export type CollectionInput = z.infer<typeof collectionSchema>;
+
+export const collectionGamesSchema = z.object({
+  gameIds: z.array(z.string().trim().min(1).max(64)).min(1).max(500),
+});
+export type CollectionGamesInput = z.infer<typeof collectionGamesSchema>;
+
+export const reorderCollectionsSchema = z.object({
+  ids: z.array(z.string().trim().max(64)).max(MAX_COLLECTIONS_PER_USER),
+});
+export type ReorderCollectionsInput = z.infer<typeof reorderCollectionsSchema>;

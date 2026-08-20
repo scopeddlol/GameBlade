@@ -14,6 +14,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Eye, EyeOff, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { Icon, IconPicker } from '../../components/icons.js';
 import { LandingBlocks } from '../../components/LandingBlocks.js';
 import { Badge, Field, FormError, PageLoader, Spinner, Notice } from '../../components/ui.js';
 import { applyTheme, themeStyle } from '../../hooks/useTheme.js';
@@ -512,22 +513,11 @@ function BlockEditor({
           {block.items.map((item, index) => (
             <div key={index} className="border-ink-800 space-y-2 rounded-lg border p-2.5">
               <div className="flex gap-2">
-                <select
-                  className="gb-input w-auto"
-                  value={item.icon}
-                  aria-label="Icon"
-                  onChange={(event) => {
-                    const items = [...block.items];
-                    items[index] = { ...item, icon: event.target.value as typeof item.icon };
-                    onChange({ items });
-                  }}
-                >
-                  {LANDING_ICONS.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
+                {/* The mark the card will actually wear, beside the name it
+                    labels — picking one from a list of slugs means guessing. */}
+                <span className="border-ink-700 bg-ink-800 text-blade-400 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border">
+                  <Icon name={item.icon} className="h-5 w-5" />
+                </span>
                 <input
                   className="gb-input"
                   value={item.title}
@@ -548,6 +538,16 @@ function BlockEditor({
                   <Trash2 className="h-4 w-4" aria-hidden />
                 </button>
               </div>
+              <IconPicker
+                value={item.icon}
+                options={LANDING_ICONS}
+                label="Card icon"
+                onChange={(icon) => {
+                  const items = [...block.items];
+                  items[index] = { ...item, icon: icon as typeof item.icon };
+                  onChange({ items });
+                }}
+              />
               <textarea
                 className="gb-input min-h-16"
                 value={item.body}

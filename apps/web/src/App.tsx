@@ -16,6 +16,7 @@ import { AdminFeaturedPage } from './pages/admin/AdminFeaturedPage.js';
 import { AdminInvitesPage } from './pages/admin/AdminInvitesPage.js';
 import { AdminLibrariesPage } from './pages/admin/AdminLibrariesPage.js';
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage.js';
+import { AdminRequestsPage } from './pages/admin/AdminRequestsPage.js';
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage.js';
 import { AdminUsersPage } from './pages/admin/AdminUsersPage.js';
 import { AccountPage } from './pages/AccountPage.js';
@@ -105,6 +106,7 @@ export function App() {
         <Route index element={<AdminOverviewPage />} />
         <Route path="catalog" element={<AdminCatalogPage />} />
         <Route path="featured" element={<AdminFeaturedPage />} />
+        <Route path="requests" element={<AdminRequestsPage />} />
         <Route path="client" element={<AdminClientPage />} />
         <Route path="api" element={<AdminApiPage />} />
         <Route path="analytics" element={<AdminAnalyticsPage />} />

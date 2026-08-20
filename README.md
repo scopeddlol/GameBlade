@@ -203,6 +203,8 @@ the viewport rather than forcing the page sideways.
   desktop client needs to actually run and back up that game.
 - **Featured** — curates the carousel on the client's Home tab, in order, with
   a per-slot image override.
+- **Requests** — the queue of games players have asked for, ranked by how many
+  of them asked. See [Game requests](#game-requests).
 - **Desktop client** — your own links (a Discord invite, a wiki, a support
   page) rendered in the client's sidebar, on its Home tab, or in the menu that
   opens when a player right-clicks a game. Links only: the client hands the URL
@@ -264,18 +266,71 @@ menu with everything that applies to it: play or install, add to library,
 favourite, open the install folder, unlink, uninstall, plus any custom buttons
 placed there. Text fields keep the native menu, so copy and paste still work.
 
+### Game requests
+
+Players ask for what is not there, and the archive keeps a queue of it.
+
+**Store → Request** in the client takes a title and an optional note. Two people
+asking for the same game strengthen one row rather than producing two the
+operator has to reconcile: titles are matched on a normalised key, so
+`Half-Life 2: Episode One` and `half life 2 episode one` collide, while `Halo`
+and `Halo Wars` stay apart. The asker's vote is counted automatically, and
+anyone else can back a row or take their backing away.
+
+**Admin → Requests** is the other side of it: the queue ranked by votes, with
+four states — pending, coming soon, added, denied — a note players will see, and
+a field linking a fulfilled request to the catalog entry that satisfied it. Who
+asked is shown here and nowhere else; a wish list should not become a public
+record of who wants what.
+
+The client's Home tab draws the result: **Coming soon** for what has been
+promised, **Most requested** for what is still wanted, and **Recently granted**
+for requests that made it in — with an **Open** button straight to the game. A
+denied title reopens as pending if somebody else asks for it, because the
+second asker never saw that decision.
+
+### Groups
+
+A player's own shelves, private to their account. Right-click any game and
+choose **Add to group…** to file it — or make a group in the same dialog and
+file it there in one step. The Library tab then shows a chip per group beside
+the search box.
+
+Groups are per-account rather than server-wide: an operator already has genres
+and the featured rail to shape the catalog, and a shared group would need its
+own permissions model to answer "who may rename this". Nothing is copied or
+moved, and deleting a group leaves every game in it alone.
+
+### Library layouts
+
+The Library tab lays its games out as posters or as a dense list of rows with
+icons, sizes, playtime and achievement progress — four or five times as many
+titles on screen, which is the shape a large library wants. The choice lives in
+the client's settings file, so it survives a restart.
+
+Game pages show a title's logo artwork in place of its name wherever the archive
+has one; **Settings → Appearance** turns that off for anyone who would rather
+read the title.
+
 ### Theming
 
-Five presets — Midnight, Slate, Carbon, Nebula and a genuine light theme,
-Daylight — plus an optional accent colour that replaces the preset's own. Only
-the mid step is picked; the lighter and darker steps are derived from it, so
-hover, focus and gradient states keep working without asking anyone to choose
-four related colours by hand.
+Ten presets — eight dark (Midnight, Slate, Carbon, Nebula, Aurora, Ember, Moss,
+Oceanic) and two genuine light ones (Daylight, Parchment) — plus an optional
+accent colour that replaces the preset's own. Only the mid step is picked; the
+lighter and darker steps are derived from it, so hover, focus and gradient
+states keep working without asking anyone to choose four related colours by
+hand.
 
 A theme is a complete surface ramp rather than one hue: brightening only the
 accent on a near-black chrome produces something that reads as broken. The
 tokens are resolved server-side and applied by both the web app and the desktop
 client, so a server's look is one setting rather than two that drift.
+
+**Players can disagree.** The client's **Settings → Appearance** offers the same
+ten themes and the same accent picker, stored in that machine's settings file.
+Picking one overrides the server's for that PC only; **Follow the server** hands
+it back. An operator chooses the look of their archive, and nobody has their
+desktop restyled the next time that choice changes.
 
 ### Editing the landing page
 
@@ -368,13 +423,17 @@ and well-formed; it does not adjudicate them.
 
 The client is where players spend all their time. Five tabs down the left:
 
-| Tab          | What is there                                                                        |
-| ------------ | ------------------------------------------------------------------------------------ |
-| **Home**     | Featured carousel, jump back in, friends playing right now, activity, recent unlocks |
-| **Library**  | Games you own — install, launch, playtime, achievements and save sync                |
-| **Store**    | The whole archive, filterable, one click to add to your library                      |
-| **Social**   | Feed with screenshots and clips, comments, reactions, friends and requests           |
-| **Settings** | Profile, install location, save sync, presence, devices                              |
+| Tab          | What is there                                                                                                                                         |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Home**     | Your own totals, an auto-advancing featured carousel, jump back in, friends playing, what is coming soon and most requested, activity, recent unlocks |
+| **Library**  | Games you own, as posters or as a dense list — install, launch, playtime, achievements, save sync and your own groups                                 |
+| **Store**    | The whole archive, filterable, one click to add to your library, and a request box for what is not in it                                              |
+| **Social**   | Feed with screenshots and clips, comments, reactions, friends and requests                                                                            |
+| **Settings** | Profile, appearance, install location, save sync, presence, devices                                                                                   |
+
+Adding a game to your library applies immediately and only to the card you
+clicked, so a run down the store adding a dozen titles is a dozen clicks rather
+than a dozen round trips waited out one at a time.
 
 Installing, launching and playtime tracking are handled in Rust: the client
 extracts the archive, resolves the executable, watches the game process and

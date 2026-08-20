@@ -1,12 +1,15 @@
 import type { GameSummary, Paginated, StoreFacets } from '@gameblade/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Search, SlidersHorizontal } from 'lucide-react';
+import { MessageSquarePlus, Search, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { CollectionPicker } from '../components/CollectionPicker.js';
 import { ContextMenu, useContextMenu } from '../components/ContextMenu.js';
 import { GameCard } from '../components/GameCard.js';
 import { useGameMenuItems } from '../components/GameContextMenu.js';
+import { RequestsDialog } from '../components/GameRequests.js';
 import { Empty, ErrorNote, Loading } from '../components/ui.js';
+import { useAddToLibrary } from '../hooks/useLibrary.js';
 import { errorMessage, ipc, queryString } from '../lib/ipc.js';
 
 interface Filters extends StoreFacets {
@@ -28,17 +31,29 @@ const SORTS = [
  * archive is the point of a store, and a tick beside what you own reads better
  * than a catalog that mysteriously shrinks as you use it.
  */
-export function StoreTab({ onOpenGame }: { onOpenGame: (game: GameSummary) => void }) {
-  const queryClient = useQueryClient();
+export function StoreTab({
+  onOpenGame,
+  onOpenGameId,
+}: {
+  onOpenGame: (game: GameSummary) => void;
+  /** Opens a game the user has never seen in a list — a fulfilled request. */
+  onOpenGameId?: (gameId: string) => void;
+}) {
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
   const [genre, setGenre] = useState('');
   const [sort, setSort] = useState<(typeof SORTS)[number]['id']>('added');
   const [showFilters, setShowFilters] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [requesting, setRequesting] = useState(false);
+  const [grouping, setGrouping] = useState<GameSummary | null>(null);
 
   const menu = useContextMenu<GameSummary>();
-  const buildMenuItems = useGameMenuItems({ onOpen: onOpenGame, onError: setError });
+  const buildMenuItems = useGameMenuItems({
+    onOpen: onOpenGame,
+    onError: setError,
+    onManageGroups: setGrouping,
+  });
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(search.trim()), 250);
@@ -65,15 +80,10 @@ export function StoreTab({ onOpenGame }: { onOpenGame: (game: GameSummary) => vo
       ),
   });
 
-  const addMutation = useMutation({
-    mutationFn: (gameId: string) => ipc.post(`/games/${gameId}/library`),
-    onSuccess: () => {
-      setError(null);
-      void queryClient.invalidateQueries({ queryKey: ['games'] });
-      void queryClient.invalidateQueries({ queryKey: ['home'] });
-    },
-    onError: (caught) => setError(errorMessage(caught)),
-  });
+  // Optimistic: the card flips the moment it is clicked and rolls back only if
+  // the server refuses. One shared pending flag used to grey out every card in
+  // the grid at once, which made adding several games feel like a queue.
+  const addMutation = useAddToLibrary();
 
   const genres = filtersQuery.data?.genres ?? [];
 
@@ -113,6 +123,18 @@ export function StoreTab({ onOpenGame }: { onOpenGame: (game: GameSummary) => vo
             </option>
           ))}
         </select>
+
+        {/* Asking for something is the natural next step from failing to find
+            it, so the entry point lives on the screen where that happens. */}
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => setRequesting(true)}
+          title="Ask for a game that is not in the archive"
+        >
+          <MessageSquarePlus size={15} aria-hidden />
+          Request
+        </button>
       </div>
 
       {showFilters && genres.length > 0 ? (
@@ -146,6 +168,12 @@ export function StoreTab({ onOpenGame }: { onOpenGame: (game: GameSummary) => vo
         <Empty
           title="Nothing matches"
           message="Try a different search, or clear the genre filter."
+          action={
+            <button type="button" className="btn btn-primary" onClick={() => setRequesting(true)}>
+              <MessageSquarePlus size={15} aria-hidden />
+              Request {debounced ? `"${debounced}"` : 'a game'}
+            </button>
+          }
         />
       ) : (
         <>
@@ -159,14 +187,25 @@ export function StoreTab({ onOpenGame }: { onOpenGame: (game: GameSummary) => vo
                 game={game}
                 onOpen={onOpenGame}
                 primaryLabel="add"
-                busy={game.inLibrary || addMutation.isPending}
-                onPrimary={() => addMutation.mutate(game.id)}
+                busy={game.inLibrary}
+                onPrimary={() => {
+                  setError(null);
+                  addMutation.mutate(game.id, {
+                    onError: (caught) => setError(errorMessage(caught)),
+                  });
+                }}
                 onContextMenu={menu.open}
               />
             ))}
           </div>
         </>
       )}
+
+      {requesting ? (
+        <RequestsDialog onClose={() => setRequesting(false)} onOpenGame={onOpenGameId} />
+      ) : null}
+
+      {grouping ? <CollectionPicker game={grouping} onClose={() => setGrouping(null)} /> : null}
 
       {menu.state ? (
         <ContextMenu

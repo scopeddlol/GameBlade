@@ -235,3 +235,49 @@ export const REALTIME_PATH = '/api/realtime';
  * row, so presence never sticks at "online" after a hard disconnect.
  */
 export const REALTIME_HEARTBEAT_SECONDS = 25;
+
+/* -------------------------------------------------------------- requests */
+
+/**
+ * Where a player's game request sits in the operator's queue.
+ *
+ * `pending` is the inbox; the other three are decisions. Kept as a status on
+ * one row rather than as separate tables so a request that is denied and later
+ * reconsidered keeps its votes and its original wording.
+ */
+export const GAME_REQUEST_STATUS = ['pending', 'coming-soon', 'added', 'denied'] as const;
+
+export const GAME_REQUEST_STATUS_LABELS: Record<(typeof GAME_REQUEST_STATUS)[number], string> = {
+  pending: 'Pending',
+  'coming-soon': 'Coming soon',
+  added: 'Added',
+  denied: 'Denied',
+};
+
+/** How many requests one account may have open at once, so the queue stays a queue. */
+export const MAX_OPEN_REQUESTS_PER_USER = 20;
+
+/* ----------------------------------------------------------- collections */
+
+/**
+ * Colours a player can tag a group with. A fixed set rather than a colour
+ * picker: these are rendered as chips against the client's own surfaces, and an
+ * arbitrary hex is how you end up with an unreadable one.
+ */
+export const COLLECTION_COLORS = [
+  'blade',
+  'violet',
+  'emerald',
+  'amber',
+  'rose',
+  'cyan',
+  'slate',
+] as const;
+
+/** Ceiling on groups per account; the sidebar lists them all. */
+export const MAX_COLLECTIONS_PER_USER = 40;
+
+/* ------------------------------------------------------------ client UI */
+
+/** How the desktop library lays its games out. */
+export const LIBRARY_VIEW = ['grid', 'list'] as const;
