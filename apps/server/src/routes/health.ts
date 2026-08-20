@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
+import { VERSION } from '../lib/version.js';
 
 export async function healthRoutes(app: FastifyInstance): Promise<void> {
   const { db } = app.gameblade;
@@ -12,7 +13,7 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
   app.get('/health', async (_request, reply) => {
     try {
       db.run(sql`SELECT 1`);
-      return { status: 'ok', version: process.env.npm_package_version ?? '0.1.0' };
+      return { status: 'ok', version: VERSION };
     } catch (error) {
       return reply.code(503).send({
         status: 'error',
