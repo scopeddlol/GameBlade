@@ -11,6 +11,7 @@ import {
   users,
 } from '../db/schema.js';
 import type { AnalyticsService } from './analytics.js';
+import type { BugService } from './bugs.js';
 
 /** One thing that wants an operator's attention. */
 export interface HealthFinding {
@@ -57,6 +58,7 @@ export class HealthService {
     private readonly db: Db,
     private readonly config: Config,
     private readonly analytics: AnalyticsService,
+    private readonly bugs: BugService,
   ) {}
 
   async report(): Promise<HealthReport> {
@@ -158,6 +160,19 @@ export class HealthService {
         detail: 'Their downloads are being refused until the month turns over.',
         count: atQuota.length,
         href: '/admin/users',
+      });
+    }
+
+    const openBugs = this.bugs.openCount();
+    if (openBugs > 0) {
+      findings.push({
+        id: 'open-bugs',
+        severity: 'warning',
+        title: `${openBugs} unanswered bug ${plural(openBugs, 'report', 'reports')}`,
+        detail:
+          'Nobody has replied to these yet. A reporter who hears nothing back stops reporting.',
+        count: openBugs,
+        href: '/admin/bugs',
       });
     }
 

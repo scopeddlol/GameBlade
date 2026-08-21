@@ -1,6 +1,8 @@
 import {
   achievementDefinitionSchema,
   announcementSchema,
+  bugQuerySchema,
+  bugTriageSchema,
   applySaveSuggestionsSchema,
   createInviteSchema,
   clientButtonSchema,
@@ -70,6 +72,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     backups,
     health,
     checksums,
+    bugs,
   } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
@@ -732,6 +735,26 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const input = importAchievementsSchema.parse(request.body);
     return achievements.importFromSteam(id, input.steamAppId, input.replace);
+  });
+
+  // ---- Bug reports ----
+
+  app.get('/admin/bugs', async (request) => {
+    const context = requireAdmin(request);
+    return bugs.list(bugQuerySchema.parse(request.query), context.user.id);
+  });
+
+  /**
+   * Answering a report.
+   *
+   * The reply and the status both reach the reporter as a notification. That
+   * is the part that keeps reports coming: someone who never hears back
+   * concludes that reporting does nothing.
+   */
+  app.put('/admin/bugs/:id', async (request) => {
+    const context = requireAdmin(request);
+    const { id } = request.params as { id: string };
+    return bugs.triage(id, bugTriageSchema.parse(request.body), context.user.id);
   });
 
   // ---- Health ----

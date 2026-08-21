@@ -603,4 +603,29 @@ export const migrations: Migration[] = [
       CREATE INDEX game_files_integrity_idx ON game_files(integrity);
     `,
   },
+  {
+    id: '0012_bug_reports',
+    sql: `
+      -- Reports from the people actually using the thing. The diagnostics
+      -- columns are filled by the client so a reporter never has to know their
+      -- own client version, and an operator never has to go back and ask.
+      CREATE TABLE bug_reports (
+        id TEXT PRIMARY KEY,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        severity TEXT NOT NULL DEFAULT 'broken',
+        status TEXT NOT NULL DEFAULT 'open',
+        reply TEXT,
+        game_id TEXT REFERENCES games(id) ON DELETE SET NULL,
+        client_version TEXT,
+        platform TEXT,
+        diagnostics TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX bug_reports_status_idx ON bug_reports(status, created_at);
+      CREATE INDEX bug_reports_user_idx ON bug_reports(user_id, created_at);
+    `,
+  },
 ];

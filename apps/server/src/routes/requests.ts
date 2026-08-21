@@ -1,4 +1,5 @@
 import {
+  bugReportSchema,
   collectionGamesSchema,
   collectionSchema,
   createGameRequestSchema,
@@ -17,7 +18,29 @@ import { requireUser } from '../auth/middleware.js';
  * asked, and deciding — stays behind the admin scope.
  */
 export async function requestRoutes(app: FastifyInstance): Promise<void> {
-  const { gameRequests, collections, metadata } = app.gameblade;
+  const { gameRequests, collections, metadata, bugs } = app.gameblade;
+
+  /* ------------------------------------------------------------------ bugs */
+
+  /**
+   * Filing a bug.
+   *
+   * The diagnostics arrive with it rather than being asked for — a reporter
+   * should not need to know their own client version, and a report missing it
+   * is one an operator has to chase.
+   */
+  app.post('/bugs', async (request, reply) => {
+    const context = requireUser(request);
+    const input = bugReportSchema.parse(request.body);
+    reply.code(201);
+    return bugs.create(context.user.id, input);
+  });
+
+  /** The reports you filed, and where each got to. */
+  app.get('/bugs/mine', async (request) => {
+    const context = requireUser(request);
+    return bugs.mine(context.user.id);
+  });
 
   /* -------------------------------------------------------------- requests */
 

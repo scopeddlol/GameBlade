@@ -32,6 +32,7 @@ import { SocialService } from './services/social.js';
 import type Database from 'better-sqlite3';
 import { BackupService } from './services/backups.js';
 import { HealthService } from './services/health.js';
+import { BugService } from './services/bugs.js';
 
 export interface GamebladeContext {
   config: Config;
@@ -53,6 +54,8 @@ export interface GamebladeContext {
   backups: BackupService;
   /** What needs an operator's attention right now. */
   health: HealthService;
+  /** Reports from the people using it. */
+  bugs: BugService;
   apiKeys: ApiKeyService;
   bandwidth: BandwidthService;
   analytics: AnalyticsService;
@@ -108,12 +111,13 @@ export function createContext(
   const apiKeys = new ApiKeyService(db);
   const bandwidth = new BandwidthService(db, settings);
   const analytics = new AnalyticsService(db, bandwidth);
-  const health = new HealthService(db, config, analytics);
 
   const presence = new PresenceService();
   const profiles = new ProfileService(db, config, presence);
   const realtime = new RealtimeGateway(presence, profiles, logger);
   const notifications = new NotificationService(db, profiles, realtime);
+  const bugs = new BugService(db, profiles, notifications);
+  const health = new HealthService(db, config, analytics, bugs);
   const activity = new ActivityService(db, config, profiles, realtime);
   const friends = new FriendService(db, profiles, notifications, activity, realtime);
   const media = new MediaStore(db, config, logger);
@@ -158,6 +162,7 @@ export function createContext(
     saveManifest,
     backups,
     health,
+    bugs,
     apiKeys,
     bandwidth,
     analytics,

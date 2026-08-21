@@ -200,6 +200,7 @@ export const NOTIFICATION_KIND = [
   'post-reaction',
   'achievement',
   'announcement',
+  'bug-report',
 ] as const;
 
 /** Where an achievement definition came from, shown in the admin editor. */
@@ -286,3 +287,30 @@ export const MAX_COLLECTIONS_PER_USER = 40;
 
 /** How the desktop library lays its games out. */
 export const LIBRARY_VIEW = ['grid', 'list'] as const;
+
+/**
+ * Where a bug report has got to.
+ *
+ * `acknowledged` exists because the most common reason people stop reporting
+ * bugs is hearing nothing back; it costs an operator one click and tells the
+ * reporter a human has read it.
+ */
+export const BUG_STATUS = ['open', 'acknowledged', 'fixed', 'not-a-bug', 'duplicate'] as const;
+
+export const BUG_STATUS_LABELS: Record<(typeof BUG_STATUS)[number], string> = {
+  open: 'Open',
+  acknowledged: 'Looking into it',
+  fixed: 'Fixed',
+  'not-a-bug': 'Working as intended',
+  duplicate: 'Duplicate',
+};
+
+/** How severe the reporter says it is. Their words, not a triage decision. */
+export const BUG_SEVERITY = ['crash', 'broken', 'annoying', 'cosmetic'] as const;
+
+export const BUG_SEVERITY_LABELS: Record<(typeof BUG_SEVERITY)[number], string> = {
+  crash: 'It crashed',
+  broken: "Something doesn't work",
+  annoying: 'It works but it is painful',
+  cosmetic: 'It looks wrong',
+};

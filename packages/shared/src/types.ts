@@ -3,6 +3,8 @@ import type { ThemePreset, ThemeTokens } from './theme.js';
 import type {
   ACHIEVEMENT_SOURCE,
   ACTIVITY_KIND,
+  BUG_SEVERITY,
+  BUG_STATUS,
   API_SCOPES,
   ART_KIND,
   CATALOG_GAP,
@@ -771,4 +773,29 @@ export interface GameRequestSuggestion {
   requestId: string | null;
   status: GameRequestStatus | null;
   hasVoted: boolean;
+}
+
+/* -------------------------------------------------------------------- bugs */
+
+export type BugStatus = (typeof BUG_STATUS)[number];
+export type BugSeverity = (typeof BUG_SEVERITY)[number];
+
+export interface BugReportInfo {
+  id: string;
+  title: string;
+  body: string;
+  severity: BugSeverity;
+  status: BugStatus;
+  /** The operator's answer, shown to the reporter. */
+  reply: string | null;
+  gameId: string | null;
+  gameTitle: string | null;
+  clientVersion: string | null;
+  platform: string | null;
+  /** Admin-only: recent client errors gathered at report time. */
+  diagnostics: string | null;
+  /** Admin-only: who reported it. */
+  reporter: ProfileSummary | null;
+  createdAt: string;
+  updatedAt: string;
 }

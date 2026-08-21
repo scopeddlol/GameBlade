@@ -880,3 +880,34 @@ export const gameAchievementRules = sqliteTable(
     uniqueIndex('game_achievement_rules_key_idx').on(t.gameId, t.achievementKey),
   ],
 );
+
+/** A bug report, with the diagnostics the client gathered alongside it. */
+export const bugReports = sqliteTable(
+  'bug_reports',
+  {
+    id: text('id').primaryKey(),
+    /** Null once the reporter's account is gone; the report still stands. */
+    userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    severity: text('severity', { enum: ['crash', 'broken', 'annoying', 'cosmetic'] })
+      .notNull()
+      .default('broken'),
+    status: text('status', {
+      enum: ['open', 'acknowledged', 'fixed', 'not-a-bug', 'duplicate'],
+    })
+      .notNull()
+      .default('open'),
+    reply: text('reply'),
+    gameId: text('game_id').references(() => games.id, { onDelete: 'set null' }),
+    clientVersion: text('client_version'),
+    platform: text('platform'),
+    diagnostics: text('diagnostics'),
+    createdAt: text('created_at').notNull().default(now),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => [
+    index('bug_reports_status_idx').on(t.status, t.createdAt),
+    index('bug_reports_user_idx').on(t.userId, t.createdAt),
+  ],
+);

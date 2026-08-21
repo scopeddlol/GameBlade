@@ -384,6 +384,25 @@ is rendered as text and never as HTML, and a stored page that cannot be parsed
 falls back to the built-in one rather than taking the front door down. **Reset**
 restores the shipped page at any point.
 
+### Reporting a bug
+
+**Report a problem** sits in the client's sidebar, reachable from wherever
+something went wrong rather than on a page somebody has to go and find. The
+report carries the client version, the platform, the game if one was running,
+and the last few errors the app logged — none of which a reporter should have to
+know, and all of which an operator would otherwise have to go back and ask for.
+
+**Admin → Bug reports** is the queue: filter by state, read what the app logged
+just before, and answer. Whatever you set, and anything you write back, reaches
+the reporter as a notification, and they can see where each of their reports got
+to under Settings.
+
+That last part is the point rather than a nicety. Somebody who reports a problem
+and never learns whether it was read, fixed, or was never a bug has no reason to
+report the next one, and an archive tested by the people using it depends on
+them doing so. Unanswered reports show up on the health page for the same
+reason.
+
 ### Health and backups
 
 **Admin → Health** answers "is anything wrong", which analytics does not: disks
