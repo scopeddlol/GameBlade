@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseManifest, translatePath } from './saveManifest.js';
+import { matchCatalog, parseManifest, rankSaves, translatePath } from './saveManifest.js';
 
 /**
  * Translating save paths from the upstream manifest.
@@ -118,5 +118,75 @@ describe('parseManifest', () => {
   it('handles an empty document without throwing', () => {
     expect(parseManifest('')).toEqual([]);
     expect(parseManifest('---\n')).toEqual([]);
+  });
+});
+
+describe('matchCatalog', () => {
+  const entries = [
+    {
+      title: 'Half-Life 2: Episode One',
+      saves: [{ pathTemplate: '{install}\\hl2', include: null }],
+    },
+    { title: 'Celeste', saves: [{ pathTemplate: '{install}\\Saves', include: '*.celeste' }] },
+  ];
+
+  it('matches on the normalised key, not the exact string', () => {
+    const [hit] = matchCatalog(
+      [{ id: 'g1', title: 'half life 2 episode one', hasRule: false }],
+      entries,
+    );
+    expect(hit?.matchedTitle).toBe('Half-Life 2: Episode One');
+  });
+
+  it('reports the manifest title so a wrong match is visible', () => {
+    const [hit] = matchCatalog([{ id: 'g1', title: 'CELESTE', hasRule: false }], entries);
+    expect(hit).toMatchObject({ title: 'CELESTE', matchedTitle: 'Celeste' });
+  });
+
+  it('flags a game that already has a rule rather than hiding it', () => {
+    // Replacing a rule an operator wrote by hand should be their decision.
+    const [hit] = matchCatalog([{ id: 'g1', title: 'Celeste', hasRule: true }], entries);
+    expect(hit?.hasExistingRule).toBe(true);
+  });
+
+  it('says nothing about a game the manifest does not know', () => {
+    expect(
+      matchCatalog([{ id: 'g1', title: 'Some Homebrew Thing', hasRule: false }], entries),
+    ).toEqual([]);
+  });
+
+  it('does not match loosely across different games', () => {
+    // "Halo" must not pick up "Halo Wars"; only exact normalised keys count.
+    const halo = [{ title: 'Halo Wars', saves: [{ pathTemplate: '{install}', include: null }] }];
+    expect(matchCatalog([{ id: 'g1', title: 'Halo', hasRule: false }], halo)).toEqual([]);
+  });
+});
+
+describe('rankSaves', () => {
+  it('offers an install-relative path first', () => {
+    // The case that matters here: a repacked or portable build keeps its saves
+    // in its own folder rather than where the storefront release put them.
+    const ranked = rankSaves([
+      { pathTemplate: '{appdata}\\Game', include: null },
+      { pathTemplate: '{install}\\Saves', include: null },
+    ]);
+    expect(ranked[0]?.pathTemplate).toBe('{install}\\Saves');
+  });
+
+  it('leaves Microsoft Store container paths last', () => {
+    const ranked = rankSaves([
+      { pathTemplate: '{localappdata}\\Packages\\Pub.Game_abc\\SystemAppData\\wgs', include: null },
+      { pathTemplate: '{appdata}\\Game', include: null },
+    ]);
+    expect(ranked[0]?.pathTemplate).toBe('{appdata}\\Game');
+  });
+
+  it('does not lose any candidate', () => {
+    const saves = [
+      { pathTemplate: '{localappdata}\\Packages\\x', include: null },
+      { pathTemplate: '{install}\\a', include: null },
+      { pathTemplate: '{documents}\\b', include: null },
+    ];
+    expect(rankSaves(saves)).toHaveLength(3);
   });
 });

@@ -18,6 +18,7 @@ import { GameRequestService } from './services/gameRequests.js';
 import { InstallerService } from './services/installer.js';
 import { MediaStore } from './services/media.js';
 import { ImageCache } from './services/metadata/images.js';
+import { SaveManifestService } from './services/saveManifest.js';
 import { MetadataService } from './services/metadata/service.js';
 import { NotificationService } from './services/notifications.js';
 import { PlaytimeService } from './services/playtime.js';
@@ -43,6 +44,8 @@ export interface GamebladeContext {
   clientButtons: ClientButtonService;
   collections: CollectionService;
   gameRequests: GameRequestService;
+  /** Save-path data pulled from upstream, for suggesting rules. */
+  saveManifest: SaveManifestService;
   apiKeys: ApiKeyService;
   bandwidth: BandwidthService;
   analytics: AnalyticsService;
@@ -80,6 +83,7 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
   const settings = new SettingsService(db, config);
   const images = new ImageCache(db, config.imageCacheDir, logger);
   const metadata = new MetadataService(db, settings, images, logger, config.basePath);
+  const saveManifest = new SaveManifestService(config.dataDir);
   const scanner = new ScannerService(db, metadata, logger);
   const checksums = new ChecksumService(db, logger);
   const auth = new AuthService(db);
@@ -137,6 +141,7 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
     clientButtons,
     collections,
     gameRequests,
+    saveManifest,
     apiKeys,
     bandwidth,
     analytics,

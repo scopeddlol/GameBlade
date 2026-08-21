@@ -549,6 +549,21 @@ export const announcementSchema = z.object({
 });
 export type AnnouncementInput = z.infer<typeof announcementSchema>;
 
+/** Confirmed save-path suggestions, as the operator saw them on screen. */
+export const applySaveSuggestionsSchema = z.object({
+  rules: z
+    .array(
+      z.object({
+        gameId: z.string().trim().min(1).max(64),
+        pathTemplate: z.string().trim().min(1).max(500),
+        include: z.string().trim().max(500).nullable().optional(),
+      }),
+    )
+    .min(1)
+    .max(2000),
+});
+export type ApplySaveSuggestionsInput = z.infer<typeof applySaveSuggestionsSchema>;
+
 export const scanRequestSchema = z.object({
   libraryId: z.string().trim().max(64).optional(),
   /** Re-read every entry instead of trusting size/mtime. */

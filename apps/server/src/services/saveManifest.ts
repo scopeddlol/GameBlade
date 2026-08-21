@@ -1,6 +1,7 @@
 import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { matchKey } from '../lib/titles.js';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
@@ -270,4 +271,72 @@ export class SaveManifestService {
 
     return { games: entries.length, fetchedAt: new Date().toISOString(), stale: false };
   }
+}
+
+/**
+ * Orders a game's save locations by how likely each is to be the one in use.
+ *
+ * A title can have several: a Microsoft Store build writes under `Packages`, a
+ * storefront build writes to AppData, and a portable or repacked copy writes
+ * inside its own folder. An archive of self-hosted builds is the last case far
+ * more often than the first, so install-relative paths come first and Store
+ * container paths come last. The operator still picks; this only decides which
+ * one is offered first.
+ */
+export function rankSaves(saves: ManifestSavePath[]): ManifestSavePath[] {
+  const score = (save: ManifestSavePath): number => {
+    if (save.pathTemplate.startsWith('{install}')) return 0;
+    if (save.pathTemplate.includes('\\Packages\\')) return 2;
+    return 1;
+  };
+  return saves.slice().sort((a, b) => score(a) - score(b));
+}
+
+/** One catalog game matched against the manifest, for an operator to confirm. */
+export interface SaveRuleSuggestion {
+  gameId: string;
+  /** The archive's title. */
+  title: string;
+  /** The manifest's title, shown beside it so a wrong match is obvious. */
+  matchedTitle: string;
+  /** Whether a save rule already exists, in which case this would replace it. */
+  hasExistingRule: boolean;
+  saves: ManifestSavePath[];
+}
+
+/**
+ * Matches catalog titles against the manifest.
+ *
+ * On the normalised key the catalog already uses for its own matching, so
+ * "Half-Life 2: Episode One" and "half life 2 episode one" land together. Only
+ * exact key matches count — a fuzzy match across 11,000 titles produces
+ * confident nonsense, and this writes paths the client will later read and
+ * write files at.
+ */
+export function matchCatalog(
+  games: Array<{ id: string; title: string; hasRule: boolean }>,
+  entries: ManifestEntry[],
+): SaveRuleSuggestion[] {
+  const byKey = new Map<string, ManifestEntry>();
+  for (const entry of entries) {
+    const key = matchKey(entry.title);
+    // First writer wins: the manifest holds editions and re-releases under
+    // separate titles that normalise alike, and the earlier one is no worse a
+    // guess than the later.
+    if (key && !byKey.has(key)) byKey.set(key, entry);
+  }
+
+  const suggestions: SaveRuleSuggestion[] = [];
+  for (const game of games) {
+    const entry = byKey.get(matchKey(game.title));
+    if (!entry) continue;
+    suggestions.push({
+      gameId: game.id,
+      title: game.title,
+      matchedTitle: entry.title,
+      hasExistingRule: game.hasRule,
+      saves: rankSaves(entry.saves),
+    });
+  }
+  return suggestions;
 }
