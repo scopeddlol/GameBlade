@@ -222,6 +222,13 @@ export const downloadEvents = sqliteTable(
     userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
     gameId: text('game_id').references(() => games.id, { onDelete: 'set null' }),
     fileId: text('file_id'),
+    /**
+     * The download this file belongs to.
+     *
+     * A game is fetched as many files, one event each. Without this every
+     * count over the table measured files rather than downloads.
+     */
+    sessionId: text('session_id'),
     client: text('client').notNull().default('web'),
     bytesSent: integer('bytes_sent').notNull().default(0),
     startedAt: text('started_at').notNull().default(now),
@@ -231,6 +238,7 @@ export const downloadEvents = sqliteTable(
   (t) => [
     index('download_events_user_idx').on(t.userId),
     index('download_events_game_idx').on(t.gameId),
+    index('download_events_session_idx').on(t.sessionId),
   ],
 );
 

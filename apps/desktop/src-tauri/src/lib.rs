@@ -2,7 +2,6 @@ mod api;
 mod credentials;
 mod downloader;
 mod error;
-mod imagecache;
 mod install;
 mod launcher;
 mod realtime;
@@ -201,84 +200,21 @@ async fn api_delete(state: State<'_, AppState>, path: String) -> AppResult<serde
 /// Artwork needs the device token, which an `<img>` tag cannot send, so the URL
 /// carries it as a query parameter instead.
 ///
-/// With the local cache on, a copy already on disk is handed straight to the
-/// webview as a file URL and the server is not asked at all; anything else is
-/// fetched and stored on the way past, so the second visit to a page is served
-/// locally.
+/// Serving artwork from a local cache was tried here and withdrawn: the webview
+/// is bound by a content security policy that permits `self`, `data:`, `blob:`,
+/// `http:` and `https:`, and a `file://` URL is none of those, so every cache
+/// hit produced an image the webview refused to load. Reinstating it needs a
+/// scheme the policy allows, verified on a real Windows client rather than
+/// assumed.
 #[tauri::command]
-async fn image_url(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    path: String,
-) -> AppResult<String> {
-    let remote = {
-        let session = state.session.read().await;
-        let session = session.as_ref().ok_or(AppError::NotSignedIn)?;
-        let separator = if path.contains('?') { '&' } else { '?' };
-        format!(
-            "{}{}{}token={}",
-            session.server_url, path, separator, session.token
-        )
-    };
-
-    if !state.settings.read().await.cache_images {
-        return Ok(remote);
-    }
-
-    let root = state.app_data.join("imagecache");
-    let cached = imagecache::cache_path(&root, &path);
-
-    if imagecache::is_cached(&cached) {
-        return Ok(convert_file_src(&app, &cached).unwrap_or(remote));
-    }
-
-    // A cache miss must not make artwork slower to appear than it was without
-    // the cache, so the copy is written in the background and the remote URL is
-    // returned for this one render. The next render finds the file.
-    let client = state.client().await?;
-    let path_for_task = path.clone();
-    tauri::async_runtime::spawn(async move {
-        // A cache miss is not a failure the user needs to see: the remote URL
-        // was already returned and the image is on screen either way.
-        let _ = store_artwork(&client, &root, &path_for_task, &cached).await;
-    });
-
-    Ok(remote)
-}
-
-/// Fetches one artwork file into the cache, then trims the cache if needed.
-async fn store_artwork(
-    client: &ApiClient,
-    root: &std::path::Path,
-    path: &str,
-    destination: &std::path::Path,
-) -> AppResult<()> {
-    let bytes = client.get_bytes(path).await?;
-    if bytes.len() < 64 {
-        return Ok(());
-    }
-
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    // Written beside the target and renamed, so a half-written file is never
-    // visible to is_cached() if the app is closed mid-fetch.
-    let staging = destination.with_extension("part");
-    std::fs::write(&staging, &bytes)?;
-    std::fs::rename(&staging, destination)?;
-
-    imagecache::evict_if_needed(root)?;
-    Ok(())
-}
-
-/// The webview's own scheme for a file on disk.
-fn convert_file_src(app: &tauri::AppHandle, path: &std::path::Path) -> Option<String> {
-    let _ = app;
-    Some(
-        tauri::Url::parse(&format!("file://{}", path.to_str()?))
-            .ok()?
-            .to_string(),
-    )
+async fn image_url(state: State<'_, AppState>, path: String) -> AppResult<String> {
+    let session = state.session.read().await;
+    let session = session.as_ref().ok_or(AppError::NotSignedIn)?;
+    let separator = if path.contains('?') { '&' } else { '?' };
+    Ok(format!(
+        "{}{}{}token={}",
+        session.server_url, path, separator, session.token
+    ))
 }
 
 /// The version this client was built as, for comparing against the server's.
@@ -289,10 +225,10 @@ fn client_version(app: tauri::AppHandle) -> String {
 
 /// Downloads the installer the operator published and starts it.
 ///
-/// The running client is not replaced in place: the installer is what knows how
-/// to do that, and handing off to it means an update follows exactly the same
-/// path as a fresh install. The app stays open — the installer asks the user to
-/// close it if it needs to.
+/// The running client is not replaced in place: the installer already knows how
+/// to upgrade an install, and handing off to it means an update follows exactly
+/// the same path as a fresh one. The app stays open — the installer asks the
+/// user to close it if it needs to.
 #[tauri::command]
 async fn run_client_installer(
     app: tauri::AppHandle,
@@ -306,8 +242,8 @@ async fn run_client_installer(
         ));
     }
 
-    // Named per version so two downloads cannot collide, and dropped in the
-    // OS temp directory so an abandoned update does not linger in app data.
+    // Named per download so two cannot collide, and left in the OS temp
+    // directory so an abandoned update does not linger in app data.
     let name = format!("GameBlade-Setup-{}.exe", chrono::Utc::now().timestamp());
     let target = std::env::temp_dir().join(name);
     std::fs::write(&target, &bytes)?;
@@ -318,17 +254,6 @@ async fn run_client_installer(
         .map_err(|err| AppError::Other(format!("Could not start the installer: {err}")))?;
 
     Ok(target.to_string_lossy().to_string())
-}
-
-/// How much disk the artwork cache is using, and a way to empty it.
-#[tauri::command]
-async fn image_cache_size(state: State<'_, AppState>) -> AppResult<u64> {
-    Ok(imagecache::size_on_disk(&state.app_data.join("imagecache")))
-}
-
-#[tauri::command]
-async fn clear_image_cache(state: State<'_, AppState>) -> AppResult<()> {
-    imagecache::clear(&state.app_data.join("imagecache"))
 }
 
 /* ----------------------------------------------------------------- settings */
@@ -1050,8 +975,6 @@ pub fn run() {
             image_url,
             client_version,
             run_client_installer,
-            image_cache_size,
-            clear_image_cache,
             get_settings,
             update_settings,
             start_download,

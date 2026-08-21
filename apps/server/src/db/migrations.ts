@@ -544,4 +544,27 @@ export const migrations: Migration[] = [
       CREATE INDEX collection_games_game_idx ON collection_games(game_id);
     `,
   },
+  {
+    id: '0009_download_sessions',
+    sql: `
+      -- One row per file was being written, so every count(*) over this table
+      -- reported files rather than downloads: a 47-file game read as 47
+      -- downloads on every chart and in every total. Events now carry the
+      -- download they belong to.
+      ALTER TABLE download_events ADD COLUMN session_id TEXT;
+
+      -- Existing rows have no session to recover, so they are bucketed by the
+      -- hour they started in, per user and game. It is an approximation, and
+      -- only ever applies to history recorded before this column existed.
+      UPDATE download_events
+         SET session_id = coalesce(user_id, 'anon') || ':' ||
+                          coalesce(game_id, 'none') || ':' ||
+                          substr(started_at, 1, 13);
+
+      CREATE INDEX download_events_session_idx ON download_events(session_id);
+      -- The lookup that assigns a new event to an in-flight download.
+      CREATE INDEX download_events_recent_idx
+        ON download_events(user_id, game_id, started_at);
+    `,
+  },
 ];

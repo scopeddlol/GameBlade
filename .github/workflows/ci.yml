@@ -93,6 +93,19 @@ jobs:
   desktop:
     name: Build desktop client
     runs-on: [self-hosted, windows, x64]
+    # On a push to main, publish.yml builds the very same installers on the very
+    # same runner. There is one Windows runner, so running both means the second
+    # waits out the first for no benefit. This is the gate on pull requests,
+    # where publish.yml does not run at all.
+    if: github.event_name != 'push'
+    env:
+      # CI proves the client compiles and its tests pass; the installer it
+      # produces is a by-product nobody installs. Full LTO through a single
+      # codegen unit is most of what makes a release build take the best part of
+      # an hour, so the gate goes without it. publish.yml keeps the shipping
+      # settings, so what actually reaches users is unchanged.
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
     steps:
       - uses: actions/checkout@v4
 

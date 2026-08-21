@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, gte } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZipFile } from 'yazl';
 import { downloadEvents, gameFiles, games, libraries, type Game } from '../db/schema.js';
@@ -89,16 +89,54 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
     return row;
   }
 
+  /**
+   * How long after the last file a further one still counts as the same
+   * download. Generous, because a slow link or a paused transfer should not
+   * split one game into several, and two genuine downloads of the same game by
+   * the same person within half an hour are rare enough not to matter.
+   */
+  const SESSION_GAP_MS = 30 * 60_000;
+
+  /**
+   * The download this file belongs to, or a new one.
+   *
+   * A game arrives as many files and each gets its own row, so without this
+   * every count over the table measures files. The server cannot be told where
+   * a download begins — the web client just requests files — so it is inferred
+   * from the last event for the same game by the same person.
+   */
+  function sessionFor(userId: string, gameId: string, startedAt: string): string {
+    const cutoff = new Date(Date.parse(startedAt) - SESSION_GAP_MS).toISOString();
+
+    const recent = db
+      .select({ sessionId: downloadEvents.sessionId })
+      .from(downloadEvents)
+      .where(
+        and(
+          eq(downloadEvents.userId, userId),
+          eq(downloadEvents.gameId, gameId),
+          gte(downloadEvents.startedAt, cutoff),
+        ),
+      )
+      .orderBy(desc(downloadEvents.startedAt))
+      .limit(1)
+      .get();
+
+    return recent?.sessionId ?? newId('dls');
+  }
+
   function recordEvent(userId: string, gameId: string, fileId: string | null, client: string) {
     const id = newId('dle');
+    const startedAt = new Date().toISOString();
     db.insert(downloadEvents)
       .values({
         id,
         userId,
         gameId,
         fileId,
+        sessionId: sessionFor(userId, gameId, startedAt),
         client,
-        startedAt: new Date().toISOString(),
+        startedAt,
       })
       .run();
     return id;

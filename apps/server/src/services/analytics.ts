@@ -31,6 +31,8 @@ export interface AnalyticsReport {
     username: string | null;
     title: string | null;
     bytes: number;
+    /** How many files the download covered. */
+    files: number;
     completed: boolean;
     client: string;
   }>;
@@ -65,7 +67,7 @@ export class AnalyticsService {
 
     const summaryRow = this.db
       .select({
-        downloads: sql<number>`count(*)`,
+        downloads: sql<number>`count(distinct ${downloadEvents.sessionId})`,
         bytes: sql<number>`coalesce(sum(${downloadEvents.bytesSent}), 0)`,
         completed: sql<number>`sum(case when ${downloadEvents.completed} then 1 else 0 end)`,
         users: sql<number>`count(distinct ${downloadEvents.userId})`,
@@ -97,7 +99,7 @@ export class AnalyticsService {
       .select({
         date: sql<string>`substr(${downloadEvents.startedAt}, 1, 10)`,
         bytes: sql<number>`coalesce(sum(${downloadEvents.bytesSent}), 0)`,
-        downloads: sql<number>`count(*)`,
+        downloads: sql<number>`count(distinct ${downloadEvents.sessionId})`,
       })
       .from(downloadEvents)
       .where(inRange)
@@ -108,7 +110,7 @@ export class AnalyticsService {
       .select({
         month: sql<string>`substr(${downloadEvents.startedAt}, 1, 7)`,
         bytes: sql<number>`coalesce(sum(${downloadEvents.bytesSent}), 0)`,
-        downloads: sql<number>`count(*)`,
+        downloads: sql<number>`count(distinct ${downloadEvents.sessionId})`,
       })
       .from(downloadEvents)
       .groupBy(sql`substr(${downloadEvents.startedAt}, 1, 7)`)
@@ -120,14 +122,14 @@ export class AnalyticsService {
       .select({
         gameId: downloadEvents.gameId,
         title: games.title,
-        downloads: sql<number>`count(*)`,
+        downloads: sql<number>`count(distinct ${downloadEvents.sessionId})`,
         bytes: sql<number>`coalesce(sum(${downloadEvents.bytesSent}), 0)`,
       })
       .from(downloadEvents)
       .innerJoin(games, eq(games.id, downloadEvents.gameId))
       .where(inRange)
       .groupBy(downloadEvents.gameId, games.title)
-      .orderBy(sql`count(*) desc`)
+      .orderBy(sql`count(distinct ${downloadEvents.sessionId}) desc`)
       .limit(10)
       .all();
 
@@ -149,7 +151,7 @@ export class AnalyticsService {
       .select({
         userId: downloadEvents.userId,
         username: users.username,
-        downloads: sql<number>`count(*)`,
+        downloads: sql<number>`count(distinct ${downloadEvents.sessionId})`,
         bytes: sql<number>`coalesce(sum(${downloadEvents.bytesSent}), 0)`,
       })
       .from(downloadEvents)
@@ -160,22 +162,40 @@ export class AnalyticsService {
       .limit(10)
       .all();
 
-    const recentDownloads = this.db
+    // One row per download rather than per file. A game arrives as dozens of
+    // files and each writes its own event, so an ungrouped log showed the same
+    // game over and over and buried everything else.
+    const recentRows = this.db
       .select({
-        id: downloadEvents.id,
-        at: downloadEvents.startedAt,
-        username: users.username,
-        title: games.title,
-        bytes: downloadEvents.bytesSent,
-        completed: downloadEvents.completed,
-        client: downloadEvents.client,
+        id: downloadEvents.sessionId,
+        at: sql<string>`min(${downloadEvents.startedAt})`,
+        username: sql<string | null>`max(${users.username})`,
+        title: sql<string | null>`max(${games.title})`,
+        bytes: sql<number>`coalesce(sum(${downloadEvents.bytesSent}), 0)`,
+        files: sql<number>`count(*)`,
+        finished: sql<number>`sum(case when ${downloadEvents.completed} then 1 else 0 end)`,
+        client: sql<string>`max(${downloadEvents.client})`,
       })
       .from(downloadEvents)
       .leftJoin(users, eq(users.id, downloadEvents.userId))
       .leftJoin(games, eq(games.id, downloadEvents.gameId))
-      .orderBy(desc(downloadEvents.startedAt))
+      .groupBy(downloadEvents.sessionId)
+      .orderBy(sql`min(${downloadEvents.startedAt}) desc`)
       .limit(25)
       .all();
+
+    const recentDownloads = recentRows.map((row) => ({
+      id: row.id ?? '',
+      at: row.at,
+      username: row.username,
+      title: row.title,
+      bytes: Number(row.bytes),
+      files: Number(row.files),
+      // Complete only when every file in it finished; a download that stopped
+      // halfway has completed files in it but is not itself complete.
+      completed: Number(row.finished) === Number(row.files),
+      client: row.client,
+    }));
 
     return {
       rangeDays,
@@ -213,15 +233,7 @@ export class AnalyticsService {
         downloads: Number(row.downloads),
         bytes: Number(row.bytes),
       })),
-      recentDownloads: recentDownloads.map((row) => ({
-        id: row.id,
-        at: row.at,
-        username: row.username,
-        title: row.title,
-        bytes: Number(row.bytes),
-        completed: row.completed,
-        client: row.client,
-      })),
+      recentDownloads,
       quotas: this.quotaUsage(),
     };
   }

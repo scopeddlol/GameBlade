@@ -1,6 +1,7 @@
 import {
   achievementDefinitionSchema,
   announcementSchema,
+  applySaveSuggestionsSchema,
   createInviteSchema,
   clientButtonSchema,
   decideGameRequestSchema,
@@ -30,16 +31,18 @@ import {
   type PublicUser,
   type ServerSettings,
 } from '@gameblade/shared';
-import { eq, sql } from 'drizzle-orm';
+import { eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { requireAdmin } from '../auth/middleware.js';
 import { toPublicUser } from '../auth/service.js';
-import { gameFiles, games, invites, libraries, users } from '../db/schema.js';
+import { gameFiles, gameSaveRules, games, invites, libraries, users } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { isLikelyGameExecutable, listZipExecutables, sortCandidates } from '../lib/executables.js';
 import { newId, newInviteCode } from '../lib/ids.js';
+import { isoNow } from '../lib/time.js';
+import { matchCatalog } from '../services/saveManifest.js';
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
   const {
@@ -62,6 +65,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     analytics,
     bandwidth,
     social,
+    saveManifest,
   } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
@@ -724,6 +728,84 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const input = importAchievementsSchema.parse(request.body);
     return achievements.importFromSteam(id, input.steamAppId, input.replace);
+  });
+
+  // ---- Save-path suggestions ----
+
+  /**
+   * Where saves live, for tens of thousands of games.
+   *
+   * The alternative is an operator playing every title to find out where it
+   * wrote, which is the job this replaces. Suggestions are never applied on
+   * their own: a title match across 11,000 games is occasionally confident and
+   * wrong, and these paths are where the client will later read and write a
+   * player's saves.
+   */
+  app.get('/admin/save-manifest', async () => saveManifest.status());
+
+  app.post('/admin/save-manifest/refresh', async () => saveManifest.refresh());
+
+  app.get('/admin/save-manifest/suggestions', async () => {
+    const entries = await saveManifest.load();
+    if (entries.length === 0) {
+      return { suggestions: [], needsRefresh: true };
+    }
+
+    const withRules = new Set(
+      db
+        .select({ gameId: gameSaveRules.gameId })
+        .from(gameSaveRules)
+        .all()
+        .map((r) => r.gameId),
+    );
+
+    const catalog = db
+      .select({ id: games.id, title: games.title })
+      .from(games)
+      .where(isNull(games.missingAt))
+      .all()
+      .map((game) => ({ ...game, hasRule: withRules.has(game.id) }));
+
+    return { suggestions: matchCatalog(catalog, entries), needsRefresh: false };
+  });
+
+  /**
+   * Writes the confirmed suggestions as save rules.
+   *
+   * Each entry names the path the operator picked rather than the server
+   * choosing again, so what is stored is what they saw on screen.
+   */
+  app.post('/admin/save-manifest/apply', async (request) => {
+    const input = applySaveSuggestionsSchema.parse(request.body);
+    let applied = 0;
+
+    db.transaction((tx) => {
+      for (const entry of input.rules) {
+        const game = tx
+          .select({ id: games.id })
+          .from(games)
+          .where(eq(games.id, entry.gameId))
+          .get();
+        if (!game) continue;
+
+        // One rule per game, as elsewhere: a save replaces rather than adds.
+        tx.delete(gameSaveRules).where(eq(gameSaveRules.gameId, entry.gameId)).run();
+        tx.insert(gameSaveRules)
+          .values({
+            id: newId('svr'),
+            gameId: entry.gameId,
+            pathTemplate: entry.pathTemplate,
+            include: entry.include ?? null,
+            exclude: null,
+            note: 'From the save-path manifest',
+            createdAt: isoNow(),
+          })
+          .run();
+        applied += 1;
+      }
+    });
+
+    return { applied };
   });
 
   // ---- Announcements ----

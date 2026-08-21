@@ -30,6 +30,7 @@ interface AnalyticsReport {
     username: string | null;
     title: string | null;
     bytes: number;
+    files: number;
     completed: boolean;
     client: string;
   }>;
@@ -328,6 +329,7 @@ export function AdminAnalyticsPage() {
                   <th className="py-1.5 pr-3 font-medium">When</th>
                   <th className="py-1.5 pr-3 font-medium">Who</th>
                   <th className="py-1.5 pr-3 font-medium">Game</th>
+                  <th className="py-1.5 pr-3 font-medium">Files</th>
                   <th className="py-1.5 pr-3 font-medium">Size</th>
                   <th className="py-1.5 font-medium">Status</th>
                 </tr>
@@ -340,6 +342,9 @@ export function AdminAnalyticsPage() {
                     </td>
                     <td className="py-1.5 pr-3">{row.username ?? '—'}</td>
                     <td className="max-w-[18rem] truncate py-1.5 pr-3">{row.title ?? '—'}</td>
+                    <td className="text-ink-400 py-1.5 pr-3 tabular-nums">
+                      {row.files.toLocaleString()}
+                    </td>
                     <td className="py-1.5 pr-3 tabular-nums">{formatBytes(row.bytes)}</td>
                     <td className="py-1.5">
                       {row.completed ? (

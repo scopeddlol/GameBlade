@@ -45,7 +45,7 @@ pub fn resolve_template(template: &str, install_dir: &Path) -> PathBuf {
         .map(|c| if c == '/' || c == '\\' { separator } else { c })
         .collect();
 
-    let replacements: [(&str, Option<PathBuf>); 7] = [
+    let replacements: [(&str, Option<PathBuf>); 9] = [
         ("{userprofile}", dirs::home_dir()),
         ("{appdata}", dirs::config_dir()),
         ("{localappdata}", dirs::cache_dir()),
@@ -56,6 +56,13 @@ pub fn resolve_template(template: &str, install_dir: &Path) -> PathBuf {
         ),
         ("{public}", std::env::var("PUBLIC").ok().map(PathBuf::from)),
         ("{install}", Some(install_dir.to_path_buf())),
+        // Both appear in upstream save-path data often enough to matter: 149
+        // games save under ProgramData and a handful under the Windows folder.
+        (
+            "{programdata}",
+            std::env::var("ProgramData").ok().map(PathBuf::from),
+        ),
+        ("{windir}", std::env::var("windir").ok().map(PathBuf::from)),
     ];
 
     for (token, value) in replacements {
