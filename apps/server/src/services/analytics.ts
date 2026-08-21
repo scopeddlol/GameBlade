@@ -247,7 +247,14 @@ export class AnalyticsService {
    * through a normal query, saw the real figure; two ways of asking the same
    * question is exactly how that goes unnoticed.
    */
-  private quotaUsage(): AnalyticsReport['quotas'] {
+  /**
+   * Month-to-date usage for every account that has an allowance.
+   *
+   * Public because the health page needs the same answer, and a second
+   * implementation of it is how the two come to disagree — this one already
+   * silently reported zero for everybody once.
+   */
+  quotaUsage(): AnalyticsReport['quotas'] {
     const monthStart = BandwidthService.periodStart();
 
     const usage = new Map(

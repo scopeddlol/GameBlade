@@ -29,6 +29,9 @@ import { SaveService } from './services/saves.js';
 import { ScannerService } from './services/scanner.js';
 import { SettingsService } from './services/settings.js';
 import { SocialService } from './services/social.js';
+import type Database from 'better-sqlite3';
+import { BackupService } from './services/backups.js';
+import { HealthService } from './services/health.js';
 
 export interface GamebladeContext {
   config: Config;
@@ -46,6 +49,10 @@ export interface GamebladeContext {
   gameRequests: GameRequestService;
   /** Save-path data pulled from upstream, for suggesting rules. */
   saveManifest: SaveManifestService;
+  /** Archives of everything in the data directory that cannot be recreated. */
+  backups: BackupService;
+  /** What needs an operator's attention right now. */
+  health: HealthService;
   apiKeys: ApiKeyService;
   bandwidth: BandwidthService;
   analytics: AnalyticsService;
@@ -79,11 +86,17 @@ declare module 'fastify' {
  * no dependencies, profiles reads it, the realtime gateway routes on top of
  * both, and everything that notifies or records activity sits above that.
  */
-export function createContext(config: Config, db: Db, logger: FastifyBaseLogger): GamebladeContext {
+export function createContext(
+  config: Config,
+  db: Db,
+  sqlite: Database.Database,
+  logger: FastifyBaseLogger,
+): GamebladeContext {
   const settings = new SettingsService(db, config);
   const images = new ImageCache(db, config.imageCacheDir, logger);
   const metadata = new MetadataService(db, settings, images, logger, config.basePath);
   const saveManifest = new SaveManifestService(config.dataDir);
+  const backups = new BackupService(config.dataDir, sqlite);
   const scanner = new ScannerService(db, metadata, logger);
   const checksums = new ChecksumService(db, logger);
   const auth = new AuthService(db);
@@ -95,6 +108,7 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
   const apiKeys = new ApiKeyService(db);
   const bandwidth = new BandwidthService(db, settings);
   const analytics = new AnalyticsService(db, bandwidth);
+  const health = new HealthService(db, config, analytics);
 
   const presence = new PresenceService();
   const profiles = new ProfileService(db, config, presence);
@@ -142,6 +156,8 @@ export function createContext(config: Config, db: Db, logger: FastifyBaseLogger)
     collections,
     gameRequests,
     saveManifest,
+    backups,
+    health,
     apiKeys,
     bandwidth,
     analytics,

@@ -11,6 +11,7 @@ import { AdminCatalogPage } from './pages/admin/AdminCatalogPage.js';
 import { AdminAnalyticsPage } from './pages/admin/AdminAnalyticsPage.js';
 import { AdminAppearancePage } from './pages/admin/AdminAppearancePage.js';
 import { AdminApiPage } from './pages/admin/AdminApiPage.js';
+import { AdminHealthPage } from './pages/admin/AdminHealthPage.js';
 import { AdminSavePathsPage } from './pages/admin/AdminSavePathsPage.js';
 import { AdminClientPage } from './pages/admin/AdminClientPage.js';
 import { AdminFeaturedPage } from './pages/admin/AdminFeaturedPage.js';
@@ -113,6 +114,7 @@ export function App() {
         <Route path="analytics" element={<AdminAnalyticsPage />} />
         <Route path="appearance" element={<AdminAppearancePage />} />
         <Route path="save-paths" element={<AdminSavePathsPage />} />
+        <Route path="health" element={<AdminHealthPage />} />
         <Route path="libraries" element={<AdminLibrariesPage />} />
         <Route path="users" element={<AdminUsersPage />} />
         <Route path="invites" element={<AdminInvitesPage />} />

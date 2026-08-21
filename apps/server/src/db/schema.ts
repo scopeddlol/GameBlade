@@ -175,6 +175,15 @@ export const gameFiles = sqliteTable(
     modifiedAt: text('modified_at').notNull(),
     /** Computed lazily on first desktop download so scans stay fast. */
     sha256: text('sha256'),
+    /**
+     * What the last verification run concluded, or null if none has run.
+     *
+     * `ok` the bytes still hash to what was recorded; `mismatch` they do not,
+     * which for an archive is corruption rather than an edit; `missing` the
+     * file is gone.
+     */
+    integrity: text('integrity', { enum: ['ok', 'mismatch', 'missing'] }),
+    verifiedAt: text('verified_at'),
   },
   (t) => [
     uniqueIndex('game_files_game_relpath_idx').on(t.gameId, t.relPath),

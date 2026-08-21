@@ -84,7 +84,8 @@ const ORPHAN_MEDIA_GRACE_HOURS = 6;
 
 /** Periodic background work: rescans plus expiry cleanup. */
 export function startSchedules(app: FastifyInstance): () => void {
-  const { config, scanner, auth, activity, notifications, media, playtime } = app.gameblade;
+  const { config, scanner, auth, activity, notifications, media, playtime, settings, backups } =
+    app.gameblade;
   const timers: NodeJS.Timeout[] = [];
 
   if (config.scanOnStart) {
@@ -106,6 +107,38 @@ export function startSchedules(app: FastifyInstance): () => void {
     interval.unref();
     timers.push(interval);
   }
+
+  /**
+   * Scheduled archives of the data directory.
+   *
+   * Checked hourly against a setting rather than scheduled once at boot, so
+   * changing the interval takes effect without a restart. A run that overlaps
+   * the previous one is skipped rather than queued — two zips of the same
+   * directory at once is only ever slower.
+   */
+  let backupRunning = false;
+  let lastBackupAt = 0;
+  const backupTimer = setInterval(() => {
+    const { backupKeep, backupEveryHours, backupIncludeImages } = settings.get();
+    if (backupEveryHours <= 0 || backupRunning) return;
+    if (Date.now() - lastBackupAt < backupEveryHours * 3_600_000) return;
+
+    backupRunning = true;
+    lastBackupAt = Date.now();
+    void backups
+      .create({
+        keep: backupKeep,
+        everyHours: backupEveryHours,
+        includeImages: backupIncludeImages,
+      })
+      .then((info) => app.log.info({ backup: info.name, bytes: info.sizeBytes }, 'backup written'))
+      .catch((error: unknown) => app.log.error({ err: error }, 'scheduled backup failed'))
+      .finally(() => {
+        backupRunning = false;
+      });
+  }, 60 * 60_000);
+  backupTimer.unref();
+  timers.push(backupTimer);
 
   const cleanup = setInterval(() => {
     try {

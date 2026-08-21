@@ -33,6 +33,7 @@ import {
 } from '@gameblade/shared';
 import { eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
+import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { requireAdmin } from '../auth/middleware.js';
@@ -66,6 +67,9 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     bandwidth,
     social,
     saveManifest,
+    backups,
+    health,
+    checksums,
   } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
@@ -728,6 +732,86 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     const input = importAchievementsSchema.parse(request.body);
     return achievements.importFromSteam(id, input.steamAppId, input.replace);
+  });
+
+  // ---- Health ----
+
+  /**
+   * What needs attention right now, as opposed to what happened.
+   *
+   * Everything here is derived from rows already being written, so there is no
+   * second source of truth to drift from the thing it describes.
+   */
+  app.get('/admin/health', async () => health.report());
+
+  /**
+   * Re-hashes a game's files and records whether each still matches.
+   *
+   * Only files that were hashed once already have anything to compare against;
+   * the rest are left alone. Findings surface on the health page.
+   */
+  app.post('/admin/games/:id/verify', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (checksums.isRunning) {
+      throw ApiError.conflict('A checksum run is already in progress');
+    }
+    void checksums.start(id, { verify: true });
+    return reply.code(202).send({ started: true });
+  });
+
+  app.get('/admin/verify/progress', async () => checksums.getProgress());
+
+  // ---- Backups ----
+
+  /**
+   * Archives of everything in the data directory that cannot be recreated.
+   *
+   * The library itself is not in them: it is enormous, an operator already has
+   * it, and a scan rebuilds every catalog row from it. What is in them is the
+   * database, every player's cloud saves, uploaded media and the published
+   * installer — none of which exists anywhere else.
+   */
+  app.get('/admin/backups', async () => {
+    const current = settings.get();
+    return {
+      backups: await backups.list(),
+      settings: {
+        keep: current.backupKeep,
+        everyHours: current.backupEveryHours,
+        includeImages: current.backupIncludeImages,
+      },
+    };
+  });
+
+  app.post('/admin/backups', async (request, reply) => {
+    const current = settings.get();
+    const info = await backups.create({
+      keep: current.backupKeep,
+      everyHours: current.backupEveryHours,
+      includeImages: current.backupIncludeImages,
+    });
+    return reply.code(201).send(info);
+  });
+
+  app.get('/admin/backups/:name', async (request, reply) => {
+    const { name } = request.params as { name: string };
+    const target = backups.pathFor(name);
+    if (!target) throw ApiError.badRequest('That is not a backup name');
+
+    const info = await stat(target).catch(() => null);
+    if (!info?.isFile()) throw ApiError.notFound('Backup not found');
+
+    return reply
+      .header('Content-Type', 'application/zip')
+      .header('Content-Length', String(info.size))
+      .header('Content-Disposition', `attachment; filename="${name}"`)
+      .send(createReadStream(target));
+  });
+
+  app.delete('/admin/backups/:name', async (request) => {
+    const { name } = request.params as { name: string };
+    if (!(await backups.remove(name))) throw ApiError.badRequest('That is not a backup name');
+    return { ok: true };
   });
 
   // ---- Save-path suggestions ----

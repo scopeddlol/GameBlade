@@ -12,6 +12,7 @@ import {
   MonitorSmartphone,
   HardDriveDownload,
   Palette,
+  Stethoscope,
   Server,
   Sliders,
   Sparkles,
@@ -26,6 +27,7 @@ import { useSession } from '../hooks/useSession.js';
 
 const SECTIONS = [
   { to: '/admin', end: true, icon: LayoutDashboard, label: 'Overview' },
+  { to: '/admin/health', end: false, icon: Stethoscope, label: 'Health' },
   { to: '/admin/analytics', end: false, icon: ChartLine, label: 'Analytics' },
   { to: '/admin/catalog', end: false, icon: Gamepad2, label: 'Catalog' },
   { to: '/admin/featured', end: false, icon: Sparkles, label: 'Featured' },

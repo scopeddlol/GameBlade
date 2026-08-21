@@ -592,4 +592,15 @@ export const migrations: Migration[] = [
         ON game_achievement_rules(game_id, achievement_key);
     `,
   },
+  {
+    id: '0011_file_integrity',
+    sql: `
+      -- What a verification run last concluded about each file. Null until one
+      -- has been done, which is also the state for a library nobody has
+      -- verified yet.
+      ALTER TABLE game_files ADD COLUMN integrity TEXT;
+      ALTER TABLE game_files ADD COLUMN verified_at TEXT;
+      CREATE INDEX game_files_integrity_idx ON game_files(integrity);
+    `,
+  },
 ];
