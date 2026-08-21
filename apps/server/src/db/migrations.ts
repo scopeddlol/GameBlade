@@ -567,4 +567,29 @@ export const migrations: Migration[] = [
         ON download_events(user_id, game_id, started_at);
     `,
   },
+  {
+    id: '0010_achievement_rules',
+    sql: `
+      -- How to tell, from a file the game itself wrote, that an achievement
+      -- was earned. Achievements have been definable since the start but
+      -- nothing ever unlocked one; this is the missing half.
+      CREATE TABLE game_achievement_rules (
+        id TEXT PRIMARY KEY,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        achievement_key TEXT NOT NULL,
+        -- Same template vocabulary as save rules: {install}, {appdata}, ...
+        source_template TEXT NOT NULL,
+        format TEXT NOT NULL DEFAULT 'json',
+        selector TEXT NOT NULL,
+        comparator TEXT NOT NULL DEFAULT 'truthy',
+        value TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX game_achievement_rules_game_idx ON game_achievement_rules(game_id);
+      -- One rule per achievement: two rules racing to unlock the same thing
+      -- would be a contradiction rather than a redundancy.
+      CREATE UNIQUE INDEX game_achievement_rules_key_idx
+        ON game_achievement_rules(game_id, achievement_key);
+    `,
+  },
 ];

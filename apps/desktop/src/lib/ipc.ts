@@ -139,6 +139,10 @@ export const ipc = {
   /** Artwork paths need the device token appended before an <img> can load them. */
   imageUrl: (path: string) => invoke<string>('image_url', { path }),
 
+  /** Reads one of a game's own files, for evaluating achievement rules. */
+  readRuleFile: (gameId: string, template: string) =>
+    invoke<string | null>('read_rule_file', { gameId, template }),
+
   /* --------------------------------------------------------------- updates */
 
   /** The version this client was built as. */

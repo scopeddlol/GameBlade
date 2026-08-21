@@ -1,3 +1,4 @@
+import { ACHIEVEMENT_COMPARATORS, ACHIEVEMENT_FORMATS } from './achievementRules.js';
 import { z } from 'zod';
 import { THEME_PRESETS } from './theme.js';
 import {
@@ -563,6 +564,29 @@ export const applySaveSuggestionsSchema = z.object({
     .max(2000),
 });
 export type ApplySaveSuggestionsInput = z.infer<typeof applySaveSuggestionsSchema>;
+
+/** One achievement rule, as an administrator writes it. */
+export const achievementRuleSchema = z.object({
+  achievementKey: z.string().trim().min(1).max(120),
+  sourceTemplate: z.string().trim().min(1).max(500),
+  format: z.enum(ACHIEVEMENT_FORMATS),
+  selector: z.string().trim().min(1).max(300),
+  comparator: z.enum(ACHIEVEMENT_COMPARATORS),
+  value: z.string().trim().max(120).nullable().optional(),
+});
+export type AchievementRuleInput = z.infer<typeof achievementRuleSchema>;
+
+/** A game's rules, replaced wholesale. */
+export const achievementRulesSchema = z.object({
+  rules: z.array(achievementRuleSchema).max(500),
+});
+export type AchievementRulesInput = z.infer<typeof achievementRulesSchema>;
+
+/** What the client reports after reading a game's files. */
+export const reportUnlocksSchema = z.object({
+  keys: z.array(z.string().trim().min(1).max(120)).max(500),
+});
+export type ReportUnlocksInput = z.infer<typeof reportUnlocksSchema>;
 
 export const scanRequestSchema = z.object({
   libraryId: z.string().trim().max(64).optional(),

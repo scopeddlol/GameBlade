@@ -845,3 +845,29 @@ export type NotificationRow = typeof notifications.$inferSelect;
 export type PlaySession = typeof playSessions.$inferSelect;
 export type GameRequestRow = typeof gameRequests.$inferSelect;
 export type CollectionRow = typeof collections.$inferSelect;
+
+/** How to tell, from a file the game wrote, that an achievement was earned. */
+export const gameAchievementRules = sqliteTable(
+  'game_achievement_rules',
+  {
+    id: text('id').primaryKey(),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    achievementKey: text('achievement_key').notNull(),
+    sourceTemplate: text('source_template').notNull(),
+    format: text('format', { enum: ['json', 'ini', 'text'] })
+      .notNull()
+      .default('json'),
+    selector: text('selector').notNull(),
+    comparator: text('comparator', { enum: ['present', 'truthy', 'equals', 'at-least'] })
+      .notNull()
+      .default('truthy'),
+    value: text('value'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    index('game_achievement_rules_game_idx').on(t.gameId),
+    uniqueIndex('game_achievement_rules_key_idx').on(t.gameId, t.achievementKey),
+  ],
+);
