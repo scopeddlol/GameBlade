@@ -1,5 +1,6 @@
 import type { GameDetail, GameSummary, LaunchRule, SaveRule } from '@gameblade/shared';
 import type { Game, gameLaunchRules, gameSaveRules } from '../db/schema.js';
+import type { AchievementComparator, AchievementFormat, AchievementRule } from '@gameblade/shared';
 
 /**
  * Extends a summary — already decorated with the caller's ownership, playtime
@@ -53,5 +54,26 @@ export function toLaunchRule(row: typeof gameLaunchRules.$inferSelect): LaunchRu
     args: row.args,
     workingDir: row.workingDir,
     note: row.note,
+  };
+}
+
+/** One achievement rule as the client and the admin panel see it. */
+export function toAchievementRule(row: {
+  id: string;
+  achievementKey: string;
+  sourceTemplate: string;
+  format: AchievementFormat;
+  selector: string;
+  comparator: AchievementComparator;
+  value: string | null;
+}): AchievementRule & { id: string } {
+  return {
+    id: row.id,
+    achievementKey: row.achievementKey,
+    sourceTemplate: row.sourceTemplate,
+    format: row.format,
+    selector: row.selector,
+    comparator: row.comparator,
+    value: row.value,
   };
 }

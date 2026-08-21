@@ -35,6 +35,11 @@ import {
 } from '../../components/ui.js';
 import { api, ApiRequestError, queryString } from '../../lib/api.js';
 import { formatBytes } from '../../lib/format.js';
+import {
+  ACHIEVEMENT_COMPARATORS,
+  ACHIEVEMENT_FORMATS,
+  type AchievementRule,
+} from '@gameblade/shared';
 
 /**
  * The gaps worth filtering on, in the order they matter.
@@ -1303,6 +1308,210 @@ function RulesTab({ gameId }: { gameId: string }) {
           Save sync rule
         </button>
       </section>
+
+      <AchievementRulesSection gameId={gameId} onError={setError} />
     </div>
+  );
+}
+
+/**
+ * When each of this game's achievements counts as earned.
+ *
+ * Achievements have been importable since the start and nothing ever unlocked
+ * one — there was no way to say what earning it looks like. A rule names a file
+ * the game writes and what to find in it; the client reads it when a session
+ * ends and reports only the keys that came out.
+ *
+ * The achievement list is a dropdown rather than a free-text key, because a
+ * rule naming a key this game does not have can never fire and there is
+ * nothing on screen to reveal that.
+ */
+function AchievementRulesSection({
+  gameId,
+  onError,
+}: {
+  gameId: string;
+  onError: (message: string | null) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [rules, setRules] = useState<AchievementRule[] | null>(null);
+
+  const rulesQuery = useQuery({
+    queryKey: ['admin', 'game', gameId, 'rules'],
+    queryFn: () => api.get<{ achievements?: AchievementRule[] }>(`/games/${gameId}/rules`),
+  });
+
+  const definitionsQuery = useQuery({
+    queryKey: ['admin', 'game', gameId, 'achievements'],
+    queryFn: () => api.get<{ key: string; name: string }[]>(`/admin/games/${gameId}/achievements`),
+  });
+
+  const current = rules ?? rulesQuery.data?.achievements ?? [];
+  const definitions = definitionsQuery.data ?? [];
+
+  const save = useMutation({
+    mutationFn: () => api.put(`/games/${gameId}/achievement-rules`, { rules: current }),
+    onSuccess: () => {
+      onError(null);
+      setRules(null);
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'game', gameId, 'rules'] });
+    },
+    onError: (caught) =>
+      onError(caught instanceof ApiRequestError ? caught.message : 'Could not save the rules.'),
+  });
+
+  const update = (index: number, patch: Partial<AchievementRule>) =>
+    setRules(current.map((rule, i) => (i === index ? { ...rule, ...patch } : rule)));
+
+  if (definitions.length === 0) {
+    return (
+      <section className="gb-card space-y-2 p-4">
+        <h3 className="text-sm font-semibold tracking-wide uppercase">Achievements</h3>
+        <p className="text-ink-400 text-sm">
+          Import achievement definitions for this game first — a rule has to name one.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="gb-card space-y-4 p-4">
+      <h3 className="text-sm font-semibold tracking-wide uppercase">Achievements</h3>
+      <p className="text-ink-400 text-xs">
+        Each rule reads a file this game writes and decides whether an achievement is earned. The
+        client checks them when a session ends; the file never leaves the player's machine.
+      </p>
+
+      {current.map((rule, index) => (
+        <div key={index} className="border-ink-700/70 space-y-3 rounded-lg border p-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Achievement" htmlFor={`ach-${index}`}>
+              <select
+                id={`ach-${index}`}
+                className="gb-input"
+                value={rule.achievementKey}
+                onChange={(e) => update(index, { achievementKey: e.target.value })}
+              >
+                {definitions.map((definition) => (
+                  <option key={definition.key} value={definition.key}>
+                    {definition.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="File" htmlFor={`src-${index}`} hint="Same placeholders as the save path.">
+              <input
+                id={`src-${index}`}
+                className="gb-input font-mono"
+                value={rule.sourceTemplate}
+                onChange={(e) => update(index, { sourceTemplate: e.target.value })}
+                placeholder="{install}\\save\\stats.json"
+              />
+            </Field>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-4">
+            <Field label="Format" htmlFor={`fmt-${index}`}>
+              <select
+                id={`fmt-${index}`}
+                className="gb-input"
+                value={rule.format}
+                onChange={(e) =>
+                  update(index, { format: e.target.value as AchievementRule['format'] })
+                }
+              >
+                {ACHIEVEMENT_FORMATS.map((format) => (
+                  <option key={format} value={format}>
+                    {format}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field
+              label="Where"
+              htmlFor={`sel-${index}`}
+              hint={
+                rule.format === 'json'
+                  ? 'Dotted path'
+                  : rule.format === 'ini'
+                    ? 'section.key'
+                    : 'Regular expression'
+              }
+            >
+              <input
+                id={`sel-${index}`}
+                className="gb-input font-mono"
+                value={rule.selector}
+                onChange={(e) => update(index, { selector: e.target.value })}
+                placeholder={rule.format === 'json' ? 'stats.kills' : 'Progress.Done'}
+              />
+            </Field>
+            <Field label="Test" htmlFor={`cmp-${index}`}>
+              <select
+                id={`cmp-${index}`}
+                className="gb-input"
+                value={rule.comparator}
+                onChange={(e) =>
+                  update(index, { comparator: e.target.value as AchievementRule['comparator'] })
+                }
+              >
+                {ACHIEVEMENT_COMPARATORS.map((comparator) => (
+                  <option key={comparator} value={comparator}>
+                    {comparator}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Value" htmlFor={`val-${index}`}>
+              <input
+                id={`val-${index}`}
+                className="gb-input font-mono"
+                value={rule.value ?? ''}
+                disabled={rule.comparator === 'present' || rule.comparator === 'truthy'}
+                onChange={(e) => update(index, { value: e.target.value || null })}
+              />
+            </Field>
+          </div>
+
+          <button
+            type="button"
+            className="gb-btn-danger"
+            onClick={() => setRules(current.filter((_, i) => i !== index))}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="gb-btn-ghost"
+          onClick={() =>
+            setRules([
+              ...current,
+              {
+                achievementKey: definitions[0]?.key ?? '',
+                sourceTemplate: '',
+                format: 'json',
+                selector: '',
+                comparator: 'truthy',
+                value: null,
+              },
+            ])
+          }
+        >
+          Add a rule
+        </button>
+        <button
+          type="button"
+          className="gb-btn-primary"
+          disabled={save.isPending}
+          onClick={() => save.mutate()}
+        >
+          Save achievement rules
+        </button>
+      </div>
+    </section>
   );
 }

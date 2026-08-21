@@ -2,6 +2,7 @@ import type { RealtimeEvent } from '@gameblade/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { listen } from '@tauri-apps/api/event';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useAchievementCheck } from './useAchievementCheck.js';
 
 interface RealtimeContextValue {
   connected: boolean;
@@ -29,6 +30,7 @@ const RealtimeContext = createContext<RealtimeContextValue>({
  */
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
+  const checkAchievements = useAchievementCheck();
   const [connected, setConnected] = useState(false);
   const [lastAchievement, setLastAchievement] = useState<Extract<
     RealtimeEvent,
@@ -84,10 +86,14 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       }),
 
       // A finished session changes playtime everywhere it is displayed.
-      listen('play://ended', () => {
+      listen<{ gameId?: string }>('play://ended', (event) => {
         void queryClient.invalidateQueries({ queryKey: ['home'] });
         void queryClient.invalidateQueries({ queryKey: ['games'] });
         void queryClient.invalidateQueries({ queryKey: ['running'] });
+
+        // The one moment the game's own files are finished being written.
+        const gameId = event.payload?.gameId;
+        if (gameId) void checkAchievements(gameId);
       }),
     ];
 
@@ -97,7 +103,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         void pending.then((off) => off());
       }
     };
-  }, [queryClient]);
+  }, [queryClient, checkAchievements]);
 
   // An unlock toast should not linger; six seconds is long enough to read.
   useEffect(() => {

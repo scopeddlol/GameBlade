@@ -49,13 +49,20 @@ export class ChecksumService {
     return this.running !== null;
   }
 
-  /** Hash every file of a game that does not already have a checksum. */
-  start(gameId: string, options: { force?: boolean } = {}): Promise<void> {
+  /**
+   * Hash a game's files, or check the ones already hashed against the disk.
+   *
+   * Verifying is the same walk with the answer compared rather than stored. For
+   * an archive a file whose contents no longer match what was recorded is
+   * almost always corruption rather than an edit, and nothing else here would
+   * ever notice it.
+   */
+  start(gameId: string, options: { force?: boolean; verify?: boolean } = {}): Promise<void> {
     if (this.running) {
       throw ApiError.conflict('Checksums are already being computed');
     }
 
-    this.running = this.run(gameId, options.force ?? false)
+    this.running = this.run(gameId, options.force ?? false, options.verify ?? false)
       .catch((error: unknown) => {
         this.logger.error({ err: error, gameId }, 'checksum computation failed');
         this.progress = {
@@ -71,7 +78,7 @@ export class ChecksumService {
     return this.running;
   }
 
-  private async run(gameId: string, force: boolean): Promise<void> {
+  private async run(gameId: string, force: boolean, verify: boolean): Promise<void> {
     const row = this.db
       .select({ game: games, libraryPath: libraries.path })
       .from(games)
@@ -83,7 +90,14 @@ export class ChecksumService {
     if (row.game.missingAt) throw ApiError.gone('This game is no longer present on disk');
 
     const files = this.db.select().from(gameFiles).where(eq(gameFiles.gameId, gameId)).all();
-    const pending = force ? files : files.filter((file) => file.sha256 === null);
+
+    // Verifying only has something to say about files that were hashed once
+    // already; there is nothing to compare the rest against.
+    const pending = verify
+      ? files.filter((file) => file.sha256 !== null)
+      : force
+        ? files
+        : files.filter((file) => file.sha256 === null);
 
     this.progress = {
       gameId,
@@ -105,9 +119,28 @@ export class ChecksumService {
         const absolute = await assertRealPathWithin(row.libraryPath, candidate);
         const digest = await hashFile(absolute);
 
-        this.db.update(gameFiles).set({ sha256: digest }).where(eq(gameFiles.id, file.id)).run();
+        if (verify) {
+          this.db
+            .update(gameFiles)
+            .set({
+              integrity: digest === file.sha256 ? 'ok' : 'mismatch',
+              verifiedAt: new Date().toISOString(),
+            })
+            .where(eq(gameFiles.id, file.id))
+            .run();
+        } else {
+          this.db.update(gameFiles).set({ sha256: digest }).where(eq(gameFiles.id, file.id)).run();
+        }
       } catch (error) {
-        // One unreadable file should not abandon the rest of the game.
+        // One unreadable file should not abandon the rest of the game. While
+        // verifying, being unable to read it is itself the finding.
+        if (verify) {
+          this.db
+            .update(gameFiles)
+            .set({ integrity: 'missing', verifiedAt: new Date().toISOString() })
+            .where(eq(gameFiles.id, file.id))
+            .run();
+        }
         this.logger.warn({ err: error, file: file.relPath }, 'could not hash file');
       }
 

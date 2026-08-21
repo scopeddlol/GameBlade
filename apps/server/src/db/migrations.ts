@@ -567,4 +567,65 @@ export const migrations: Migration[] = [
         ON download_events(user_id, game_id, started_at);
     `,
   },
+  {
+    id: '0010_achievement_rules',
+    sql: `
+      -- How to tell, from a file the game itself wrote, that an achievement
+      -- was earned. Achievements have been definable since the start but
+      -- nothing ever unlocked one; this is the missing half.
+      CREATE TABLE game_achievement_rules (
+        id TEXT PRIMARY KEY,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        achievement_key TEXT NOT NULL,
+        -- Same template vocabulary as save rules: {install}, {appdata}, ...
+        source_template TEXT NOT NULL,
+        format TEXT NOT NULL DEFAULT 'json',
+        selector TEXT NOT NULL,
+        comparator TEXT NOT NULL DEFAULT 'truthy',
+        value TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX game_achievement_rules_game_idx ON game_achievement_rules(game_id);
+      -- One rule per achievement: two rules racing to unlock the same thing
+      -- would be a contradiction rather than a redundancy.
+      CREATE UNIQUE INDEX game_achievement_rules_key_idx
+        ON game_achievement_rules(game_id, achievement_key);
+    `,
+  },
+  {
+    id: '0011_file_integrity',
+    sql: `
+      -- What a verification run last concluded about each file. Null until one
+      -- has been done, which is also the state for a library nobody has
+      -- verified yet.
+      ALTER TABLE game_files ADD COLUMN integrity TEXT;
+      ALTER TABLE game_files ADD COLUMN verified_at TEXT;
+      CREATE INDEX game_files_integrity_idx ON game_files(integrity);
+    `,
+  },
+  {
+    id: '0012_bug_reports',
+    sql: `
+      -- Reports from the people actually using the thing. The diagnostics
+      -- columns are filled by the client so a reporter never has to know their
+      -- own client version, and an operator never has to go back and ask.
+      CREATE TABLE bug_reports (
+        id TEXT PRIMARY KEY,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        severity TEXT NOT NULL DEFAULT 'broken',
+        status TEXT NOT NULL DEFAULT 'open',
+        reply TEXT,
+        game_id TEXT REFERENCES games(id) ON DELETE SET NULL,
+        client_version TEXT,
+        platform TEXT,
+        diagnostics TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX bug_reports_status_idx ON bug_reports(status, created_at);
+      CREATE INDEX bug_reports_user_idx ON bug_reports(user_id, created_at);
+    `,
+  },
 ];

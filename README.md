@@ -384,6 +384,69 @@ is rendered as text and never as HTML, and a stored page that cannot be parsed
 falls back to the built-in one rather than taking the front door down. **Reset**
 restores the shipped page at any point.
 
+### Reporting a bug
+
+**Report a problem** sits in the client's sidebar, reachable from wherever
+something went wrong rather than on a page somebody has to go and find. The
+report carries the client version, the platform, the game if one was running,
+and the last few errors the app logged — none of which a reporter should have to
+know, and all of which an operator would otherwise have to go back and ask for.
+
+**Admin → Bug reports** is the queue: filter by state, read what the app logged
+just before, and answer. Whatever you set, and anything you write back, reaches
+the reporter as a notification, and they can see where each of their reports got
+to under Settings.
+
+That last part is the point rather than a nicety. Somebody who reports a problem
+and never learns whether it was read, fixed, or was never a bug has no reason to
+report the next one, and an archive tested by the people using it depends on
+them doing so. Unanswered reports show up on the health page for the same
+reason.
+
+### Health and backups
+
+**Admin → Health** answers "is anything wrong", which analytics does not: disks
+running out, games that have gone from disk, entries with no launch or save
+rule, files whose contents no longer match their recorded checksum, accounts
+that have hit their limit, and when the library was last scanned. Every finding
+links to where it is fixed. It is all derived from rows already being written,
+so there is nothing to keep in step by hand.
+
+**Verify** on a game re-hashes the files that were hashed once already and
+records whether each still matches. For an archive a file whose contents have
+changed is almost always corruption rather than an edit, and nothing else here
+would ever notice.
+
+Backups live on the same page. An archive holds the database, every player's
+cloud saves, uploaded media and the published installer — the things that exist
+nowhere else. The game library is deliberately left out: it is enormous, you
+already have it, and a scan rebuilds the catalog from it. Cached artwork is out
+too by default, being both the largest part and the one part that can be
+fetched again.
+
+The database is copied through SQLite's own backup API rather than by copying
+the file. Under WAL the file on disk is not a complete database on its own, and
+copying it during a scan produces an archive that restores to a corrupt state.
+
+Written every `backupEveryHours` hours keeping `backupKeep` of them, or on
+demand. To restore: stop the server, unzip the archive over an empty `DATA_DIR`,
+start it again.
+
+### Achievements that unlock themselves
+
+Achievement definitions have always been importable; a rule is what says when
+one is earned. It names a file the game itself writes and what to find in it —
+a JSON path, an INI key, or a regular expression over text — tested for
+presence, truthiness, equality, or a threshold.
+
+The client reads those files when a session ends and reports only the resulting
+keys; the files never leave the machine. A reported key with no rule behind it
+is ignored, so reporting is not a way of simply asking for an achievement, and
+unlocking is idempotent, so re-reading the same save changes nothing.
+
+Rules are written in **Admin → Catalog**, on a game, beside its launch and save
+rules.
+
 ### Bandwidth
 
 Two limits, both off by default (`0` means no limit), under **Admin → Settings**:

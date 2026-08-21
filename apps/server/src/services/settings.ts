@@ -25,6 +25,12 @@ export interface RuntimeSettings {
   themeAccent: string | null;
   /** The landing page, as an ordered list of blocks. Null means "the default". */
   landingBlocks: unknown;
+  /** Archives of the data directory to keep before the oldest is deleted. */
+  backupKeep: number;
+  /** Hours between automatic archives; 0 turns them off. */
+  backupEveryHours: number;
+  /** Whether cached artwork is archived too. Large, and re-fetchable. */
+  backupIncludeImages: boolean;
 }
 
 const DEFAULT_TAGLINE = 'A private home for free-to-play and DRM-free games worth keeping.';
@@ -83,6 +89,9 @@ export class SettingsService {
       monthlyQuotaMb: asNumber('monthlyQuotaMb', 0),
       themePreset: asString('themePreset', 'midnight') ?? 'midnight',
       themeAccent: asString('themeAccent', null),
+      backupKeep: asNumber('backupKeep', 7),
+      backupEveryHours: asNumber('backupEveryHours', 24),
+      backupIncludeImages: asBoolean('backupIncludeImages', false),
       landingBlocks: stored.get('landingBlocks') ?? null,
     };
     return this.cache;

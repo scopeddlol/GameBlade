@@ -256,6 +256,42 @@ async fn run_client_installer(
     Ok(target.to_string_lossy().to_string())
 }
 
+/// Reads one of a game's own files, for evaluating achievement rules.
+///
+/// The path comes from a rule an administrator wrote, resolved against this
+/// machine's own folders. Capped, and read as text with invalid bytes replaced
+/// rather than refused: save files are frequently not valid UTF-8, and a rule
+/// looking for an ASCII key in one should still find it.
+#[tauri::command]
+async fn read_rule_file(
+    state: State<'_, AppState>,
+    game_id: String,
+    template: String,
+) -> AppResult<Option<String>> {
+    /// Larger than any save worth scanning for a key, small enough that a rule
+    /// pointed at something enormous cannot exhaust memory.
+    const MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+    let Some(installed) = state.installs.get(&game_id).await else {
+        return Ok(None);
+    };
+
+    let path = saves::resolve_template(&template, &installed.install_path);
+
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        // Not yet created is the ordinary state before a game has been played.
+        return Ok(None);
+    };
+    if !metadata.is_file() || metadata.len() > MAX_BYTES {
+        return Ok(None);
+    }
+
+    match std::fs::read(&path) {
+        Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+        Err(_) => Ok(None),
+    }
+}
+
 /* ----------------------------------------------------------------- settings */
 
 #[tauri::command]
@@ -973,6 +1009,7 @@ pub fn run() {
             api_patch,
             api_delete,
             image_url,
+            read_rule_file,
             client_version,
             run_client_installer,
             get_settings,

@@ -1,3 +1,5 @@
+import { ACHIEVEMENT_COMPARATORS, ACHIEVEMENT_FORMATS } from './achievementRules.js';
+import { BUG_SEVERITY, BUG_STATUS } from './constants.js';
 import { z } from 'zod';
 import { THEME_PRESETS } from './theme.js';
 import {
@@ -563,6 +565,64 @@ export const applySaveSuggestionsSchema = z.object({
     .max(2000),
 });
 export type ApplySaveSuggestionsInput = z.infer<typeof applySaveSuggestionsSchema>;
+
+/** One achievement rule, as an administrator writes it. */
+export const achievementRuleSchema = z.object({
+  achievementKey: z.string().trim().min(1).max(120),
+  sourceTemplate: z.string().trim().min(1).max(500),
+  format: z.enum(ACHIEVEMENT_FORMATS),
+  selector: z.string().trim().min(1).max(300),
+  comparator: z.enum(ACHIEVEMENT_COMPARATORS),
+  value: z.string().trim().max(120).nullable().optional(),
+});
+export type AchievementRuleInput = z.infer<typeof achievementRuleSchema>;
+
+/** A game's rules, replaced wholesale. */
+export const achievementRulesSchema = z.object({
+  rules: z.array(achievementRuleSchema).max(500),
+});
+export type AchievementRulesInput = z.infer<typeof achievementRulesSchema>;
+
+/** What the client reports after reading a game's files. */
+export const reportUnlocksSchema = z.object({
+  keys: z.array(z.string().trim().min(1).max(120)).max(500),
+});
+export type ReportUnlocksInput = z.infer<typeof reportUnlocksSchema>;
+
+/* -------------------------------------------------------------------- bugs */
+
+/**
+ * A bug report, as the reporter sends it.
+ *
+ * The diagnostics are gathered by the client rather than asked for: a reporter
+ * should not have to know their client version, and a report that omits it is
+ * one an operator has to go back and ask about.
+ */
+export const bugReportSchema = z.object({
+  title: z.string().trim().min(3).max(160),
+  body: z.string().trim().min(1).max(4000),
+  severity: z.enum(BUG_SEVERITY),
+  /** The game it happened in, when it happened in one. */
+  gameId: z.string().trim().max(64).nullable().optional(),
+  clientVersion: z.string().trim().max(40).nullable().optional(),
+  platform: z.string().trim().max(120).nullable().optional(),
+  /** Recent client-side errors, gathered automatically. */
+  diagnostics: z.string().trim().max(8000).nullable().optional(),
+});
+export type BugReportInput = z.infer<typeof bugReportSchema>;
+
+export const bugTriageSchema = z.object({
+  status: z.enum(BUG_STATUS),
+  /** Shown to the reporter, so "fixed" can say what was fixed. */
+  reply: z.string().trim().max(2000).nullable().optional(),
+});
+export type BugTriageInput = z.infer<typeof bugTriageSchema>;
+
+export const bugQuerySchema = z.object({
+  status: z.enum(BUG_STATUS).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+});
+export type BugQuery = z.infer<typeof bugQuerySchema>;
 
 export const scanRequestSchema = z.object({
   libraryId: z.string().trim().max(64).optional(),

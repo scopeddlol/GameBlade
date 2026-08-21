@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
+  Bug,
   Check,
   CloudUpload,
   Download,
@@ -42,6 +43,7 @@ import { useSession } from '../hooks/useSession.js';
 import { themeStyle } from '../hooks/useTheme.js';
 import { formatBytes, formatRelative } from '../lib/format.js';
 import { errorMessage, ipc, type ClientSettings } from '../lib/ipc.js';
+import { BUG_STATUS_LABELS, type BugReportInfo } from '@gameblade/shared';
 
 export function SettingsTab() {
   const queryClient = useQueryClient();
@@ -170,6 +172,8 @@ export function SettingsTab() {
 
           <DevicesSection onError={setError} />
 
+          <MyReportsSection />
+
           <section className="card" id="settings-account">
             <SectionHeader title="Account" />
             <p className="muted small">
@@ -195,6 +199,7 @@ const SETTINGS_SECTIONS = [
   { id: 'settings-saves', label: 'Cloud saves', Icon: CloudUpload },
   { id: 'settings-privacy', label: 'Privacy', Icon: EyeOff },
   { id: 'settings-devices', label: 'Devices', Icon: MonitorSmartphone },
+  { id: 'settings-reports', label: 'Your reports', Icon: Bug },
   { id: 'settings-account', label: 'Account', Icon: LogOut },
 ] as const;
 
@@ -759,6 +764,54 @@ function DevicesSection({ onError }: { onError: (message: string) => void }) {
                   <Trash2 size={15} aria-hidden />
                 </button>
               )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * What became of the problems you reported.
+ *
+ * The half of bug reporting that decides whether anyone does it twice. Someone
+ * who reports something and never learns whether it was read, fixed, or was
+ * never a bug at all has no reason to bother again.
+ */
+function MyReportsSection() {
+  const reportsQuery = useQuery({
+    queryKey: ['bugs', 'mine'],
+    queryFn: () => ipc.get<BugReportInfo[]>('/bugs/mine'),
+  });
+
+  const reports = reportsQuery.data ?? [];
+
+  return (
+    <section className="card" id="settings-reports">
+      <SectionHeader
+        title="Your reports"
+        subtitle="Problems you have reported, and what happened to them."
+      />
+
+      {reportsQuery.isLoading ? (
+        <Loading label="Loading your reports" />
+      ) : reports.length === 0 ? (
+        <p className="muted">
+          Nothing yet. "Report a problem" in the sidebar sends one from wherever you are.
+        </p>
+      ) : (
+        <ul className="report-list">
+          {reports.map((report) => (
+            <li key={report.id}>
+              <span className="report-head">
+                <strong>{report.title}</strong>
+                <span className={`badge ${report.status === 'fixed' ? 'success' : 'neutral'}`}>
+                  {BUG_STATUS_LABELS[report.status]}
+                </span>
+              </span>
+              <span className="muted small">{formatRelative(report.createdAt)}</span>
+              {report.reply ? <span className="report-reply">{report.reply}</span> : null}
             </li>
           ))}
         </ul>

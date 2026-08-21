@@ -1,4 +1,6 @@
 import {
+  achievementRulesSchema,
+  reportUnlocksSchema,
   artworkSearchSchema,
   editGameSchema,
   gameQuerySchema,
@@ -18,6 +20,8 @@ import { eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { requireAdmin, requireUser } from '../auth/middleware.js';
 import {
+  achievements as achievementDefinitions,
+  gameAchievementRules,
   gameFiles,
   gameLaunchRules,
   games,
@@ -30,7 +34,7 @@ import { newId } from '../lib/ids.js';
 import { isoNow } from '../lib/time.js';
 import { similarity } from '../services/metadata/service.js';
 import { parseTitle } from '../lib/titles.js';
-import { toGameDetail, toLaunchRule, toSaveRule } from './mappers.js';
+import { toAchievementRule, toGameDetail, toLaunchRule, toSaveRule } from './mappers.js';
 
 /** Which column on `games` backs each artwork slot. */
 const ART_COLUMNS = {
@@ -159,6 +163,14 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
         .where(eq(gameLaunchRules.gameId, id))
         .all()
         .map(toLaunchRule),
+      // The client reads the game's own files against these after a session;
+      // it needs them in the same call it already makes before launching.
+      achievements: db
+        .select()
+        .from(gameAchievementRules)
+        .where(eq(gameAchievementRules.gameId, id))
+        .all()
+        .map(toAchievementRule),
     };
   });
 
@@ -409,6 +421,99 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ---- Launch and save rules (administrators only) ----
+
+  /**
+   * The rules that decide when this game's achievements are earned.
+   *
+   * Replaced wholesale rather than edited one at a time: an operator works
+   * these out by looking at one save file, and a partial update leaves rules
+   * that were written against a different reading of it.
+   */
+  app.put('/games/:id/achievement-rules', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const input = achievementRulesSchema.parse(request.body);
+
+    const game = db.select({ id: games.id }).from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    // Every rule must name an achievement this game actually has, or it could
+    // never unlock anything and the operator would have no way to tell.
+    const known = new Set(
+      db
+        .select({ key: achievementDefinitions.key })
+        .from(achievementDefinitions)
+        .where(eq(achievementDefinitions.gameId, id))
+        .all()
+        .map((row) => row.key),
+    );
+    const unknown = input.rules.filter((rule) => !known.has(rule.achievementKey));
+    if (unknown.length > 0) {
+      throw ApiError.badRequest(
+        `No achievement on this game with ${unknown.length === 1 ? 'key' : 'keys'} ${unknown
+          .map((rule) => rule.achievementKey)
+          .join(', ')}`,
+      );
+    }
+
+    db.transaction((tx) => {
+      tx.delete(gameAchievementRules).where(eq(gameAchievementRules.gameId, id)).run();
+      for (const rule of input.rules) {
+        tx.insert(gameAchievementRules)
+          .values({
+            id: newId('achr'),
+            gameId: id,
+            achievementKey: rule.achievementKey,
+            sourceTemplate: rule.sourceTemplate,
+            format: rule.format,
+            selector: rule.selector,
+            comparator: rule.comparator,
+            value: rule.value ?? null,
+            createdAt: isoNow(),
+          })
+          .run();
+      }
+    });
+
+    return db
+      .select()
+      .from(gameAchievementRules)
+      .where(eq(gameAchievementRules.gameId, id))
+      .all()
+      .map(toAchievementRule);
+  });
+
+  /**
+   * What the client found after reading a game's files.
+   *
+   * The reading happens on the player's machine — the files are theirs and
+   * never leave it — so the server is told only which achievements came out of
+   * it. Keys with no matching rule are ignored rather than trusted: unlocking
+   * is otherwise a matter of asking.
+   */
+  app.post('/games/:id/achievements/report', async (request) => {
+    const context = requireUser(request);
+    const { id } = request.params as { id: string };
+    const input = reportUnlocksSchema.parse(request.body);
+
+    const ruled = new Set(
+      db
+        .select({ key: gameAchievementRules.achievementKey })
+        .from(gameAchievementRules)
+        .where(eq(gameAchievementRules.gameId, id))
+        .all()
+        .map((row) => row.key),
+    );
+
+    const unlocked = [];
+    for (const key of input.keys) {
+      if (!ruled.has(key)) continue;
+      // unlock() is idempotent, so a client re-reporting the same save on
+      // every launch cannot fill the activity feed with duplicates.
+      unlocked.push(achievements.unlock(context.user.id, id, key, null));
+    }
+    return { unlocked };
+  });
 
   app.put('/games/:id/save-rule', async (request) => {
     requireAdmin(request);

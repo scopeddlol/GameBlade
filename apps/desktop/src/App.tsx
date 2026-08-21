@@ -10,6 +10,7 @@ import { listen } from '@tauri-apps/api/event';
 import clsx from 'clsx';
 import {
   Bell,
+  Bug,
   Download,
   ExternalLink,
   Gamepad2,
@@ -53,6 +54,7 @@ import { StoreTab } from './tabs/StoreTab.js';
 import { UpdateBanner } from './components/UpdateBanner.js';
 import { NewsTab } from './tabs/NewsTab.js';
 import { RequestsTab } from './tabs/RequestsTab.js';
+import { ReportBug } from './components/ReportBug.js';
 
 /** Falls back to this whenever a notification has no custom icon of its own. */
 const NOTIFICATION_ICONS: Record<NotificationKind, typeof Bell> = {
@@ -62,6 +64,7 @@ const NOTIFICATION_ICONS: Record<NotificationKind, typeof Bell> = {
   'post-reaction': Heart,
   achievement: Trophy,
   announcement: Megaphone,
+  'bug-report': Bug,
 };
 
 const TABS = [
@@ -105,6 +108,7 @@ function Shell() {
   const [tab, setTab] = useState<TabId>('home');
   const [openGameId, setOpenGameId] = useState<string | null>(null);
   const [showDownloads, setShowDownloads] = useState(false);
+  const [reportingBug, setReportingBug] = useState(false);
   const [downloads, setDownloads] = useState<DownloadState[]>([]);
   const [friendsCollapsed, setFriendsCollapsed] = useState(false);
   const [profileId, setProfileId] = useState<string | null>(null);
@@ -221,6 +225,7 @@ function Shell() {
         onTab={setTab}
         downloadCount={activeDownloads.length}
         onDownloads={() => setShowDownloads(true)}
+        onReportBug={() => setReportingBug(true)}
       />
 
       <div className="main">
@@ -264,6 +269,10 @@ function Shell() {
         />
       ) : null}
 
+      {reportingBug ? (
+        <ReportBug gameId={running?.gameId ?? null} onClose={() => setReportingBug(false)} />
+      ) : null}
+
       {showDownloads ? (
         <DownloadQueue
           downloads={downloads}
@@ -288,11 +297,13 @@ function Sidebar({
   onTab,
   downloadCount,
   onDownloads,
+  onReportBug,
 }: {
   tab: TabId;
   onTab: (tab: TabId) => void;
   downloadCount: number;
   onDownloads: () => void;
+  onReportBug: () => void;
 }) {
   const { session } = useSession();
 
@@ -322,6 +333,13 @@ function Sidebar({
       <CustomButtons placement="sidebar" />
 
       <div className="sidebar-foot">
+        {/* Reachable from every tab, because a bug is reported from wherever
+            it happened rather than from a page someone has to go and find. */}
+        <button type="button" className="nav-item" onClick={onReportBug}>
+          <Bug size={18} aria-hidden />
+          <span>Report a problem</span>
+        </button>
+
         <button type="button" className="nav-item" onClick={onDownloads}>
           <Download size={18} aria-hidden />
           <span>Downloads</span>

@@ -3204,3 +3204,45 @@ textarea:focus {
 .requests-queue {
   margin-top: 4px;
 }
+
+/* ------------------------------------------------------------ bug reports */
+
+.report-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.report-sent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--success);
+}
+
+.report-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.report-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.report-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.report-reply {
+  border-left: 2px solid var(--ink-700);
+  padding-left: 10px;
+  margin-top: 4px;
+  color: var(--ink-300);
+  font-size: 13px;
+}

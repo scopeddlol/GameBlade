@@ -61,8 +61,8 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
     }),
   });
 
-  const { db } = createDb(config.databasePath, app.log);
-  const context = createContext(config, db, app.log);
+  const { db, sqlite } = createDb(config.databasePath, app.log);
+  const context = createContext(config, db, sqlite, app.log);
   app.decorate('gameblade', context);
   await context.images.init();
   await context.media.init();

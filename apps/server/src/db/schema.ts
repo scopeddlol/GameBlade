@@ -175,6 +175,15 @@ export const gameFiles = sqliteTable(
     modifiedAt: text('modified_at').notNull(),
     /** Computed lazily on first desktop download so scans stay fast. */
     sha256: text('sha256'),
+    /**
+     * What the last verification run concluded, or null if none has run.
+     *
+     * `ok` the bytes still hash to what was recorded; `mismatch` they do not,
+     * which for an archive is corruption rather than an edit; `missing` the
+     * file is gone.
+     */
+    integrity: text('integrity', { enum: ['ok', 'mismatch', 'missing'] }),
+    verifiedAt: text('verified_at'),
   },
   (t) => [
     uniqueIndex('game_files_game_relpath_idx').on(t.gameId, t.relPath),
@@ -845,3 +854,60 @@ export type NotificationRow = typeof notifications.$inferSelect;
 export type PlaySession = typeof playSessions.$inferSelect;
 export type GameRequestRow = typeof gameRequests.$inferSelect;
 export type CollectionRow = typeof collections.$inferSelect;
+
+/** How to tell, from a file the game wrote, that an achievement was earned. */
+export const gameAchievementRules = sqliteTable(
+  'game_achievement_rules',
+  {
+    id: text('id').primaryKey(),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    achievementKey: text('achievement_key').notNull(),
+    sourceTemplate: text('source_template').notNull(),
+    format: text('format', { enum: ['json', 'ini', 'text'] })
+      .notNull()
+      .default('json'),
+    selector: text('selector').notNull(),
+    comparator: text('comparator', { enum: ['present', 'truthy', 'equals', 'at-least'] })
+      .notNull()
+      .default('truthy'),
+    value: text('value'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    index('game_achievement_rules_game_idx').on(t.gameId),
+    uniqueIndex('game_achievement_rules_key_idx').on(t.gameId, t.achievementKey),
+  ],
+);
+
+/** A bug report, with the diagnostics the client gathered alongside it. */
+export const bugReports = sqliteTable(
+  'bug_reports',
+  {
+    id: text('id').primaryKey(),
+    /** Null once the reporter's account is gone; the report still stands. */
+    userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    severity: text('severity', { enum: ['crash', 'broken', 'annoying', 'cosmetic'] })
+      .notNull()
+      .default('broken'),
+    status: text('status', {
+      enum: ['open', 'acknowledged', 'fixed', 'not-a-bug', 'duplicate'],
+    })
+      .notNull()
+      .default('open'),
+    reply: text('reply'),
+    gameId: text('game_id').references(() => games.id, { onDelete: 'set null' }),
+    clientVersion: text('client_version'),
+    platform: text('platform'),
+    diagnostics: text('diagnostics'),
+    createdAt: text('created_at').notNull().default(now),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => [
+    index('bug_reports_status_idx').on(t.status, t.createdAt),
+    index('bug_reports_user_idx').on(t.userId, t.createdAt),
+  ],
+);
