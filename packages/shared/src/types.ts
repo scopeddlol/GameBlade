@@ -666,6 +666,7 @@ export type RealtimeEvent =
   | { type: 'notification'; notification: NotificationInfo }
   | { type: 'friend-request'; profile: ProfileSummary }
   | { type: 'achievement'; achievement: AchievementProgress }
+  | { type: 'game-invite'; invite: GameInvite }
   | { type: 'pong'; serverTime: string };
 
 /** Frames the client sends. */
@@ -771,4 +772,43 @@ export interface GameRequestSuggestion {
   requestId: string | null;
   status: GameRequestStatus | null;
   hasVoted: boolean;
+}
+
+/* ------------------------------------------------------------- multiplayer */
+
+export interface MultiplayerRule {
+  id: string;
+  gameId: string;
+  joinArgs: string;
+  defaultPort: number | null;
+  hostArgs: string | null;
+  note: string | null;
+}
+
+/** A friend's current game, and whether it can be joined. */
+export interface JoinableSession {
+  userId: string;
+  gameId: string;
+  gameTitle: string;
+  joinable: boolean;
+  startedAt: string;
+}
+
+/** An invitation to join a game in progress. */
+export interface GameInvite {
+  id: string;
+  from: ProfileSummary;
+  gameId: string;
+  gameTitle: string;
+  /** Null once it has expired or been answered. */
+  expiresAt: string;
+  createdAt: string;
+}
+
+/** What the client needs to launch into a game it was invited to. */
+export interface JoinInstructions {
+  gameId: string;
+  gameTitle: string;
+  /** Arguments with the address and port already substituted in. */
+  args: string;
 }

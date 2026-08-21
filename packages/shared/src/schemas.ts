@@ -564,6 +564,45 @@ export const applySaveSuggestionsSchema = z.object({
 });
 export type ApplySaveSuggestionsInput = z.infer<typeof applySaveSuggestionsSchema>;
 
+/* ------------------------------------------------------------ multiplayer */
+
+/**
+ * How to join a running game.
+ *
+ * `joinArgs` is a template containing `{address}` and optionally `{port}`. It
+ * becomes command-line arguments for the game process — never a shell string —
+ * and the values substituted into it are validated as an address and a port
+ * before they go anywhere near it.
+ */
+export const multiplayerRuleSchema = z.object({
+  joinArgs: z.string().trim().min(1).max(300),
+  defaultPort: z.number().int().min(1).max(65535).nullable().optional(),
+  hostArgs: z.string().trim().max(300).nullable().optional(),
+  note: z.string().trim().max(300).nullable().optional(),
+});
+export type MultiplayerRuleInput = z.infer<typeof multiplayerRuleSchema>;
+
+/** What the host's client reports when it starts something joinable. */
+export const advertiseSessionSchema = z.object({
+  gameId: z.string().trim().min(1).max(64),
+  /**
+   * Where to reach the host, when the client knows better than the server.
+   *
+   * Left unset the server uses the address it sees the client connecting from,
+   * which is the right answer over the internet. A client on the same LAN as
+   * its friends can send its local address instead.
+   */
+  address: z.string().trim().max(255).nullable().optional(),
+  port: z.number().int().min(1).max(65535).nullable().optional(),
+  joinable: z.boolean().default(true),
+});
+export type AdvertiseSessionInput = z.infer<typeof advertiseSessionSchema>;
+
+export const gameInviteSchema = z.object({
+  toUserId: z.string().trim().min(1).max(64),
+});
+export type GameInviteInput = z.infer<typeof gameInviteSchema>;
+
 export const scanRequestSchema = z.object({
   libraryId: z.string().trim().max(64).optional(),
   /** Re-read every entry instead of trusting size/mtime. */
