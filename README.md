@@ -646,6 +646,34 @@ pnpm format
 cd apps/desktop/src-tauri && cargo test && cargo clippy --all-targets -- -D warnings
 ```
 
+### Building a Windows release by hand
+
+CI builds the installers on a self-hosted Windows runner. When that runner is
+unavailable, `scripts/build-windows.ps1` does the same job on any Windows
+machine with Node 22, pnpm and the Rust toolchain:
+
+```powershell
+.\scripts\build-windows.ps1
+```
+
+It asks for the version, stamps it across every manifest that carries one — the
+five `package.json` files, `tauri.conf.json` and the Rust crate, which are read
+by different things and must agree — then typechecks, tests, builds, and copies
+the `.exe` and `.msi` into `dist/windows/<version>/`.
+
+`scripts/build-windows.cmd` is a double-clickable wrapper for it, which also
+avoids the execution-policy prompt.
+
+| Flag | |
+| --- | --- |
+| `-Version 0.5.0` | Skip the prompt. |
+| `-KeepVersion` | Build at the current version, changing no files. |
+| `-Fast` | Drop link-time optimisation. Much quicker; not for release. |
+| `-SkipChecks` | Skip typecheck and tests. |
+
+Only the client is built — the server ships as a container image built on
+Linux. Commit the version bump and tag it once the installer is in hand.
+
 ### Layout
 
 ```
