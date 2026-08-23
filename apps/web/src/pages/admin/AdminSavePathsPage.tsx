@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, CloudDownload, Eye, EyeOff, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { Badge, EmptyState, FormError, Notice, PageLoader, Spinner } from '../../components/ui.js';
+import { Badge, EmptyState, FormError, Notice, Spinner, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 
 interface ManifestStatus {
@@ -124,8 +124,7 @@ export function AdminSavePathsPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Save paths</h1>
-      <p className="text-ink-300 -mt-3 text-sm">
+      <p className="text-ink-300 text-sm">
         Where each game keeps its saves, matched against a public database of save locations rather
         than found by playing every title. Nothing is written until you tick it.
       </p>
@@ -164,7 +163,7 @@ export function AdminSavePathsPage() {
       </section>
 
       {suggestionsQuery.isLoading ? (
-        <PageLoader label="Matching your catalog" />
+        <RowSkeleton rows={5} />
       ) : suggestions.length === 0 ? (
         <EmptyState
           title="No suggestions"

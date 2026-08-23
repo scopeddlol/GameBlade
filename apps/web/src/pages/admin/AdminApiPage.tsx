@@ -8,7 +8,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, KeyRound, ShieldAlert, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { Badge, EmptyState, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
+import { Badge, EmptyState, Field, FormError, Spinner, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 
 const EXPIRY_OPTIONS = [
@@ -79,8 +79,7 @@ export function AdminApiPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">API keys</h1>
-      <p className="text-ink-300 -mt-3 text-sm">
+      <p className="text-ink-300 text-sm">
         Keys authenticate the external API at <code className="font-mono">/api/v1</code> — for
         provisioning accounts from another system, or reading stats. They are not accounts: a key
         cannot sign in to the desktop client.
@@ -208,7 +207,7 @@ export function AdminApiPage() {
       </form>
 
       {keysQuery.isLoading ? (
-        <PageLoader label="Loading keys" />
+        <RowSkeleton rows={3} />
       ) : keys.length === 0 ? (
         <EmptyState title="No keys yet" message="Create one above to start using the API." />
       ) : (

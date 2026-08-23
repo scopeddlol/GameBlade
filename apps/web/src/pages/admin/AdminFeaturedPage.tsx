@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, Images, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { ArtworkPicker } from '../../components/ArtworkPicker.js';
-import { Badge, EmptyState, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
+import { Badge, EmptyState, Field, FormError, Spinner, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError, queryString } from '../../lib/api.js';
 
 /**
@@ -88,8 +88,7 @@ export function AdminFeaturedPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Featured</h1>
-      <p className="text-ink-300 -mt-3 text-sm">
+      <p className="text-ink-300 text-sm">
         These appear in the carousel on the Home tab of the desktop client, in this order.
       </p>
 
@@ -132,7 +131,7 @@ export function AdminFeaturedPage() {
       </section>
 
       {featuredQuery.isLoading ? (
-        <PageLoader label="Loading featured games" />
+        <RowSkeleton rows={4} />
       ) : entries.length === 0 ? (
         <EmptyState
           title="Nothing featured yet"

@@ -1,48 +1,10 @@
 import clsx from 'clsx';
-import {
-  Bug,
-  ChartLine,
-  Gamepad2,
-  Home,
-  KeyRound,
-  LayoutDashboard,
-  LogOut,
-  Inbox,
-  Mail,
-  Menu,
-  MonitorSmartphone,
-  HardDriveDownload,
-  Palette,
-  Stethoscope,
-  Server,
-  Sliders,
-  Sparkles,
-  Swords,
-  UserCircle,
-  Users,
-  X,
-} from 'lucide-react';
+import { Home, LogOut, Menu, Swords, UserCircle, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../hooks/useSession.js';
-
-const SECTIONS = [
-  { to: '/admin', end: true, icon: LayoutDashboard, label: 'Overview' },
-  { to: '/admin/health', end: false, icon: Stethoscope, label: 'Health' },
-  { to: '/admin/bugs', end: false, icon: Bug, label: 'Bug reports' },
-  { to: '/admin/analytics', end: false, icon: ChartLine, label: 'Analytics' },
-  { to: '/admin/catalog', end: false, icon: Gamepad2, label: 'Catalog' },
-  { to: '/admin/featured', end: false, icon: Sparkles, label: 'Featured' },
-  { to: '/admin/requests', end: false, icon: Inbox, label: 'Requests' },
-  { to: '/admin/save-paths', end: false, icon: HardDriveDownload, label: 'Save paths' },
-  { to: '/admin/appearance', end: false, icon: Palette, label: 'Appearance' },
-  { to: '/admin/client', end: false, icon: MonitorSmartphone, label: 'Desktop client' },
-  { to: '/admin/libraries', end: false, icon: Server, label: 'Libraries' },
-  { to: '/admin/users', end: false, icon: Users, label: 'Users' },
-  { to: '/admin/invites', end: false, icon: Mail, label: 'Invites' },
-  { to: '/admin/api', end: false, icon: KeyRound, label: 'API keys' },
-  { to: '/admin/settings', end: false, icon: Sliders, label: 'Settings' },
-] as const;
+import { ADMIN_SECTIONS } from './adminNav.js';
+import { usePrefetch } from './AdminSection.js';
 
 /**
  * Shell for the admin panel — the only authenticated surface left on the web.
@@ -50,14 +12,19 @@ const SECTIONS = [
  * Players never come here: browsing, installing and everything social happen in
  * the desktop client, so this is laid out as an operator console rather than as
  * a storefront. On a phone the sidebar becomes a drawer rather than a
- * horizontally scrolling strip: eleven sections do not fit across a phone, and
+ * horizontally scrolling strip: the sections do not fit across a phone, and
  * the account and sign-out controls used to be dropped entirely at that width,
  * which left no way to sign out on a phone at all.
+ *
+ * The six entries come from the shared navigation map, which also says what
+ * each section's first page fetches — so pointing at a link starts its request
+ * during the few hundred milliseconds before the click lands.
  */
 export function Layout() {
   const { user, status, signOut } = useSession();
   const navigate = useNavigate();
   const location = useLocation();
+  const prefetch = usePrefetch();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Navigating is the end of the drawer's usefulness; leaving it open over the
@@ -96,8 +63,17 @@ export function Layout() {
   const sidebarBody = (
     <>
       <nav className="flex flex-col gap-1 px-3 pb-3">
-        {SECTIONS.map((section) => (
-          <NavLink key={section.to} to={section.to} end={section.end} className={linkClass}>
+        {ADMIN_SECTIONS.map((section) => (
+          <NavLink
+            key={section.to}
+            to={section.to}
+            end={section.end}
+            className={linkClass}
+            // The first sub-tab is where the link lands, so that is what is
+            // worth having in hand by the time it does.
+            onMouseEnter={() => prefetch(section.tabs[0]?.prefetch)}
+            onFocus={() => prefetch(section.tabs[0]?.prefetch)}
+          >
             <section.icon className="h-4 w-4 shrink-0" aria-hidden />
             <span className="whitespace-nowrap">{section.label}</span>
           </NavLink>

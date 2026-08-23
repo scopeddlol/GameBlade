@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image as ImageIcon, Megaphone, RefreshCw } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { Badge, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
+import { Badge, Field, FormError, Spinner, SectionSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 import { formatBytes, formatRelative } from '../../lib/format.js';
 
@@ -45,7 +45,7 @@ export function AdminOverviewPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'stats'] }),
   });
 
-  if (statsQuery.isLoading) return <PageLoader label="Loading overview" />;
+  if (statsQuery.isLoading) return <SectionSkeleton rows={3} />;
   const stats = statsQuery.data;
   const scanning = stats?.scan.state === 'scanning' || stats?.scan.state === 'matching';
 

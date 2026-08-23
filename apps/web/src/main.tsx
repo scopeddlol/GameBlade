@@ -11,7 +11,16 @@ import './index.css';
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 30_000,
+      // Two minutes. An operator moving between sections is asking the same
+      // handful of questions over and over, and at thirty seconds a lap of the
+      // panel refetched everything it had just been told. What changes under
+      // an operator changes because they changed it, and every mutation
+      // invalidates what it touched.
+      staleTime: 2 * 60_000,
+      // Ten minutes in cache after the last component stops using it, so
+      // coming back to a section renders from what is already there and
+      // revalidates behind the content rather than behind a spinner.
+      gcTime: 10 * 60_000,
       refetchOnWindowFocus: false,
       retry: (failureCount, error) => {
         // Auth and validation failures will not fix themselves.

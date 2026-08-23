@@ -3,8 +3,6 @@ import {
   LANDING_BLOCK_KINDS,
   LANDING_BLOCK_LABELS,
   LANDING_ICONS,
-  THEMES,
-  THEME_PRESETS,
   resolveTheme,
   type LandingBlock,
   type LandingBlockKind,
@@ -16,8 +14,8 @@ import { ArrowDown, ArrowUp, Eye, EyeOff, Plus, RotateCcw, Trash2 } from 'lucide
 import { useEffect, useState } from 'react';
 import { Icon, IconPicker } from '../../components/icons.js';
 import { LandingBlocks } from '../../components/LandingBlocks.js';
-import { Badge, Field, FormError, PageLoader, Spinner, Notice } from '../../components/ui.js';
-import { applyTheme, themeStyle } from '../../hooks/useTheme.js';
+import { Badge, Field, FormError, SectionSkeleton, Spinner, Notice } from '../../components/ui.js';
+import { themeStyle } from '../../hooks/useTheme.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 
 interface LandingResponse {
@@ -85,33 +83,24 @@ function blankBlock(kind: LandingBlockKind): LandingBlock {
  * being edited — not a mock-up of it. A preview built from a second
  * implementation is a preview that lies.
  */
-export function AdminAppearancePage() {
+export function AdminLandingPage() {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const [preset, setPreset] = useState<ThemePreset>('midnight');
-  const [accent, setAccent] = useState<string>('');
   const [blocks, setBlocks] = useState<LandingBlock[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const themeQuery = useQuery({
-    queryKey: ['admin', 'theme'],
-    queryFn: async () => {
-      const data = await api.get<ThemeResponse>('/admin/theme');
-      setPreset(data.preset);
-      setAccent(data.accent ?? '');
-      return data;
-    },
-  });
-
   const landingQuery = useQuery({
     queryKey: ['admin', 'landing'],
-    queryFn: async () => {
-      const data = await api.get<LandingResponse>('/admin/landing');
-      setBlocks(data.blocks);
-      return data;
-    },
+    queryFn: () => api.get<LandingResponse>('/admin/landing'),
+  });
+
+  // The theme is not edited here, only worn by the preview so what is shown is
+  // what a visitor would actually see.
+  const themeQuery = useQuery({
+    queryKey: ['admin', 'theme'],
+    queryFn: () => api.get<ThemeResponse>('/admin/theme'),
   });
 
   const infoQuery = useQuery({
@@ -119,26 +108,23 @@ export function AdminAppearancePage() {
     queryFn: () => api.get<PublicServerInfo>('/public/info'),
   });
 
-  const tokens = resolveTheme(preset, accent || null);
-
-  // The whole admin panel follows the theme being edited, so the choice is
-  // judged in situ rather than through a small window of it.
+  // Seeded in an effect rather than inside `queryFn`: react-query only calls
+  // the fetcher on a cache miss, so seeding there left the editor empty — and
+  // the page stuck on its loader — whenever you came back inside the stale
+  // window. `saved` is the query's own object, so this runs when the server's
+  // answer changes and not on every render.
+  const saved = landingQuery.data;
   useEffect(() => {
-    applyTheme(tokens);
-  }, [tokens]);
+    if (saved) setBlocks(saved.blocks);
+  }, [saved]);
+
+  const tokens = resolveTheme(
+    themeQuery.data?.preset ?? 'midnight',
+    themeQuery.data?.accent ?? null,
+  );
 
   const fail = (caught: unknown) =>
     setError(caught instanceof ApiRequestError ? caught.message : 'Could not save.');
-
-  const saveTheme = useMutation({
-    mutationFn: () => api.put('/admin/theme', { preset, accent: accent || null }),
-    onSuccess: async () => {
-      setError(null);
-      setNotice('Theme saved.');
-      await queryClient.invalidateQueries({ queryKey: ['public', 'info'] });
-    },
-    onError: fail,
-  });
 
   const saveLanding = useMutation({
     mutationFn: () => api.put('/admin/landing', { blocks: blocks ?? [] }),
@@ -161,9 +147,7 @@ export function AdminAppearancePage() {
     onError: fail,
   });
 
-  if (themeQuery.isLoading || landingQuery.isLoading || blocks === null) {
-    return <PageLoader label="Loading appearance" />;
-  }
+  if (blocks === null) return <SectionSkeleton rows={4} />;
 
   const update = (id: string, patch: Partial<LandingBlock>) =>
     setBlocks(
@@ -183,95 +167,15 @@ export function AdminAppearancePage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Appearance</h1>
-        {landingQuery.data?.isCustomised ? <Badge tone="info">Customised</Badge> : null}
-      </div>
+    <div className="space-y-4">
+      {landingQuery.data?.isCustomised ? (
+        <p>
+          <Badge tone="info">Customised</Badge>
+        </p>
+      ) : null}
 
       <FormError message={error} />
       <Notice message={notice} />
-
-      {/* ------------------------------------------------------------ theme */}
-      <section className="gb-card space-y-4 p-5">
-        <h2 className="text-sm font-semibold tracking-wide uppercase">Theme</h2>
-
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {THEME_PRESETS.map((id) => {
-            const definition = THEMES[id];
-            const isActive = preset === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setPreset(id)}
-                aria-pressed={isActive}
-                className={`rounded-xl border p-3 text-left transition-colors ${
-                  isActive ? 'border-blade-500' : 'border-ink-700 hover:border-ink-600'
-                }`}
-              >
-                <span className="flex items-center gap-2">
-                  {/* Swatches drawn from the preset itself, so what is shown is
-                      what will be applied. */}
-                  {[
-                    definition.tokens.ink900,
-                    definition.tokens.ink800,
-                    definition.tokens.ink700,
-                    definition.tokens.accent500,
-                    definition.tokens.highlight,
-                  ].map((colour) => (
-                    <span
-                      key={colour}
-                      className="border-ink-700 h-5 w-5 rounded-full border"
-                      style={{ background: colour }}
-                    />
-                  ))}
-                </span>
-                <span className="mt-2 block text-sm font-medium">{definition.label}</span>
-                <span className="text-ink-400 block text-xs">{definition.description}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <Field
-          label="Accent colour"
-          htmlFor="accent"
-          hint="Optional. Replaces the preset's accent; the lighter and darker steps are derived from it."
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              id="accent"
-              type="color"
-              className="border-ink-700 bg-ink-850 h-10 w-14 shrink-0 rounded-lg border"
-              value={accent || tokens.accent500}
-              onChange={(event) => setAccent(event.target.value)}
-              aria-label="Pick an accent colour"
-            />
-            <input
-              className="gb-input font-mono"
-              value={accent}
-              placeholder={THEMES[preset].tokens.accent500}
-              onChange={(event) => setAccent(event.target.value)}
-            />
-            {accent ? (
-              <button type="button" className="gb-btn-ghost shrink-0" onClick={() => setAccent('')}>
-                Use the preset&rsquo;s
-              </button>
-            ) : null}
-          </div>
-        </Field>
-
-        <button
-          type="button"
-          className="gb-btn-primary"
-          onClick={() => saveTheme.mutate()}
-          disabled={saveTheme.isPending}
-        >
-          {saveTheme.isPending ? <Spinner className="h-4 w-4" /> : null}
-          Save theme
-        </button>
-      </section>
 
       {/* ---------------------------------------------------- landing page */}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">

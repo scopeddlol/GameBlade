@@ -182,6 +182,40 @@
   .gb-chip-active {
     @apply border-blade-500 bg-blade-500/15 text-blade-400;
   }
+
+  /* The shimmer a skeleton wears while its data is on the way. Built from the
+     theme's own surface steps so it follows a light theme rather than staying
+     a dark smear on a pale card. */
+  .gb-skeleton {
+    @apply bg-ink-800 relative overflow-hidden;
+  }
+  .gb-skeleton::after {
+    @apply absolute inset-0;
+    content: '';
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--color-ink-700) 70%, transparent),
+      transparent
+    );
+    animation: gb-shimmer 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes gb-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Anyone who has asked not to be moved gets a still panel instead. */
+@media (prefers-reduced-motion: reduce) {
+  .gb-skeleton::after {
+    animation: none;
+  }
 }
 
 /* Fades the hero art into the page background behind the game detail header. */

@@ -2,7 +2,7 @@ import type { LibraryInfo, ScanProgress } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FolderPlus, RefreshCw, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { Badge, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
+import { Badge, Field, FormError, Spinner, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 import { formatBytes, formatRelative } from '../../lib/format.js';
 
@@ -55,7 +55,6 @@ export function AdminLibrariesPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Libraries</h1>
       <section className="gb-card p-5">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-semibold tracking-wide uppercase">Scan</h2>
@@ -123,7 +122,7 @@ export function AdminLibrariesPage() {
         <h2 className="mb-4 text-sm font-semibold tracking-wide uppercase">Library folders</h2>
 
         {librariesQuery.isLoading ? (
-          <PageLoader label="Loading libraries" />
+          <RowSkeleton rows={2} />
         ) : (librariesQuery.data ?? []).length === 0 ? (
           <p className="text-ink-400 mb-4 text-sm">
             No libraries yet. Add the path <em>inside the container</em> — for example{' '}
