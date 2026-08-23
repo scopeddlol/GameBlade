@@ -664,12 +664,12 @@ the `.exe` and `.msi` into `dist/windows/<version>/`.
 `scripts/build-windows.cmd` is a double-clickable wrapper for it, which also
 avoids the execution-policy prompt.
 
-| Flag | |
-| --- | --- |
-| `-Version 0.5.0` | Skip the prompt. |
-| `-KeepVersion` | Build at the current version, changing no files. |
-| `-Fast` | Drop link-time optimisation. Much quicker; not for release. |
-| `-SkipChecks` | Skip typecheck and tests. |
+| Flag             |                                                             |
+| ---------------- | ----------------------------------------------------------- |
+| `-Version 0.5.0` | Skip the prompt.                                            |
+| `-KeepVersion`   | Build at the current version, changing no files.            |
+| `-Fast`          | Drop link-time optimisation. Much quicker; not for release. |
+| `-SkipChecks`    | Skip typecheck and tests.                                   |
 
 Only the client is built — the server ships as a container image built on
 Linux. Commit the version bump and tag it once the installer is in hand.
