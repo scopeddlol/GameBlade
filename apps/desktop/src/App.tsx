@@ -279,9 +279,12 @@ function Shell() {
           onClose={() => setShowDownloads(false)}
           onPause={(id) => void ipc.pauseDownload(id)}
           onResume={(id) => void ipc.startDownload(id)}
-          onCancel={(id) => void ipc.cancelDownload(id)}
-          onClear={(id) => {
-            void ipc.clearDownload(id);
+          // The row stays put: the Rust side reports the transfer stopping —
+          // and, when asked, the space being freed — through the same progress
+          // event as everything else.
+          onCancel={(id, deleteFiles) => void ipc.cancelDownload(id, deleteFiles)}
+          onClear={(id, deleteFiles) => {
+            void ipc.clearDownload(id, deleteFiles);
             setDownloads((current) => current.filter((d) => d.game_id !== id));
           }}
         />

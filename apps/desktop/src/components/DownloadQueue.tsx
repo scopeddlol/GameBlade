@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { HardDrive, Pause, Play, X } from 'lucide-react';
+import { HardDrive, Pause, Play, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { formatBytes, formatEta, formatRate } from '../lib/format.js';
 import { ipc, type DownloadState } from '../lib/ipc.js';
-import { Badge, Empty, ProgressBar } from './ui.js';
+import { Badge, Empty, Modal, ProgressBar } from './ui.js';
 
 /** How many speed samples the network graph keeps — about two minutes at the progress event's own cadence. */
 const SPEED_HISTORY_LENGTH = 30;
@@ -20,10 +20,14 @@ export function DownloadQueue({
   downloads: DownloadState[];
   onPause: (gameId: string) => void;
   onResume: (gameId: string) => void;
-  onCancel: (gameId: string) => void;
-  onClear: (gameId: string) => void;
+  onCancel: (gameId: string, deleteFiles: boolean) => void;
+  onClear: (gameId: string, deleteFiles: boolean) => void;
   onClose: () => void;
 }) {
+  // What the user is being asked about, if anything. Held here rather than per
+  // row so the dialog survives the row re-rendering underneath it, which it
+  // does several times a second while a download is running.
+  const [pending, setPending] = useState<{ download: DownloadState; kind: Kind } | null>(null);
   const totalRate = downloads.reduce(
     (sum, d) => (d.status === 'downloading' ? sum + d.bytes_per_second : sum),
     0,
@@ -124,7 +128,7 @@ export function DownloadQueue({
                         <button
                           type="button"
                           className="btn btn-ghost"
-                          onClick={() => onCancel(download.game_id)}
+                          onClick={() => setPending({ download, kind: 'cancel' })}
                         >
                           Cancel
                         </button>
@@ -142,7 +146,7 @@ export function DownloadQueue({
                         <button
                           type="button"
                           className="btn btn-ghost"
-                          onClick={() => onClear(download.game_id)}
+                          onClick={() => setPending({ download, kind: 'dismiss' })}
                         >
                           Dismiss
                         </button>
@@ -151,7 +155,14 @@ export function DownloadQueue({
                       <button
                         type="button"
                         className="btn btn-ghost"
-                        onClick={() => onClear(download.game_id)}
+                        onClick={() =>
+                          // Nothing was left behind by a download that finished
+                          // or was already purged, so there is nothing to ask
+                          // about — the row just goes.
+                          download.downloaded_bytes > 0 && download.status !== 'completed'
+                            ? setPending({ download, kind: 'dismiss' })
+                            : onClear(download.game_id, false)
+                        }
                       >
                         Dismiss
                       </button>
@@ -163,7 +174,81 @@ export function DownloadQueue({
           )}
         </div>
       </div>
+
+      {pending ? (
+        <StopDownloadDialog
+          download={pending.download}
+          kind={pending.kind}
+          onChoose={(deleteFiles) => {
+            const act = pending.kind === 'cancel' ? onCancel : onClear;
+            act(pending.download.game_id, deleteFiles);
+            setPending(null);
+          }}
+          onClose={() => setPending(null)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+/** Whether the download is still running, which decides the dialog's wording. */
+type Kind = 'cancel' | 'dismiss';
+
+/**
+ * The question that used to go unasked.
+ *
+ * Stopping a download left everything it had fetched on the disk with nothing
+ * in the app ever mentioning it again — cancel a 250 GB install 100 GB in and
+ * that is 100 GB gone until somebody goes looking for it by hand. Both answers
+ * are legitimate, which is why this asks rather than picking one: a transfer
+ * being stopped to be resumed later wants its bytes kept, and one being
+ * abandoned wants the space back.
+ *
+ * Keeping the files is the safe default and sits first; removing them is
+ * styled as the destructive action it is, with the figure spelled out so the
+ * choice is made knowing what is at stake.
+ */
+function StopDownloadDialog({
+  download,
+  kind,
+  onChoose,
+  onClose,
+}: {
+  download: DownloadState;
+  kind: Kind;
+  onChoose: (deleteFiles: boolean) => void;
+  onClose: () => void;
+}) {
+  const written = formatBytes(download.downloaded_bytes);
+  const title =
+    kind === 'cancel'
+      ? `Stop downloading ${download.title}?`
+      : `Remove ${download.title} from the list?`;
+
+  return (
+    <Modal title={title} onClose={onClose}>
+      <p>
+        {written} of {download.title} {kind === 'cancel' ? 'has been' : 'is'} written to{' '}
+        <span className="path">{download.destination}</span>.
+      </p>
+      <p className="muted small">
+        Keeping the files lets the download pick up where it left off later. Removing them frees the
+        space now and starts from nothing next time.
+      </p>
+
+      <div className="modal-actions">
+        <button type="button" className="btn btn-ghost" onClick={onClose}>
+          Never mind
+        </button>
+        <button type="button" className="btn" onClick={() => onChoose(false)}>
+          Keep the files
+        </button>
+        <button type="button" className="btn btn-danger" onClick={() => onChoose(true)}>
+          <Trash2 size={14} aria-hidden />
+          Remove {written}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
