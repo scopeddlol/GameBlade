@@ -23,8 +23,26 @@
   --success: #34d399;
   --warning: #fbbf24;
 
+  /* A scale rather than one figure: a chip, a card and a drawer rounded
+     identically read as the same kind of object at three sizes. */
+  --radius-sm: 8px;
   --radius: 10px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
   --sidebar: 208px;
+
+  /* Elevation, as three steps. Shadows are what separate a panel that floats
+     above the page from one painted onto it, and mixing ad-hoc values is how
+     that distinction gets lost. */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-md: 0 8px 20px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 18px 44px rgb(0 0 0 / 0.5);
+
+  /* One duration for anything that reacts to a pointer, one for anything that
+     enters or leaves. Motion that disagrees with itself reads as jank. */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --dur-fast: 130ms;
+  --dur-slow: 220ms;
 
   color-scheme: dark;
   font-family:
@@ -3139,46 +3157,127 @@ textarea:focus {
   min-width: 0;
 }
 
-.trending h2 {
+/* ------------------------------------------------------- request discovery */
+
+.requests-finder {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.requests-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.requests-search .input {
+  flex: 1;
+  min-width: 0;
+  padding-left: 36px;
+}
+.requests-search-icon {
+  position: absolute;
+  left: 12px;
+  color: var(--ink-400);
+  pointer-events: none;
+}
+.requests-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.shelf h2 {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0 0 10px;
   font-size: 15px;
 }
-.trending h2 .muted {
+.shelf h2 .muted {
   margin-left: auto;
   font-weight: 400;
 }
-/* A strip rather than a grid: it is a sideline to the queue below, and a grid
-   of twelve covers would push the actual requests off the screen. */
-.trending-strip {
+/* A strip rather than a grid: each shelf is a sideline to the queue below, and
+   four grids of eighteen covers would push the actual requests off the screen.
+   Scroll snapping keeps a part-scrolled strip from stopping mid-card. */
+.shelf-strip {
   display: flex;
   gap: 12px;
   overflow-x: auto;
   padding-bottom: 6px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
 }
-.trending-card {
-  flex: 0 0 148px;
+.shelf-strip > * {
+  scroll-snap-align: start;
+}
+/* Search results have no queue under them competing for the height, so they
+   wrap instead of scrolling — every match is visible at once. */
+.shelf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.shelf-card {
+  flex: 0 0 168px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 10px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--ink-850);
   border: 1px solid var(--ink-800);
+  transition:
+    border-color 140ms ease,
+    transform 140ms ease,
+    box-shadow 140ms ease;
 }
-.trending-cover {
+.shelf-grid .shelf-card {
+  flex: initial;
+}
+.shelf-card:hover {
+  border-color: var(--ink-700);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.28);
+}
+
+.shelf-cover-wrap {
+  position: relative;
+}
+.shelf-cover {
   width: 100%;
   aspect-ratio: 2 / 3;
   object-fit: cover;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   display: block;
 }
-.trending-body {
-  min-width: 0;
+/* Sits on the artwork rather than in the body: the body is where the title and
+   blurb go, and a score competing with them there reads as part of the name. */
+.shelf-score {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-100);
+  background: rgb(0 0 0 / 0.66);
+  backdrop-filter: blur(4px);
 }
-.trending-title {
+
+.shelf-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.shelf-title {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
@@ -3186,11 +3285,20 @@ textarea:focus {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.trending-body p:last-child {
-  margin: 1px 0 0;
+.shelf-body p {
+  margin: 0;
 }
-.trending-card .btn,
-.trending-card .row-chip {
+/* Two lines, so a long blurb cannot make one card taller than the row. */
+.shelf-blurb {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.35;
+}
+.shelf-card .btn,
+.shelf-card .row-chip {
   margin-top: auto;
   justify-content: center;
 }
@@ -3203,6 +3311,13 @@ textarea:focus {
 }
 .requests-queue {
   margin-top: 4px;
+}
+/* Shown while the next filter's rows are on their way. Dimmed and inert rather
+   than replaced by a spinner: the rows are already right most of the time. */
+.request-list.is-stale {
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 120ms ease;
 }
 
 /* ------------------------------------------------------------ bug reports */

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { CSRF_HEADER } from '@gameblade/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
 import { games, gameLaunchRules, images, libraries } from '../db/schema.js';
@@ -235,6 +235,37 @@ describe('admin catalog gaps and the client installer', () => {
         headers: auth(),
       });
       expect(response.statusCode, url).toBe(400);
+    }
+  });
+
+  /**
+   * The desktop client's webview is a different origin from the server, so
+   * helmet's blanket `same-origin` resource policy makes the browser fetch a
+   * cover, discard it and fire an error event — which is what left every card
+   * on the client's Requests tab showing placeholder initials, with the
+   * request succeeding in both logs.
+   */
+  it('marks a proxied thumbnail as embeddable from the desktop client', async () => {
+    // The provider stands in for IGDB: what is being checked is the header on
+    // the way back out, which only exists on the path where an image is served.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg' },
+      }),
+    );
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/artwork/thumbnail?url=${encodeURIComponent('https://images.igdb.com/a.jpg')}`,
+        headers: auth(),
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cross-origin-resource-policy']).toBe('cross-origin');
+    } finally {
+      fetchSpy.mockRestore();
     }
   });
 

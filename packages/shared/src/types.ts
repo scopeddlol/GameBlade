@@ -767,12 +767,34 @@ export interface GameRequestSuggestion {
   /** A provider URL, fetched through the server's image proxy. */
   coverUrl: string | null;
   releaseYear: number | null;
+  /** One line of blurb, so a card says what the game is rather than only naming it. */
+  summary: string | null;
+  /** IGDB's aggregate score out of 100, or null when too few people have rated it. */
+  rating: number | null;
   /** Already on the shelf: asking for it would be pointless. */
   inCatalog: boolean;
   /** Set when somebody has already asked, so the button becomes a vote. */
   requestId: string | null;
   status: GameRequestStatus | null;
   hasVoted: boolean;
+}
+
+/** The discovery shelves the request page browses, in the order they are shown. */
+export const DISCOVERY_SHELVES = ['trending', 'anticipated', 'recent', 'acclaimed'] as const;
+export type DiscoveryShelfId = (typeof DISCOVERY_SHELVES)[number];
+
+/**
+ * One row of the request page's browser.
+ *
+ * Shelves rather than a single "most popular" strip: what a player wants to ask
+ * for is often not what happens to be peaking on Steam this week, and one list
+ * of twelve gives them no way to look for anything else.
+ */
+export interface DiscoveryShelf {
+  id: DiscoveryShelfId;
+  label: string;
+  hint: string;
+  items: GameRequestSuggestion[];
 }
 
 /* -------------------------------------------------------------------- bugs */

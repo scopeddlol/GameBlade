@@ -513,5 +513,72 @@ describe('requests and collections', () => {
     it('returns nothing for an empty list rather than reading the catalog', () => {
       expect(app.gameblade.gameRequests.suggestions('nobody', [])).toEqual([]);
     });
+
+    /**
+     * The request page draws four shelves plus a search from one decoration
+     * pass. Each list has to come back in its own slot and in its own order —
+     * flattening them and handing back one array would put "Coming soon" cards
+     * under the "Trending" heading.
+     */
+    it('keeps each shelf separate when several are decorated together', () => {
+      const [first, second] = app.gameblade.gameRequests.decorateCandidates('nobody', [
+        [{ title: 'Bastion', coverUrl: null, releaseYear: 2011 }],
+        [
+          { title: 'Some Unheard-Of Game', coverUrl: null, releaseYear: 2025 },
+          { title: 'Bastion', coverUrl: null, releaseYear: 2011 },
+        ],
+      ]);
+
+      expect(first?.map((entry) => entry.title)).toEqual(['Bastion']);
+      expect(second?.map((entry) => entry.title)).toEqual(['Some Unheard-Of Game', 'Bastion']);
+      // The same title in two shelves gets the same answer in both.
+      expect(first?.[0]?.inCatalog).toBe(true);
+      expect(second?.[1]?.inCatalog).toBe(true);
+    });
+
+    it('carries the blurb and score a card shows through decoration', () => {
+      const [only] = app.gameblade.gameRequests.decorateCandidates('nobody', [
+        [
+          {
+            title: 'Some Unheard-Of Game',
+            coverUrl: null,
+            releaseYear: 2025,
+            summary: 'A game about something.',
+            rating: 91,
+          },
+        ],
+      ]);
+      expect(only?.[0]).toMatchObject({ summary: 'A game about something.', rating: 91 });
+    });
+
+    /**
+     * Discovery depends on IGDB, which most servers have not configured. The
+     * page is built to work without it, so the route has to answer rather than
+     * fail — an error here would take the whole Requests tab down.
+     */
+    it('answers with no shelves when no metadata provider is configured', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/requests/discover',
+        headers: auth(player),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ shelves: [] });
+    });
+
+    it('answers a search with no results rather than failing without a provider', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/requests/search?q=bastion',
+        headers: auth(player),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ results: [] });
+    });
+
+    it('will not let a signed-out caller browse discovery', async () => {
+      const response = await app.inject({ method: 'GET', url: '/api/requests/discover' });
+      expect(response.statusCode).toBe(401);
+    });
   });
 });

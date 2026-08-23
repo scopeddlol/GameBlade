@@ -78,7 +78,13 @@ export async function imageRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return (
-      reply
+      // Same reason as /images/:id below: the desktop client's webview runs on
+      // its own origin, so without this header the browser fetches the bytes,
+      // reads helmet's same-origin resource policy, discards the response and
+      // fires an error event. That is exactly what left every cover on the
+      // client's Requests tab showing its placeholder initials — the request
+      // succeeded, so nothing appeared wrong in either log.
+      allowCrossOriginEmbed(reply)
         .header('Content-Type', contentType)
         // The provider's URL is content-addressed, so a preview can be held for
         // the length of a browsing session without going stale.

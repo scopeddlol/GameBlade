@@ -1,17 +1,24 @@
 import {
   GAME_REQUEST_STATUS,
   GAME_REQUEST_STATUS_LABELS,
+  type DiscoveryShelf,
   type GameRequestInfo,
   type GameRequestSuggestion,
 } from '@gameblade/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { ArrowBigUp, Check, Flame, Plus, Sparkles } from 'lucide-react';
-import { useState } from 'react';
+import { ArrowBigUp, Check, Plus, Search, Sparkles, Star, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { RequestRow } from '../components/GameRequests.js';
 import { Artwork, Empty, ErrorNote, Loading } from '../components/ui.js';
-import { useRequestDigest, useRequestList, useRequestMutations } from '../hooks/useRequests.js';
-import { errorMessage, ipc } from '../lib/ipc.js';
+import {
+  useDiscovery,
+  useRequestDigest,
+  useRequestList,
+  useRequestMutations,
+  useRequestSearch,
+} from '../hooks/useRequests.js';
+import { errorMessage } from '../lib/ipc.js';
 
 type Filter = '' | (typeof GAME_REQUEST_STATUS)[number];
 
@@ -28,11 +35,16 @@ const FILTERS: { id: Filter; label: string }[] = [
  *
  * It was a dialog hidden behind a Store button, which is a strange home for
  * the one screen where players tell the operator what to buy next. Here the
- * queue, what is on the way and what is trending elsewhere are all one page.
+ * queue, what is on the way and what to browse are all one page.
+ *
+ * Discovery is several shelves plus a search rather than one strip of the
+ * week's most-played: the game somebody actually wants is usually not the one
+ * peaking on Steam, and a single row of twelve gives them nowhere else to look.
  */
 export function RequestsTab({ onOpenGameId }: { onOpenGameId: (gameId: string) => void }) {
   const [filter, setFilter] = useState<Filter>('');
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
   const digestQuery = useRequestDigest();
   const listQuery = useRequestList(filter);
@@ -60,9 +72,9 @@ export function RequestsTab({ onOpenGameId }: { onOpenGameId: (gameId: string) =
 
       <ErrorNote message={error} />
 
-      <Composer onError={setError} />
+      <Finder search={search} onSearch={setSearch} onError={setError} />
 
-      <TrendingStrip onError={setError} />
+      {search.trim().length >= 2 ? null : <Shelves onError={setError} />}
 
       <section className="requests-queue">
         <div className="requests-filters">
@@ -90,11 +102,14 @@ export function RequestsTab({ onOpenGameId }: { onOpenGameId: (gameId: string) =
             message={
               filter
                 ? 'Try another filter.'
-                : 'Be the first — ask for something above, or back one of the trending titles.'
+                : 'Be the first — search for something above, or back one of the titles on the shelves.'
             }
           />
         ) : (
-          <ul className="request-list">
+          // Dimmed rather than replaced while the next filter loads: the rows
+          // are already right most of the time, and a spinner between every
+          // chip makes a one-key change feel like a page load.
+          <ul className={clsx('request-list', listQuery.isPlaceholderData && 'is-stale')}>
             {requests.map((request: GameRequestInfo) => (
               <RequestRow key={request.id} request={request} onOpenGame={onOpenGameId} />
             ))}
@@ -114,80 +129,179 @@ function Tally({ label, value, accent }: { label: string; value: number; accent?
   );
 }
 
-/** Asking for something by name, for anything the trending strip does not have. */
-function Composer({ onError }: { onError: (message: string) => void }) {
-  const [title, setTitle] = useState('');
+/**
+ * Search first, free text second.
+ *
+ * Typing a name looks the game up so the request carries its real title, cover
+ * and year — an operator can act on that, where "that space one with the
+ * ships" needs a conversation first. Asking by name is still there for
+ * anything the provider does not know, or for a server with no provider at all.
+ */
+function Finder({
+  search,
+  onSearch,
+  onError,
+}: {
+  search: string;
+  onSearch: (value: string) => void;
+  onError: (message: string) => void;
+}) {
   const [note, setNote] = useState('');
+  const debounced = useDebounced(search, 350);
+  const searchQuery = useRequestSearch(debounced);
   const { create } = useRequestMutations();
 
+  const term = search.trim();
+  const results = searchQuery.data?.results ?? [];
+  const searching = term.length >= 2;
+  // A settled search that found nothing is the one moment the by-name form
+  // earns its place, so that is when it appears.
+  const exhausted = searching && !searchQuery.isFetching && results.length === 0;
+
   return (
-    <form
-      className="card requests-composer"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!title.trim()) return;
-        create.mutate(
-          { title: title.trim(), note: note.trim() || undefined },
-          {
-            onSuccess: () => {
-              setTitle('');
-              setNote('');
-            },
-            onError: (caught) => onError(errorMessage(caught)),
-          },
-        );
-      }}
-    >
-      <div className="requests-composer-row">
+    <section className="requests-finder">
+      <div className="requests-search">
+        <Search size={16} aria-hidden className="requests-search-icon" />
         <input
           className="input"
-          value={title}
+          value={search}
           maxLength={120}
-          placeholder="Ask for a game by name…"
-          aria-label="Game title"
-          onChange={(event) => setTitle(event.target.value)}
+          placeholder="Search for a game to request…"
+          aria-label="Search for a game"
+          onChange={(event) => onSearch(event.target.value)}
         />
-        <button
-          type="submit"
-          className="btn btn-primary"
-          disabled={!title.trim() || create.isPending}
-        >
-          <Plus size={15} aria-hidden />
-          Request
-        </button>
+        {search ? (
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Clear the search"
+            onClick={() => onSearch('')}
+          >
+            <X size={15} aria-hidden />
+          </button>
+        ) : null}
       </div>
-      <input
-        className="input"
-        value={note}
-        maxLength={280}
-        placeholder="Anything worth adding? (optional)"
-        aria-label="Note"
-        onChange={(event) => setNote(event.target.value)}
-      />
-    </form>
+
+      {searching ? (
+        <div className="requests-results">
+          {searchQuery.isFetching && results.length === 0 ? (
+            <Loading label="Searching" />
+          ) : results.length > 0 ? (
+            <CardGrid items={results} onError={onError} />
+          ) : null}
+
+          {exhausted ? (
+            <form
+              className="card requests-composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!term) return;
+                create.mutate(
+                  { title: term, note: note.trim() || undefined },
+                  {
+                    onSuccess: () => {
+                      onSearch('');
+                      setNote('');
+                    },
+                    onError: (caught) => onError(errorMessage(caught)),
+                  },
+                );
+              }}
+            >
+              <p className="muted small">
+                Nothing found for “{term}”. Ask for it by name and the operator will take it from
+                there.
+              </p>
+              <div className="requests-composer-row">
+                <input
+                  className="input"
+                  value={note}
+                  maxLength={280}
+                  placeholder="Anything that would help find it — a year, a platform, a link"
+                  aria-label="Note"
+                  onChange={(event) => setNote(event.target.value)}
+                />
+                <button type="submit" className="btn btn-primary" disabled={create.isPending}>
+                  <Plus size={15} aria-hidden />
+                  Request “{term}”
+                </button>
+              </div>
+            </form>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** Every discovery shelf the server offered, in the order it offered them. */
+function Shelves({ onError }: { onError: (message: string) => void }) {
+  const discoveryQuery = useDiscovery();
+  const shelves = discoveryQuery.data?.shelves ?? [];
+
+  // Silent when no metadata provider is configured: the page works without it.
+  if (discoveryQuery.isLoading || shelves.length === 0) return null;
+
+  return (
+    <>
+      {shelves.map((shelf: DiscoveryShelf) => (
+        <section key={shelf.id} className="shelf">
+          <h2>
+            <Sparkles size={16} aria-hidden />
+            {shelf.label}
+            <span className="muted small">{shelf.hint}</span>
+          </h2>
+          <div className="shelf-strip">
+            {shelf.items.map((item) => (
+              <SuggestionCard
+                key={`${shelf.id}-${item.title}`}
+                suggestion={item}
+                onError={onError}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
+    </>
+  );
+}
+
+/** Search results, which wrap into a grid rather than scrolling sideways. */
+function CardGrid({
+  items,
+  onError,
+}: {
+  items: GameRequestSuggestion[];
+  onError: (message: string) => void;
+}) {
+  return (
+    <div className="shelf-grid">
+      {items.map((item) => (
+        <SuggestionCard key={item.title} suggestion={item} onError={onError} />
+      ))}
+    </div>
   );
 }
 
 /**
- * What is being played elsewhere right now, as one-click asks.
+ * One title, with the button that acts on it.
  *
- * Each card already knows whether the archive has the game, whether somebody
+ * The card already knows whether the archive has the game, whether somebody
  * has asked, and whether the reader has backed it — so the button says what it
- * will actually do rather than making them find out by pressing it.
+ * will actually do rather than making them press it to find out.
  */
-function TrendingStrip({ onError }: { onError: (message: string) => void }) {
+function SuggestionCard({
+  suggestion,
+  onError,
+}: {
+  suggestion: GameRequestSuggestion;
+  onError: (message: string) => void;
+}) {
   const queryClient = useQueryClient();
   const { create, vote } = useRequestMutations();
 
-  const suggestionsQuery = useQuery({
-    queryKey: ['requests', 'suggestions'],
-    queryFn: () => ipc.get<GameRequestSuggestion[]>('/requests/suggestions'),
-    // Held for an hour on the server as well; this stops a tab switch re-asking.
-    staleTime: 30 * 60_000,
-  });
-
   const ask = useMutation({
-    mutationFn: (suggestion: GameRequestSuggestion) =>
+    mutationFn: () =>
       suggestion.requestId
         ? vote.mutateAsync({ id: suggestion.requestId, wanted: !suggestion.hasVoted })
         : create.mutateAsync({ title: suggestion.title }),
@@ -197,67 +311,78 @@ function TrendingStrip({ onError }: { onError: (message: string) => void }) {
     onError: (caught) => onError(errorMessage(caught)),
   });
 
-  const suggestions = suggestionsQuery.data ?? [];
-
-  // Silent when no metadata provider is configured: the page works without it.
-  if (suggestionsQuery.isLoading || suggestions.length === 0) return null;
-
   return (
-    <section className="trending">
-      <h2>
-        <Flame size={16} aria-hidden />
-        Trending right now
-        <span className="muted small">Most played elsewhere this week</span>
-      </h2>
-
-      <div className="trending-strip">
-        {suggestions.map((suggestion) => (
-          <article key={suggestion.title} className="trending-card">
-            <Artwork
-              path={suggestion.coverUrl}
-              alt={suggestion.title}
-              className="trending-cover"
-              fallbackText={suggestion.title}
-            />
-            <div className="trending-body">
-              <p className="trending-title" title={suggestion.title}>
-                {suggestion.title}
-              </p>
-              {suggestion.releaseYear ? (
-                <p className="muted small">{suggestion.releaseYear}</p>
-              ) : null}
-            </div>
-
-            {suggestion.inCatalog ? (
-              <span className="row-chip installed">
-                <Check size={12} aria-hidden />
-                In the archive
-              </span>
-            ) : (
-              <button
-                type="button"
-                className={clsx('btn', suggestion.hasVoted ? 'btn-ghost' : 'btn-primary')}
-                onClick={() => ask.mutate(suggestion)}
-                disabled={ask.isPending}
-              >
-                {suggestion.hasVoted ? (
-                  <>
-                    <Check size={14} aria-hidden /> Backed
-                  </>
-                ) : suggestion.requestId ? (
-                  <>
-                    <ArrowBigUp size={14} aria-hidden /> Back it
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={14} aria-hidden /> Request
-                  </>
-                )}
-              </button>
-            )}
-          </article>
-        ))}
+    <article className="shelf-card">
+      <div className="shelf-cover-wrap">
+        <Artwork
+          path={suggestion.coverUrl}
+          alt={suggestion.title}
+          className="shelf-cover"
+          fallbackText={suggestion.title}
+        />
+        {suggestion.rating !== null ? (
+          <span className="shelf-score" title={`Rated ${suggestion.rating} out of 100`}>
+            <Star size={11} aria-hidden />
+            {suggestion.rating}
+          </span>
+        ) : null}
       </div>
-    </section>
+
+      <div className="shelf-body">
+        <p className="shelf-title" title={suggestion.title}>
+          {suggestion.title}
+        </p>
+        {suggestion.releaseYear ? <p className="muted small">{suggestion.releaseYear}</p> : null}
+        {suggestion.summary ? (
+          <p className="muted small shelf-blurb">{suggestion.summary}</p>
+        ) : null}
+      </div>
+
+      {suggestion.inCatalog ? (
+        <span className="row-chip installed">
+          <Check size={12} aria-hidden />
+          In the archive
+        </span>
+      ) : (
+        <button
+          type="button"
+          className={clsx('btn', suggestion.hasVoted ? 'btn-ghost' : 'btn-primary')}
+          onClick={() => ask.mutate()}
+          disabled={ask.isPending}
+        >
+          {suggestion.hasVoted ? (
+            <>
+              <Check size={14} aria-hidden /> Backed
+            </>
+          ) : suggestion.requestId ? (
+            <>
+              <ArrowBigUp size={14} aria-hidden /> Back it
+            </>
+          ) : (
+            <>
+              <Sparkles size={14} aria-hidden /> Request
+            </>
+          )}
+        </button>
+      )}
+    </article>
   );
+}
+
+/**
+ * Holds a value still until typing stops.
+ *
+ * IGDB's rate limit is four requests a second shared across everything the
+ * server does, so a search per keystroke would spend it on prefixes nobody
+ * meant to look up.
+ */
+function useDebounced<T>(value: T, delay: number): T {
+  const [settled, setSettled] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return settled;
 }

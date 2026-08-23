@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, CloudDownload, Search } from 'lucide-react';
+import { Check, CloudDownload, Eye, EyeOff, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Badge, EmptyState, FormError, Notice, PageLoader, Spinner } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
@@ -47,6 +47,10 @@ export function AdminSavePathsPage() {
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
   const [search, setSearch] = useState('');
   const [applied, setApplied] = useState<number | null>(null);
+  // Defaults to hiding them: a title that already has a rule is settled work,
+  // and on a large catalog those rows are most of the list — the ones worth
+  // looking at are the ones with nothing set.
+  const [hideSettled, setHideSettled] = useState(true);
 
   const statusQuery = useQuery({
     queryKey: ['admin', 'save-manifest'],
@@ -87,13 +91,19 @@ export function AdminSavePathsPage() {
 
   const suggestions = suggestionsQuery.data?.suggestions ?? [];
 
+  const settledCount = useMemo(
+    () => suggestions.filter((s) => s.hasExistingRule).length,
+    [suggestions],
+  );
+
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return suggestions;
-    return suggestions.filter(
-      (s) => s.title.toLowerCase().includes(term) || s.matchedTitle.toLowerCase().includes(term),
-    );
-  }, [suggestions, search]);
+    return suggestions.filter((s) => {
+      if (hideSettled && s.hasExistingRule) return false;
+      if (!term) return true;
+      return s.title.toLowerCase().includes(term) || s.matchedTitle.toLowerCase().includes(term);
+    });
+  }, [suggestions, search, hideSettled]);
 
   const pathFor = (s: Suggestion) =>
     chosen[s.gameId] ?? describe(s.saves[0] ?? { pathTemplate: '', include: null });
@@ -180,6 +190,24 @@ export function AdminSavePathsPage() {
                 onChange={(event) => setSearch(event.target.value)}
               />
             </div>
+            {/* The pile of already-settled titles is the noise this page
+                accumulates as it gets used. Hiding them is the default, and
+                the count is on the button so nothing is silently missing. */}
+            <button
+              type="button"
+              className="gb-btn-ghost"
+              aria-pressed={!hideSettled}
+              onClick={() => setHideSettled((current) => !current)}
+            >
+              {hideSettled ? (
+                <EyeOff className="h-4 w-4" aria-hidden />
+              ) : (
+                <Eye className="h-4 w-4" aria-hidden />
+              )}
+              {hideSettled
+                ? `Show the ${settledCount} with a rule`
+                : `Hide the ${settledCount} with a rule`}
+            </button>
             <button
               type="button"
               className="gb-btn-ghost"
@@ -212,63 +240,74 @@ export function AdminSavePathsPage() {
             </button>
           </div>
 
-          <div className="divide-ink-700/70 gb-card divide-y">
-            {visible.map((suggestion) => (
-              <div key={suggestion.gameId} className="flex gap-3 px-4 py-3">
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  checked={Boolean(ticked[suggestion.gameId])}
-                  aria-label={`Apply a save rule for ${suggestion.title}`}
-                  onChange={(event) =>
-                    setTicked((current) => ({
-                      ...current,
-                      [suggestion.gameId]: event.target.checked,
-                    }))
-                  }
-                />
+          {visible.length === 0 ? (
+            <EmptyState
+              title={search ? 'Nothing matches that' : 'Every match already has a rule'}
+              message={
+                search
+                  ? 'Try a shorter search term.'
+                  : 'Nothing here is waiting on you. Show the settled ones above to review or replace them.'
+              }
+            />
+          ) : (
+            <div className="divide-ink-700/70 gb-card divide-y">
+              {visible.map((suggestion) => (
+                <div key={suggestion.gameId} className="flex gap-3 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={Boolean(ticked[suggestion.gameId])}
+                    aria-label={`Apply a save rule for ${suggestion.title}`}
+                    onChange={(event) =>
+                      setTicked((current) => ({
+                        ...current,
+                        [suggestion.gameId]: event.target.checked,
+                      }))
+                    }
+                  />
 
-                <div className="min-w-0 flex-1">
-                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                    {suggestion.title}
-                    {suggestion.hasExistingRule ? (
-                      <Badge tone="warning">Would replace an existing rule</Badge>
-                    ) : null}
-                  </p>
-
-                  {/* The manifest's own title, so a confident wrong match is
-                      obvious without opening anything. */}
-                  {suggestion.matchedTitle !== suggestion.title ? (
-                    <p className="text-ink-400 text-xs">matched “{suggestion.matchedTitle}”</p>
-                  ) : null}
-
-                  {suggestion.saves.length === 1 ? (
-                    <p className="text-ink-300 mt-1 font-mono text-xs break-all">
-                      {describe(suggestion.saves[0]!)}
+                  <div className="min-w-0 flex-1">
+                    <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                      {suggestion.title}
+                      {suggestion.hasExistingRule ? (
+                        <Badge tone="warning">Would replace an existing rule</Badge>
+                      ) : null}
                     </p>
-                  ) : (
-                    <select
-                      className="gb-input mt-1.5 font-mono text-xs"
-                      value={pathFor(suggestion)}
-                      aria-label={`Save location for ${suggestion.title}`}
-                      onChange={(event) =>
-                        setChosen((current) => ({
-                          ...current,
-                          [suggestion.gameId]: event.target.value,
-                        }))
-                      }
-                    >
-                      {suggestion.saves.map((save) => (
-                        <option key={describe(save)} value={describe(save)}>
-                          {describe(save)}
-                        </option>
-                      ))}
-                    </select>
-                  )}
+
+                    {/* The manifest's own title, so a confident wrong match is
+                      obvious without opening anything. */}
+                    {suggestion.matchedTitle !== suggestion.title ? (
+                      <p className="text-ink-400 text-xs">matched “{suggestion.matchedTitle}”</p>
+                    ) : null}
+
+                    {suggestion.saves.length === 1 ? (
+                      <p className="text-ink-300 mt-1 font-mono text-xs break-all">
+                        {describe(suggestion.saves[0]!)}
+                      </p>
+                    ) : (
+                      <select
+                        className="gb-input mt-1.5 font-mono text-xs"
+                        value={pathFor(suggestion)}
+                        aria-label={`Save location for ${suggestion.title}`}
+                        onChange={(event) =>
+                          setChosen((current) => ({
+                            ...current,
+                            [suggestion.gameId]: event.target.value,
+                          }))
+                        }
+                      >
+                        {suggestion.saves.map((save) => (
+                          <option key={describe(save)} value={describe(save)}>
+                            {describe(save)}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>

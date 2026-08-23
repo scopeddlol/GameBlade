@@ -11,10 +11,11 @@ import type { FastifyReply } from 'fastify';
  * failed request in the network log and nothing in the server log, because the
  * request itself succeeded.
  *
- * Only the two routes that a browser loads as a subresource opt out. It costs
- * nothing here: both require a device token or a session, and the session
- * cookie is SameSite=lax, so a third-party page embedding one of these URLs
- * sends no credentials and gets a 401 rather than a user's artwork.
+ * Only the routes a browser loads as a subresource opt out — cached artwork,
+ * and the provider-thumbnail proxy the request page's covers come through. It
+ * costs nothing here: each requires a device token or a session, and the
+ * session cookie is SameSite=lax, so a third-party page embedding one of these
+ * URLs sends no credentials and gets a 401 rather than a user's artwork.
  */
 export function allowCrossOriginEmbed(reply: FastifyReply): FastifyReply {
   return reply.header('Cross-Origin-Resource-Policy', 'cross-origin');
