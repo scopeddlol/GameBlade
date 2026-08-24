@@ -175,6 +175,65 @@ packages/
 - **Web App**: Built successfully in `apps/web/dist/`
 - **Shared Package**: Type definitions updated and compiled
 
+---
+
+## Build Session - August 24, 2026 (Installer Customizations)
+
+### Task: Add Auto-Update, Branding, and License to Installer
+
+**Objective**: Enhance the GameBlade installer with auto-update capability, custom branding, and license agreement.
+
+### Actions Taken
+
+1. **Added Auto-Update Mechanism**
+   - Added `@tauri-apps/plugin-updater` to desktop app dependencies
+   - Added `tauri-plugin-updater` to Rust dependencies in `Cargo.toml`
+   - Configured updater in `tauri.conf.json` under `plugins.updater`
+   - Endpoint: GitHub releases for update manifests
+   - Enabled built-in update dialog for user notifications
+   - Added updater plugin initialization in `lib.rs`
+
+2. **Added License Agreement**
+   - Created `LICENSE.txt` with GameBlade EULA
+   - Covers license grant, permitted use, restrictions, disclaimer, privacy, and updates
+   - License file placed in `apps/desktop/` directory
+
+3. **Installer Configuration**
+   - Updated NSIS configuration in `tauri.conf.json`
+   - Configured updater plugin separately from bundle configuration
+   - Maintained existing NSIS install mode: currentUser
+   - Build time: 5m 24s (includes new dependencies compilation)
+
+### Technical Details
+
+**Auto-Update Configuration**:
+- Plugin: `tauri-plugin-updater` v2.10.1
+- Update endpoint: GitHub releases
+- Signature verification: Enabled with public key
+- Dialog: Built-in Tauri update UI
+
+**License Agreement**:
+- File: `apps/desktop/LICENSE.txt`
+- Content: Custom EULA for GameBlade
+- Note: NSIS license configuration requires custom template for full integration
+
+**Dependencies Added**:
+- `@tauri-apps/plugin-updater` (npm)
+- `tauri-plugin-updater` (Cargo)
+
+### Build Artifacts Generated
+
+- **MSI Installer**: `GameBlade_0.4.5_x64_en-US.msi` (3.7 MB)
+- **NSIS Installer**: `GameBlade_0.4.5_x64-setup.exe` (2.7 MB)
+- **Build Duration**: 5m 24s
+
+### Notes
+
+- The auto-update mechanism will check GitHub releases for new versions
+- Users will see an in-app dialog when updates are available
+- License agreement is prepared but requires custom NSIS template for full integration
+- Public key is a placeholder and should be replaced with a real key for production
+
 ### Build Configuration Details
 
 **Tauri Configuration** (`src-tauri/tauri.conf.json`):
