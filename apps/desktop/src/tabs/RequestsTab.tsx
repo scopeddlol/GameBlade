@@ -245,13 +245,13 @@ function Shelves({ onError }: { onError: (message: string) => void }) {
   return (
     <>
       {shelves.map((shelf: DiscoveryShelf) => (
-        <section key={shelf.id} className="shelf">
+        <section key={shelf.id} className="discover">
           <h2>
             <Sparkles size={16} aria-hidden />
             {shelf.label}
             <span className="muted small">{shelf.hint}</span>
           </h2>
-          <div className="shelf-strip">
+          <div className="discover-strip">
             {shelf.items.map((item) => (
               <SuggestionCard
                 key={`${shelf.id}-${item.title}`}
@@ -275,7 +275,7 @@ function CardGrid({
   onError: (message: string) => void;
 }) {
   return (
-    <div className="shelf-grid">
+    <div className="discover-grid">
       {items.map((item) => (
         <SuggestionCard key={item.title} suggestion={item} onError={onError} />
       ))}
@@ -312,24 +312,24 @@ function SuggestionCard({
   });
 
   return (
-    <article className="shelf-card">
-      <div className="shelf-cover-wrap">
+    <article className="discover-card">
+      <div className="discover-cover-wrap">
         <Artwork
           path={suggestion.coverUrl}
           alt={suggestion.title}
-          className="shelf-cover"
+          className="discover-cover"
           fallbackText={suggestion.title}
         />
         {suggestion.rating !== null ? (
-          <span className="shelf-score" title={`Rated ${suggestion.rating} out of 100`}>
+          <span className="discover-score" title={`Rated ${suggestion.rating} out of 100`}>
             <Star size={11} aria-hidden />
             {suggestion.rating}
           </span>
         ) : null}
       </div>
 
-      <div className="shelf-body">
-        <p className="shelf-title" title={suggestion.title}>
+      <div className="discover-body">
+        <p className="discover-title" title={suggestion.title}>
           {suggestion.title}
         </p>
         {suggestion.releaseYear ? <p className="muted small">{suggestion.releaseYear}</p> : null}
