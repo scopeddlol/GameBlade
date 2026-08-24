@@ -643,8 +643,11 @@ abandoned wants the space back. Keeping them is the default; removing them
 deletes exactly the paths that download wrote and nothing else in the folder.
 Dismissing a paused or failed transfer asks the same question.
 
-Installers are built by CI on every push to `main` and attached to each tagged
-release. Once you have published one, set **Admin → Settings → Windows client
+Installers are built with `scripts/build-windows.ps1` — see
+[Building a Windows release by hand](#building-a-windows-release-by-hand). CI
+no longer builds them automatically: a job queued for a Windows runner that is
+not online does not fail, it sits pending until it times out hours later.
+Once you have published an installer, set **Admin → Settings → Windows client
 download URL** so the landing page links it.
 
 To build locally you need the [Rust toolchain](https://rustup.rs):
@@ -713,9 +716,13 @@ cd apps/desktop/src-tauri && cargo test && cargo clippy --all-targets -- -D warn
 
 ### Building a Windows release by hand
 
-CI builds the installers on a self-hosted Windows runner. When that runner is
-unavailable, `scripts/build-windows.ps1` does the same job on any Windows
-machine with Node 22, pnpm and the Rust toolchain:
+The Windows client is built on a real machine rather than by CI. Both Actions
+workflows still know how — the jobs are there and work — but neither starts on
+its own, because a job queued for a self-hosted runner that is offline sits
+pending until it times out hours later rather than failing.
+
+`scripts/build-windows.ps1` does the same job on any Windows machine with
+Node 22, pnpm and the Rust toolchain:
 
 ```powershell
 .\scripts\build-windows.ps1
@@ -737,7 +744,13 @@ avoids the execution-policy prompt.
 | `-SkipChecks`    | Skip typecheck and tests.                                   |
 
 Only the client is built — the server ships as a container image built on
-Linux. Commit the version bump and tag it once the installer is in hand.
+Linux. Commit the version bump and tag it once the installer is in hand; the
+tag publishes the release and the image, and you attach the `.exe` to it.
+
+To have Actions build the client again once a Windows runner is back, run the
+**Publish** workflow manually and tick **Build the Windows installers** — or,
+to restore the old automatic behaviour, drop the `if:` guard on the `desktop`
+job in each workflow. The comment above each one says what it used to be.
 
 ### Layout
 
