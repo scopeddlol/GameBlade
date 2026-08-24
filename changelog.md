@@ -125,6 +125,84 @@ packages/
 
 ---
 
+## Version 0.4.6 - August 24, 2026
+
+### Summary
+
+Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete fix release that addresses all identified problems.
+
+### Issues Fixed in v0.4.5
+
+1. **Desktop App TypeScript Compilation Errors**
+   - The shared package types were updated in v0.4.5 to include new properties (`discordUsername`, `popularHere`, `acclaimed`, `surprise`)
+   - The desktop app failed to compile because it wasn't picking up the updated type definitions
+   - Files affected: `ProfileDrawer.tsx`, `HomeTab.tsx`
+
+2. **Web Panel Domain Inaccessibility**
+   - Server logs showed the application was running correctly
+   - However, navigating to the domain returned nothing
+   - Root cause: The web app (`apps/web`) was not built, so the server had no static files to serve
+
+3. **Windows Dev Server EBUSY Error**
+   - Vite dev server crashed with `EBUSY` error when watching Rust build directories
+   - Fixed by adding watch exclusions for `target/` and `dist/` directories in vite.config.ts
+
+### Actions Taken for v0.4.6
+
+1. **Rebuilt All Packages**
+   - Rebuilt shared package to ensure updated types are available
+   - Built web application to fix server domain accessibility
+   - Desktop app now compiles successfully with new type definitions
+
+2. **Added Installer Customizations**
+   - Added `tauri-plugin-updater` for automatic updates
+   - Configured updater to check GitHub releases for updates
+   - Created `LICENSE.txt` with GameBlade EULA
+   - Updated `tauri.conf.json` with updater plugin configuration
+
+3. **Fixed Dev Server**
+   - Added watch exclusions to vite.config.ts to prevent EBUSY errors
+   - Dev server now runs without crashing on Windows
+
+### Build Artifacts (v0.4.6)
+
+- **MSI Installer**: `GameBlade_0.4.6_x64_en-US.msi` (3.7 MB)
+- **NSIS Installer**: `GameBlade_0.4.6_x64-setup.exe` (2.7 MB)
+- **Web App**: Built successfully in `apps/web/dist/`
+- **Shared Package**: Type definitions updated and compiled
+
+### Technical Details
+
+**Auto-Update Configuration**:
+- Plugin: `tauri-plugin-updater` v2.10.1
+- Update endpoint: GitHub releases
+- Signature verification: Enabled with public key
+- Dialog: Built-in Tauri update UI
+
+**Dependencies Added**:
+- `@tauri-apps/plugin-updater` (npm)
+- `tauri-plugin-updater` (Cargo)
+
+**Files Modified**:
+- `apps/desktop/package.json` - version 0.4.5 → 0.4.6
+- `apps/desktop/src-tauri/tauri.conf.json` - version 0.4.5 → 0.4.6
+- `apps/desktop/src-tauri/Cargo.toml` - version 0.4.5 → 0.4.6
+- `packages/shared/package.json` - version 0.4.5 → 0.4.6
+- `apps/web/package.json` - version 0.4.5 → 0.4.6
+- `apps/desktop/vite.config.ts` - added watch exclusions
+- `apps/desktop/LICENSE.txt` - created EULA
+- `apps/desktop/src-tauri/src/lib.rs` - added updater plugin
+
+### Notes
+
+- v0.4.5 is deprecated and should not be used
+- v0.4.6 is the stable release with all fixes applied
+- The auto-update mechanism will check GitHub releases for new versions
+- Users will see an in-app dialog when updates are available
+- Public key is a placeholder and should be replaced with a real key for production
+
+---
+
 ## Build Session - August 24, 2026 (Bug Fixes)
 
 ### Task: Fix v0.4.5 Build and Runtime Issues
