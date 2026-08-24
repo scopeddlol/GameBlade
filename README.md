@@ -372,17 +372,36 @@ desktop restyled the next time that choice changes.
 
 ### Editing the landing page
 
-**Admin → Appearance** turns the landing page into an ordered list of sections —
-hero, feature grid, stats, screenshots, prose, call to action. Add, reorder,
-hide and edit them with the real page rendering beside the form; the preview is
-the same component the public page uses, not a mock-up of it.
+**Admin → Appearance → Landing page** turns the landing page into an ordered
+list of sections. Add, reorder, hide and edit them with the real page rendering
+beside the form; the preview is the same component the public page uses, not a
+mock-up of it.
+
+| Section        |                                                                                                                        |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Hero           | The headline, with an eyebrow line, a background image and its dimming, alignment, and four heights up to full-screen. |
+| Feature grid   | Short "what you get" cards, two to four across, as cards or plain.                                                     |
+| How it works   | A numbered sequence — get an invite, install, play.                                                                    |
+| Stats          | A strip of numbers, optionally including the live game count.                                                          |
+| Screenshots    | A grid, two to four across, in widescreen, ultrawide, square or poster shape.                                          |
+| Video          | One embedded YouTube video.                                                                                            |
+| Quote          | A pull quote, larger than body text and attributed.                                                                    |
+| FAQ            | Questions and answers, each one expandable.                                                                            |
+| Text           | Prose, left or centred, at body or display size.                                                                       |
+| Spacer         | Space between two sections, with or without a rule.                                                                    |
+| Call to action | A closing prompt with the same buttons as the hero, as a panel or full width.                                          |
+
+Every section also has its own padding, background (none, a muted band, or an
+accent wash) and content width. Alternating those is most of what makes a page
+read as designed rather than as a stack of boxes, and all three come from theme
+tokens — so a light theme gets a light band rather than a dark stripe.
 
 Blocks rather than free-form positioning is deliberate: an operator says what
 the page contains and in what order, while each section's layout stays something
 that was designed once and works at every width, phones included. Operator copy
-is rendered as text and never as HTML, and a stored page that cannot be parsed
-falls back to the built-in one rather than taking the front door down. **Reset**
-restores the shipped page at any point.
+is rendered as text and never as HTML, only YouTube can be framed, and a stored
+page that cannot be parsed falls back to the built-in one rather than taking the
+front door down. **Reset** restores the shipped page at any point.
 
 ### Reporting a bug
 
