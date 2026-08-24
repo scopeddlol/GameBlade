@@ -9,7 +9,7 @@ import { ContextMenu, useContextMenu } from '../components/ContextMenu.js';
 import { GameCard } from '../components/GameCard.js';
 import { useGameMenuItems } from '../components/GameContextMenu.js';
 import { RequestsDialog } from '../components/GameRequests.js';
-import { Empty, ErrorNote, Loading } from '../components/ui.js';
+import { Empty, ErrorNote, GridSkeleton } from '../components/ui.js';
 import { useAddToLibrary } from '../hooks/useLibrary.js';
 import { errorMessage, ipc, queryString } from '../lib/ipc.js';
 
@@ -167,7 +167,7 @@ export function StoreTab({
       <ErrorNote message={error} />
 
       {gamesQuery.isLoading ? (
-        <Loading label="Loading the archive" />
+        <GridSkeleton />
       ) : (gamesQuery.data?.items ?? []).length === 0 ? (
         <Empty
           title="Nothing matches"

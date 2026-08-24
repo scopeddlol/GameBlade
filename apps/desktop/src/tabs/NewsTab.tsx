@@ -2,7 +2,7 @@ import type { PostInfo } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Megaphone, Send } from 'lucide-react';
 import { useState } from 'react';
-import { Empty, ErrorNote, Loading } from '../components/ui.js';
+import { Empty, ErrorNote, CardSkeleton } from '../components/ui.js';
 import { useSession } from '../hooks/useSession.js';
 import { errorMessage, ipc } from '../lib/ipc.js';
 import { PostCard } from './SocialTab.js';
@@ -48,7 +48,7 @@ export function NewsTab({ onOpenProfile }: { onOpenProfile: (userId: string) => 
       {isAdmin ? <Composer onPosted={refresh} onError={setError} /> : null}
 
       {newsQuery.isLoading ? (
-        <Loading label="Loading news" />
+        <CardSkeleton rows={3} />
       ) : posts.length === 0 ? (
         <Empty
           title="Nothing announced yet"

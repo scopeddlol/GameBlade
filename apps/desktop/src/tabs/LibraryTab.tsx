@@ -9,7 +9,7 @@ import { GameCard, GameDetailedRow, GameRow } from '../components/GameCard.js';
 import { useGameMenuItems } from '../components/GameContextMenu.js';
 import { ImportGames } from '../components/ImportGames.js';
 import { InstallDialog, useInstallDialog } from '../components/InstallDialog.js';
-import { Empty, ErrorNote, Loading } from '../components/ui.js';
+import { Empty, ErrorNote, GridSkeleton } from '../components/ui.js';
 import { useCollections } from '../hooks/useCollections.js';
 import {
   errorMessage,
@@ -231,7 +231,7 @@ export function LibraryTab({
       <ErrorNote message={error} />
 
       {gamesQuery.isLoading ? (
-        <Loading label="Loading your library" />
+        <GridSkeleton />
       ) : items.length === 0 ? (
         <Empty
           title={

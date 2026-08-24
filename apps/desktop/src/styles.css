@@ -12,6 +12,10 @@
   --ink-500: #3d465a;
   --ink-400: #7b8497;
   --ink-300: #8a93a6;
+  /* Matches the midnight preset; the theme overwrites it at runtime. Two
+     rules already asked for this step and got nothing, so they quietly
+     inherited whatever colour their parent happened to have. */
+  --ink-200: #b8bfcd;
   --ink-100: #e2e6ee;
 
   --blade-400: #62d0ff;
@@ -89,24 +93,92 @@ button {
   color: inherit;
 }
 
+/* Thin, and painted onto whatever is behind it rather than into a track of
+   its own. A dark gutter down the side of every panel was the most visible
+   thing in the window that nobody had chosen to look at. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--ink-950);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--ink-600);
-  border-radius: 6px;
+  background: var(--ink-700);
+  border-radius: 999px;
+  /* Inset by a transparent border, so the thumb reads as a floating pill. */
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--ink-500);
+  background: var(--ink-600);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 :focus-visible {
   outline: 2px solid var(--blade-400);
   outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/*
+ * The entering half of a tab switch.
+ *
+ * A few pixels and a fade — enough that the eye follows the change rather than
+ * being handed a different screen between frames, and short enough that
+ * nothing has to be waited through.
+ */
+@keyframes tab-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.tab-enter {
+  animation: tab-enter var(--dur-slow) var(--ease) both;
+}
+
+/* The shimmer a placeholder wears while its data is on the way. */
+@keyframes skeleton-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--ink-800);
+  border-radius: var(--radius-sm);
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.045), transparent);
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+
+/* Anyone who has asked not to be moved gets the end state and nothing else. */
+@media (prefers-reduced-motion: reduce) {
+  .tab-enter {
+    animation: none;
+  }
+  .skeleton::after {
+    animation: none;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
 }
 
 .muted {
@@ -155,7 +227,9 @@ button {
 .sidebar {
   width: var(--sidebar);
   flex-shrink: 0;
-  background: var(--ink-950);
+  /* A hair of separation from the content beside it, rather than a flat slab:
+     the gradient is what stops the two panes reading as one dark rectangle. */
+  background: linear-gradient(180deg, var(--ink-950), var(--ink-900));
   border-right: 1px solid var(--ink-800);
   display: flex;
   flex-direction: column;
@@ -209,21 +283,32 @@ button {
   cursor: pointer;
   text-align: left;
   transition:
-    background 0.12s ease,
-    color 0.12s ease;
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
 }
 .nav-item:hover {
   background: var(--ink-850);
   color: var(--ink-100);
 }
+/* The icon leading the label carries the hover as well, so the whole row
+   responds rather than just its background. */
+.nav-item svg {
+  transition: color var(--dur-fast) var(--ease);
+}
+.nav-item:hover svg {
+  color: var(--blade-400);
+}
 .nav-item.active {
   background: linear-gradient(90deg, rgba(98, 208, 255, 0.16), rgba(124, 92, 255, 0.07));
   color: #fff;
 }
+.nav-item.active svg {
+  color: var(--blade-400);
+}
 /* A flat fill reads the same as a hover state with the mouse nowhere near
    it — a persistent accent bar is what makes "this is where you are" and
    "this is what you're pointing at" look like two different things. */
-.nav-item.active::before {
+.nav-item::before {
   content: '';
   position: absolute;
   left: -10px;
@@ -232,6 +317,15 @@ button {
   width: 3px;
   border-radius: 0 3px 3px 0;
   background: linear-gradient(180deg, var(--blade-400), var(--violet));
+  transform: scaleY(0);
+  opacity: 0;
+  transition:
+    transform var(--dur-slow) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+.nav-item.active::before {
+  transform: scaleY(1);
+  opacity: 1;
 }
 
 .sidebar-foot {
@@ -476,8 +570,14 @@ button {
   font-weight: 500;
   cursor: pointer;
   transition:
-    background 0.12s ease,
-    border-color 0.12s ease;
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+/* Every button gives under the press, not only the primary one. A control
+   that moves when you push it is most of what makes a UI feel physical. */
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 .btn:disabled {
   opacity: 0.5;
@@ -502,18 +602,19 @@ button {
 .btn-primary {
   background: linear-gradient(135deg, var(--blade-500), var(--violet));
   color: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-sm);
   transition:
-    box-shadow 0.15s ease,
-    transform 0.15s ease;
+    box-shadow var(--dur-slow) var(--ease),
+    transform var(--dur-fast) var(--ease),
+    filter var(--dur-fast) var(--ease);
 }
 .btn-primary:hover:not(:disabled) {
+  /* Brightened as well as haloed: on a dark chrome a glow alone barely
+     registers as a hover on the one control the eye is already drawn to. */
+  filter: brightness(1.07);
   box-shadow:
     0 0 0 1px rgba(98, 208, 255, 0.4),
     0 6px 20px rgba(43, 183, 245, 0.28);
-}
-.btn-primary:active:not(:disabled) {
-  transform: translateY(1px);
 }
 
 .btn-ghost {
@@ -524,6 +625,7 @@ button {
 .btn-ghost:hover:not(:disabled),
 .btn-ghost.active {
   background: var(--ink-700);
+  border-color: var(--ink-600);
 }
 
 .btn-danger {
@@ -542,15 +644,21 @@ button {
   width: 32px;
   height: 32px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--ink-300);
   cursor: pointer;
   position: relative;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
 }
 .icon-btn:hover {
   background: var(--ink-800);
   color: var(--ink-100);
+}
+.icon-btn:active {
+  background: var(--ink-700);
 }
 
 .input,
@@ -572,11 +680,29 @@ textarea.input,
   width: auto;
   cursor: pointer;
 }
+.input,
+.select,
+textarea.input {
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.input:hover:not(:focus),
+.select:hover:not(:focus) {
+  border-color: var(--ink-600);
+}
 .input:focus,
 .select:focus,
 textarea:focus {
   outline: none;
   border-color: var(--blade-500);
+  /* A ring as well as a border: a one-pixel colour change on a dark field is
+     not enough to say which of six boxes has the caret in it. */
+  box-shadow: 0 0 0 3px rgba(43, 183, 245, 0.16);
+}
+.input::placeholder,
+textarea::placeholder {
+  color: var(--ink-500);
 }
 
 .color-input {
@@ -652,13 +778,21 @@ textarea:focus {
   gap: 6px;
 }
 .chip {
+  padding: 5px 11px;
+  border-radius: 999px;
   border: 1px solid var(--ink-700);
   background: var(--ink-850);
   color: var(--ink-300);
-  padding: 4px 11px;
-  border-radius: 999px;
   font-size: 12px;
   cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.chip:hover {
+  border-color: var(--ink-600);
+  color: var(--ink-100);
 }
 .chip.active {
   background: linear-gradient(135deg, var(--blade-500), var(--violet));
@@ -737,6 +871,32 @@ textarea:focus {
   padding: 56px 20px;
   text-align: center;
 }
+
+/* Placeholders that hold a page's shape while its data is on the way. The
+   sizes are the ones the real content settles at, so nothing jumps when it
+   arrives. */
+.skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.skeleton-card {
+  height: 108px;
+  border-radius: var(--radius-lg);
+}
+.skeleton-row {
+  height: 58px;
+  border-radius: var(--radius-md);
+}
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 16px;
+}
+.skeleton-cover {
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-md);
+}
 .state.empty {
   border: 1px dashed var(--ink-700);
   border-radius: 14px;
@@ -793,12 +953,12 @@ textarea:focus {
   padding: 0;
   background: none;
   cursor: pointer;
-  border-radius: 10px;
+  border-radius: var(--radius);
   overflow: hidden;
   aspect-ratio: 2 / 3;
   transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease;
+    transform var(--dur-slow) var(--ease),
+    box-shadow var(--dur-slow) var(--ease);
 }
 .game-card-art:hover {
   /* Movement alone reads as jitter rather than lift without a shadow to sell
@@ -807,6 +967,38 @@ textarea:focus {
   box-shadow:
     0 10px 24px rgba(0, 0, 0, 0.45),
     0 0 0 1px rgba(98, 208, 255, 0.18);
+}
+/* The art creeps out under the crop as the card lifts, which is what makes the
+   poster feel like the thing being picked up rather than a picture of one. */
+.game-card-art .artwork {
+  transition: transform var(--dur-slow) var(--ease);
+}
+.game-card-art:hover .artwork {
+  transform: scale(1.04);
+}
+.game-card-art:active {
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .game-card-art,
+  .game-card-art .artwork,
+  .shelf-card {
+    transition: none;
+  }
+  .game-card-art:hover,
+  .game-card-art:hover .artwork,
+  .shelf-card:hover {
+    transform: none;
+  }
+}
+
+/* The title under a poster is the click target's label; dimming it until the
+   pointer arrives makes a wall of covers read as art rather than as a table. */
+.game-card-title {
+  transition: color var(--dur-fast) var(--ease);
+}
+.game-card:hover .game-card-title {
+  color: var(--blade-400);
 }
 
 .artwork {
@@ -1127,6 +1319,44 @@ textarea:focus {
 
 /* ------------------------------------------------------------------ drawer */
 
+/* A panel that slides in over the page, rather than appearing on top of it. */
+@keyframes drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes modal-in {
+  from {
+    transform: translateY(8px) scale(0.985);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer,
+  .modal,
+  .drawer-backdrop,
+  .modal-backdrop {
+    animation: none !important;
+  }
+}
+
 .drawer-backdrop {
   position: fixed;
   inset: 0;
@@ -1135,6 +1365,7 @@ textarea:focus {
   backdrop-filter: blur(3px);
   display: flex;
   justify-content: flex-end;
+  animation: backdrop-in var(--dur-fast) var(--ease);
 }
 
 .drawer {
@@ -1144,6 +1375,8 @@ textarea:focus {
   border-left: 1px solid var(--ink-700);
   overflow-y: auto;
   position: relative;
+  box-shadow: var(--shadow-lg);
+  animation: drawer-in var(--dur-slow) var(--ease);
 }
 .drawer.narrow {
   width: min(460px, 100%);
@@ -1739,11 +1972,13 @@ textarea:focus {
 .card {
   background: var(--ink-850);
   border: 1px solid var(--ink-700);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 18px;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* A card should sit on the page rather than be cut out of it. */
+  box-shadow: var(--shadow-sm);
 }
 
 .storage-locations {
@@ -2072,18 +2307,20 @@ textarea:focus {
   align-items: center;
   justify-content: center;
   padding: 24px;
+  animation: backdrop-in var(--dur-fast) var(--ease);
 }
 
 .modal {
   width: min(440px, 100%);
   background: var(--ink-900);
   border: 1px solid var(--ink-700);
-  border-radius: 14px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  animation: modal-in var(--dur-slow) var(--ease);
 }
 .modal h2 {
   font-size: 16px;
@@ -2867,7 +3104,7 @@ textarea:focus {
   border: 0;
   background: transparent;
   padding: 0;
-  color: var(--ink-50);
+  color: var(--ink-100);
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
@@ -3010,7 +3247,7 @@ textarea:focus {
 }
 .settings-nav-item.active {
   background: var(--ink-800);
-  color: var(--ink-50);
+  color: var(--ink-100);
   font-weight: 600;
 }
 

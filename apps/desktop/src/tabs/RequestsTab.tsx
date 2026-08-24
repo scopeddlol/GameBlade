@@ -10,7 +10,7 @@ import clsx from 'clsx';
 import { ArrowBigUp, Check, Plus, Search, Sparkles, Star, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { RequestRow } from '../components/GameRequests.js';
-import { Artwork, Empty, ErrorNote, Loading } from '../components/ui.js';
+import { Artwork, Empty, ErrorNote, Loading, ListSkeleton } from '../components/ui.js';
 import {
   useDiscovery,
   useRequestDigest,
@@ -91,7 +91,7 @@ export function RequestsTab({ onOpenGameId }: { onOpenGameId: (gameId: string) =
         </div>
 
         {listQuery.isLoading ? (
-          <Loading label="Loading requests" />
+          <ListSkeleton rows={5} />
         ) : requests.length === 0 ? (
           <Empty
             title={

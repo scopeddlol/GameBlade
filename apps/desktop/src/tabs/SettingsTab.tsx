@@ -38,6 +38,7 @@ import {
   Loading,
   ProgressBar,
   SectionHeader,
+  CardSkeleton,
 } from '../components/ui.js';
 import { useSession } from '../hooks/useSession.js';
 import { themeStyle } from '../hooks/useTheme.js';
@@ -84,7 +85,7 @@ export function SettingsTab() {
     saveMutation.mutate(next);
   };
 
-  if (settingsQuery.isLoading || !draft) return <Loading label="Loading settings" />;
+  if (settingsQuery.isLoading || !draft) return <CardSkeleton rows={4} />;
 
   return (
     <div className="tab-content settings">
