@@ -1083,7 +1083,20 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       if (!game) throw ApiError.badRequest('That game is not in the catalog');
     }
 
-    return gameRequests.decide(context.user.id, id, input);
+    const decided = gameRequests.decide(context.user.id, id, input);
+
+    // Telling the Discord that something people asked for has landed is the
+    // most useful thing the bot does. Fire-and-forget: a Discord outage must
+    // not fail the decision, which has already been recorded.
+    if (input.status === 'added' && settings.get().discordAnnounceRequests) {
+      void discord
+        .post(`**${decided.title}** was requested and has just been added.`)
+        .catch((error: unknown) =>
+          request.log.warn({ err: error }, 'could not announce a granted request'),
+        );
+    }
+
+    return decided;
   });
 
   app.delete('/admin/requests/:id', async (request) => {

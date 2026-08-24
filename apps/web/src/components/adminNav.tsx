@@ -161,6 +161,11 @@ export const ADMIN_SECTIONS: AdminSection[] = [
         prefetch: [{ key: ['admin', 'settings'], path: '/admin/settings' }],
       },
       {
+        to: '/admin/settings/discord',
+        label: 'Discord',
+        prefetch: [{ key: ['admin', 'discord'], path: '/admin/discord' }],
+      },
+      {
         to: '/admin/settings/api',
         label: 'API keys',
         prefetch: [{ key: ['admin', 'api-keys'], path: '/admin/api-keys' }],

@@ -423,6 +423,42 @@ is rendered as text and never as HTML, only YouTube can be framed, and a stored
 page that cannot be parsed falls back to the built-in one rather than taking the
 front door down. **Reset** restores the shipped page at any point.
 
+### Discord
+
+Entirely optional — with none of it configured, GameBlade behaves exactly as it
+did before. **Admin → Settings → Discord** has two independent halves.
+
+**Sign in with Discord** needs a Discord application's client ID and secret.
+Players can then link from their account page and use it to sign in. Linking
+never creates an account: this server is invite-only, so an unlinked Discord is
+told to sign in normally once and link. The redirect URI registered on the
+application must exactly match `<your server>/api/auth/discord/callback`.
+
+With a guild ID set, linking also checks membership of your Discord, and the
+bot adds them to it using the `guilds.join` scope they granted — being told to
+go and join is a step people do not take. If that fails, they get your invite
+link instead. **Require players to be in the server** refuses the link outright
+when neither works.
+
+A linked player's handle is **private by default**. The toggle to show it lives
+on their account page, and re-linking — which happens on every Discord sign-in
+— does not turn it back on.
+
+**The bot** needs a token, a channel and this server's public address. The
+address is for cover art: Discord fetches images itself, so a relative path
+would resolve against discord.com. **Test** proves the token works before you
+rely on it. It can post whatever you type, announce newly added games every
+fifteen minutes, and announce requests as they are granted. Turning
+announcements on starts from that moment rather than posting everything already
+in the catalog, and only games whose metadata matched are announced — an
+unmatched entry is a folder name with no cover and no blurb.
+
+One limitation worth knowing: **Discord publishes no friends list to
+third-party applications.** There is no scope for it and no endpoint. "Friends
+from Discord" therefore means other players here who are in the same server as
+you, which is the closest the platform allows — and since linking pushes
+everyone into that one server, very nearly the same set.
+
 ### Reporting a bug
 
 **Report a problem** sits in the client's sidebar, reachable from wherever
