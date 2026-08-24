@@ -14,6 +14,7 @@ import { AdminAnalyticsPage } from './pages/admin/AdminAnalyticsPage.js';
 import { AdminLandingPage } from './pages/admin/AdminLandingPage.js';
 import { AdminThemePage } from './pages/admin/AdminThemePage.js';
 import { AdminApiPage } from './pages/admin/AdminApiPage.js';
+import { AdminDiscordPage } from './pages/admin/AdminDiscordPage.js';
 import { AdminBugsPage } from './pages/admin/AdminBugsPage.js';
 import { AdminHealthPage } from './pages/admin/AdminHealthPage.js';
 import { AdminSavePathsPage } from './pages/admin/AdminSavePathsPage.js';
@@ -143,6 +144,7 @@ export function App() {
 
           <Route path="settings">
             <Route index element={<AdminSettingsPage />} />
+            <Route path="discord" element={<AdminDiscordPage />} />
             <Route path="api" element={<AdminApiPage />} />
           </Route>
         </Route>

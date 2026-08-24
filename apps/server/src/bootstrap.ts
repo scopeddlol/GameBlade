@@ -95,6 +95,7 @@ export function startSchedules(app: FastifyInstance): () => void {
     settings,
     backups,
     saveManifest,
+    discord,
   } = app.gameblade;
   const timers: NodeJS.Timeout[] = [];
 
@@ -191,6 +192,23 @@ export function startSchedules(app: FastifyInstance): () => void {
   const manifestTimer = setInterval(pullManifest, 60 * 60_000);
   manifestTimer.unref();
   timers.push(manifestTimer);
+
+  /**
+   * Announces newly added games to Discord.
+   *
+   * On its own timer rather than hooked into the scanner, for two reasons: a
+   * game is worth announcing only once its metadata has landed, which happens
+   * after it is inserted; and a Discord outage must not be able to fail a
+   * scan. The service keeps a watermark, so nothing is announced twice and a
+   * restart mid-run picks up where it stopped.
+   */
+  const announceTimer = setInterval(() => {
+    void discord.announceNewGames().catch((error: unknown) => {
+      app.log.warn({ err: error }, 'could not announce new games to Discord');
+    });
+  }, 15 * 60_000);
+  announceTimer.unref();
+  timers.push(announceTimer);
 
   const cleanup = setInterval(() => {
     try {

@@ -1,6 +1,6 @@
 import type { ProfileShowcase } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Clock, Gamepad2, Trophy, UserPlus, UserX, X } from 'lucide-react';
+import { Check, Clock, Gamepad2, MessageCircle, Trophy, UserPlus, UserX, X } from 'lucide-react';
 import { formatDate, formatPlaytime, formatRelative } from '../lib/format.js';
 import { errorMessage, ipc } from '../lib/ipc.js';
 import { PostCard } from '../tabs/SocialTab.js';
@@ -77,6 +77,13 @@ export function ProfileDrawer({ userId, onClose }: { userId: string; onClose: ()
                           ? ` · Last seen ${formatRelative(profile.lastSeenAt)}`
                           : ''}
                   </p>
+                  {/* Only ever present when they turned it on themselves. */}
+                  {profile.discordUsername ? (
+                    <p className="muted small discord-handle">
+                      <MessageCircle size={12} aria-hidden />
+                      {profile.discordUsername}
+                    </p>
+                  ) : null}
                 </div>
               </div>
 

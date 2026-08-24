@@ -877,8 +877,50 @@ export const gameAchievementRules = sqliteTable(
   },
   (t) => [
     index('game_achievement_rules_game_idx').on(t.gameId),
-    uniqueIndex('game_achievement_rules_key_idx').on(t.gameId, t.achievementKey),
+    // Includes the source: a game needs one rule per candidate emulator
+    // layout, since which one a given copy uses is not knowable up front.
+    uniqueIndex('game_achievement_rules_key_idx').on(t.gameId, t.achievementKey, t.sourceTemplate),
   ],
+);
+
+/**
+ * A player's linked Discord account.
+ *
+ * One row per user, keyed on the user: a Discord account belongs to one
+ * GameBlade account and vice versa, which is what lets it be a sign-in method
+ * rather than only a decoration.
+ *
+ * The refresh token is kept because membership of the operator's server has to
+ * be re-checkable later — a link that was valid the day it was made says
+ * nothing about whether they are still in the Discord a week on.
+ */
+export const discordLinks = sqliteTable(
+  'discord_links',
+  {
+    userId: text('user_id')
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    discordId: text('discord_id').notNull(),
+    /** The @handle. Discord usernames change, so this is refreshed on sign-in. */
+    username: text('username').notNull(),
+    /** The display name, which may differ from the handle and may be unset. */
+    globalName: text('global_name'),
+    avatar: text('avatar'),
+    accessToken: text('access_token'),
+    refreshToken: text('refresh_token'),
+    tokenExpiresAt: text('token_expires_at'),
+    /**
+     * Whether other players may see the handle. Off by default: linking is
+     * for signing in and finding people, and neither requires publishing a
+     * name the player did not ask to publish.
+     */
+    showUsername: integer('show_username', { mode: 'boolean' }).notNull().default(false),
+    /** Whether they were in the operator's guild at the last check. */
+    inGuild: integer('in_guild', { mode: 'boolean' }).notNull().default(false),
+    guildCheckedAt: text('guild_checked_at'),
+    linkedAt: text('linked_at').notNull().default(now),
+  },
+  (t) => [uniqueIndex('discord_links_discord_id_idx').on(t.discordId)],
 );
 
 /** A bug report, with the diagnostics the client gathered alongside it. */

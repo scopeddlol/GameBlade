@@ -3399,6 +3399,50 @@ textarea::placeholder {
   min-width: 0;
 }
 
+/* A linked Discord handle, shown only when its owner turned it on. */
+.discord-handle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  color: var(--violet);
+}
+
+/* Whether a game is set up for cloud saves and achievements. Both states are
+   drawn — an absent badge would read as "still loading" rather than "not set
+   up", which is the thing a player actually wants to know. */
+.capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.capability {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--ink-700);
+  background: var(--ink-850);
+  color: var(--ink-400);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.capability.on {
+  border-color: color-mix(in srgb, var(--blade-500) 45%, transparent);
+  background: color-mix(in srgb, var(--blade-500) 12%, transparent);
+  color: var(--blade-400);
+}
+/* On a poster there is no room for the labels, so the icons carry it alone
+   and the tooltip says the rest. */
+.capabilities.compact {
+  gap: 4px;
+}
+.capabilities.compact .capability {
+  padding: 3px 5px;
+}
+
 /* ------------------------------------------------------- request discovery */
 
 .requests-finder {
@@ -3429,21 +3473,29 @@ textarea::placeholder {
   gap: 12px;
 }
 
-.shelf h2 {
+/* Named `discover`, not `shelf`: `.shelf` is already the Home tab's
+   horizontal game row (display:flex, near the top of this file). Reusing it
+   here made the heading and the card strip siblings in a flex row, so the
+   heading collapsed into a squashed column down the left and the strip
+   scrolled inside a second scrollbar. */
+.discover {
+  display: block;
+}
+.discover h2 {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0 0 10px;
   font-size: 15px;
 }
-.shelf h2 .muted {
+.discover h2 .muted {
   margin-left: auto;
   font-weight: 400;
 }
 /* A strip rather than a grid: each shelf is a sideline to the queue below, and
    four grids of eighteen covers would push the actual requests off the screen.
    Scroll snapping keeps a part-scrolled strip from stopping mid-card. */
-.shelf-strip {
+.discover-strip {
   display: flex;
   gap: 12px;
   overflow-x: auto;
@@ -3451,18 +3503,18 @@ textarea::placeholder {
   scroll-snap-type: x proximity;
   scrollbar-width: thin;
 }
-.shelf-strip > * {
+.discover-strip > * {
   scroll-snap-align: start;
 }
 /* Search results have no queue under them competing for the height, so they
    wrap instead of scrolling — every match is visible at once. */
-.shelf-grid {
+.discover-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 12px;
 }
 
-.shelf-card {
+.discover-card {
   flex: 0 0 168px;
   display: flex;
   flex-direction: column;
@@ -3476,28 +3528,41 @@ textarea::placeholder {
     transform 140ms ease,
     box-shadow 140ms ease;
 }
-.shelf-grid .shelf-card {
+.discover-grid .discover-card {
   flex: initial;
 }
-.shelf-card:hover {
+.discover-card:hover {
   border-color: var(--ink-700);
   transform: translateY(-2px);
   box-shadow: 0 8px 20px rgb(0 0 0 / 0.28);
 }
 
-.shelf-cover-wrap {
+.discover-cover-wrap {
   position: relative;
 }
-.shelf-cover {
+/* Every cover the same shape, whatever the provider sent.
+   `height` is set explicitly rather than left to `.artwork`'s `height: 100%`:
+   a percentage height against an auto-height parent resolves to auto, so which
+   of the two rules won decided whether the aspect ratio applied at all — and
+   art of a dozen different natural sizes then rendered at a dozen different
+   sizes. Pinning height to auto lets aspect-ratio be the only thing deciding. */
+.discover-cover {
   width: 100%;
+  height: auto;
   aspect-ratio: 2 / 3;
   object-fit: cover;
   border-radius: var(--radius-sm);
   display: block;
 }
+/* The initials placeholder has to match, or a game with no art breaks the row. */
+.discover-cover.placeholder {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 3;
+}
 /* Sits on the artwork rather than in the body: the body is where the title and
    blurb go, and a score competing with them there reads as part of the name. */
-.shelf-score {
+.discover-score {
   position: absolute;
   top: 6px;
   right: 6px;
@@ -3513,13 +3578,13 @@ textarea::placeholder {
   backdrop-filter: blur(4px);
 }
 
-.shelf-body {
+.discover-body {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
-.shelf-title {
+.discover-title {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
@@ -3527,11 +3592,11 @@ textarea::placeholder {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.shelf-body p {
+.discover-body p {
   margin: 0;
 }
 /* Two lines, so a long blurb cannot make one card taller than the row. */
-.shelf-blurb {
+.discover-blurb {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
@@ -3539,8 +3604,8 @@ textarea::placeholder {
   overflow: hidden;
   line-height: 1.35;
 }
-.shelf-card .btn,
-.shelf-card .row-chip {
+.discover-card .btn,
+.discover-card .row-chip {
   margin-top: auto;
   justify-content: center;
 }

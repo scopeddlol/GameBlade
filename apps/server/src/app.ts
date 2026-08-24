@@ -23,6 +23,7 @@ import { ApiError } from './lib/errors.js';
 import { adminRoutes } from './routes/admin.js';
 import { apiV1Routes } from './routes/api-v1.js';
 import { authRoutes } from './routes/auth.js';
+import { discordRoutes } from './routes/discord.js';
 import { downloadRoutes } from './routes/downloads.js';
 import { gameRoutes } from './routes/games.js';
 import { healthRoutes } from './routes/health.js';
@@ -170,6 +171,7 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
       await gameRoutes(api);
       await imageRoutes(api);
       await installerRoutes(api);
+      await discordRoutes(api);
       await downloadRoutes(api);
       await socialRoutes(api);
       await playRoutes(api);

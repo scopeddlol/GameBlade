@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
+import { eq } from 'drizzle-orm';
 import { achievements, games, libraries } from '../db/schema.js';
 
 /**
@@ -95,6 +96,104 @@ describe('achievement rules', () => {
     ).json() as { achievements: Array<{ achievementKey: string }> };
 
     expect(rules.achievements.map((r) => r.achievementKey)).toEqual(['first_blood']);
+  });
+
+  /* ------------------------------------------------- generating from a store */
+
+  /**
+   * The half that makes achievements usable at all.
+   *
+   * Hand-authoring one rule per achievement per game was never going to
+   * happen, so nothing ever unlocked. Generating them from the layouts Steam
+   * emulators use is what turns an imported achievement list into rules that
+   * can actually fire.
+   */
+  describe('generating rules from emulator layouts', () => {
+    const generate = (body: unknown = {}) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/games/g1/achievement-rules/generate',
+        headers: auth(),
+        payload: body,
+      });
+
+    it('refuses without a Steam app id, naming what is missing', async () => {
+      // Every layout but the portable one keys its folder on the app id, so
+      // without one the generated paths would point at nothing.
+      const response = await generate({ sources: ['goldberg'] });
+      expect(response.statusCode).toBe(400);
+      expect((response.json() as { error: { message: string } }).error.message).toContain(
+        'Steam app id',
+      );
+    });
+
+    it('writes one rule per achievement per layout', async () => {
+      app.gameblade.db.update(games).set({ steamAppId: 440 }).where(eq(games.id, 'g1')).run();
+      app.gameblade.db
+        .insert(achievements)
+        .values({ id: 'gen-a2', gameId: 'g1', key: 'second_blood', name: 'Second Blood' })
+        .run();
+
+      const response = await generate({ sources: ['goldberg', 'codex'] });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ generated: 4, achievements: 2 });
+
+      const rules = (
+        await app.inject({ method: 'GET', url: '/api/games/g1/rules', headers: auth() })
+      ).json() as {
+        achievements: Array<{ achievementKey: string; sourceTemplate: string; selector: string }>;
+      };
+
+      // The app id lands in the path, and each rule selects its own key.
+      const goldberg = rules.achievements.find(
+        (r) => r.sourceTemplate.includes('GSE Saves') && r.achievementKey === 'first_blood',
+      );
+      expect(goldberg?.sourceTemplate).toBe('{appdata}\\GSE Saves\\440\\achievements.json');
+      expect(goldberg?.selector).toBe('first_blood.earned');
+
+      const codex = rules.achievements.find(
+        (r) => r.sourceTemplate.includes('CODEX') && r.achievementKey === 'second_blood',
+      );
+      expect(codex?.selector).toBe('second_blood.Achieved');
+    });
+
+    it('replaces rather than doubling up when run twice', async () => {
+      await generate({ sources: ['goldberg'] });
+      const second = await generate({ sources: ['goldberg'] });
+      expect((second.json() as { generated: number }).generated).toBe(2);
+
+      const rules = (
+        await app.inject({ method: 'GET', url: '/api/games/g1/rules', headers: auth() })
+      ).json() as { achievements: unknown[] };
+      expect(rules.achievements).toHaveLength(2);
+    });
+
+    it('refuses when the game has no achievements to write rules for', async () => {
+      app.gameblade.db
+        .insert(games)
+        .values({
+          id: 'g2',
+          libraryId: 'lib1',
+          relPath: 'Bare',
+          kind: 'folder',
+          title: 'Bare',
+          sortTitle: 'bare',
+          searchTitle: 'bare',
+          steamAppId: 220,
+        })
+        .run();
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/games/g2/achievement-rules/generate',
+        headers: auth(),
+        payload: {},
+      });
+      expect(response.statusCode).toBe(400);
+      expect((response.json() as { error: { message: string } }).error.message).toContain(
+        'Import this game',
+      );
+    });
   });
 
   it('refuses a rule naming an achievement this game does not have', async () => {

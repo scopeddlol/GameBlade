@@ -1,4 +1,5 @@
 import type { SessionInfo } from '@gameblade/shared';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Swords } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
@@ -114,6 +115,59 @@ export function LoginPage() {
           Sign in
         </button>
       </form>
+
+      <DiscordSignIn />
     </AuthShell>
+  );
+}
+
+/**
+ * The other way in, for anyone who has linked an account.
+ *
+ * Hidden entirely unless Discord is configured *and* the visitor could
+ * plausibly use it — a button that always fails is worse than no button. It
+ * cannot create accounts: this server is invite-only, and the callback says so
+ * rather than quietly making one.
+ */
+function DiscordSignIn() {
+  const [error, setError] = useState<string | null>(null);
+
+  const statusQuery = useQuery({
+    queryKey: ['auth', 'discord', 'status'],
+    queryFn: () => api.get<{ configured: boolean }>('/auth/discord/status'),
+    staleTime: 5 * 60_000,
+  });
+
+  const start = useMutation({
+    mutationFn: () => api.get<{ url: string }>('/auth/discord/start?intent=signin'),
+    onSuccess: (result) => {
+      window.location.href = result.url;
+    },
+    onError: (caught) =>
+      setError(caught instanceof ApiRequestError ? caught.message : 'Could not reach Discord.'),
+  });
+
+  if (!statusQuery.data?.configured) return null;
+
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="flex items-center gap-3">
+        <span className="bg-ink-700 h-px flex-1" />
+        <span className="text-ink-500 text-xs">or</span>
+        <span className="bg-ink-700 h-px flex-1" />
+      </div>
+
+      <FormError message={error} />
+
+      <button
+        type="button"
+        className="gb-btn-ghost w-full"
+        onClick={() => start.mutate()}
+        disabled={start.isPending}
+      >
+        {start.isPending ? <Spinner className="h-4 w-4" /> : null}
+        Sign in with Discord
+      </button>
+    </div>
   );
 }

@@ -372,6 +372,8 @@ export interface ProfileSummary {
   playingGameId: string | null;
   playingGameTitle: string | null;
   playingSince: string | null;
+  /** Their Discord handle — only when they have chosen to show it. */
+  discordUsername?: string | null;
 }
 
 export interface ProfileDetail extends ProfileSummary {
@@ -611,6 +613,12 @@ export interface HomeFeed {
   featured: FeaturedEntry[];
   continuePlaying: GameSummary[];
   recentlyAdded: GameSummary[];
+  /** Most total playtime across everyone here — this catalog, these players. */
+  popularHere: GameSummary[];
+  /** The best-reviewed things on the shelf. */
+  acclaimed: GameSummary[];
+  /** A random handful, so the middle of a large archive is reachable at all. */
+  surprise: GameSummary[];
   friendsPlaying: Array<{ profile: ProfileSummary; game: GameSummary }>;
   friendActivity: ActivityEntry[];
   recentAchievements: AchievementProgress[];

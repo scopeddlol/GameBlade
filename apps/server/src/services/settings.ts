@@ -31,6 +31,47 @@ export interface RuntimeSettings {
   backupEveryHours: number;
   /** Whether cached artwork is archived too. Large, and re-fetchable. */
   backupIncludeImages: boolean;
+
+  /* ------------------------------------------------------------- Discord */
+
+  /** OAuth application credentials, for linking and signing in with Discord. */
+  discordClientId: string | null;
+  discordClientSecret: string | null;
+  /** Bot token, for posting and for adding people to the guild. */
+  discordBotToken: string | null;
+  /** The server players are expected to be in. */
+  discordGuildId: string | null;
+  /** Where to send someone who is not in it yet. */
+  discordInviteUrl: string | null;
+  /** Channel the bot announces into. */
+  discordChannelId: string | null;
+  /**
+   * The address players reach this server on, e.g. https://archive.example.com.
+   *
+   * Needed because Discord fetches embedded cover art itself rather than
+   * through anyone's browser, so a relative path would resolve against
+   * discord.com. There is no request to infer it from when a schedule posts.
+   */
+  discordPublicUrl: string | null;
+  /** Whether a newly scanned game is announced. */
+  discordAnnounceNewGames: boolean;
+  /** Whether an approved request is announced. */
+  discordAnnounceRequests: boolean;
+  /**
+   * Whether linking requires being in the guild.
+   *
+   * On by default: the point of pointing every player at one Discord is that
+   * they end up in it.
+   */
+  discordRequireGuild: boolean;
+  /**
+   * How far the new-game announcer has got.
+   *
+   * A watermark rather than a flag per game: it survives restarts, and setting
+   * it to "now" the moment announcements are switched on is what stops a
+   * server with ten thousand existing games announcing all of them at once.
+   */
+  discordLastAnnouncedAt: string | null;
 }
 
 const DEFAULT_TAGLINE = 'A private home for free-to-play and DRM-free games worth keeping.';
@@ -93,6 +134,17 @@ export class SettingsService {
       backupEveryHours: asNumber('backupEveryHours', 24),
       backupIncludeImages: asBoolean('backupIncludeImages', false),
       landingBlocks: stored.get('landingBlocks') ?? null,
+      discordClientId: asString('discordClientId', null),
+      discordClientSecret: asString('discordClientSecret', null),
+      discordBotToken: asString('discordBotToken', null),
+      discordGuildId: asString('discordGuildId', null),
+      discordInviteUrl: asString('discordInviteUrl', null),
+      discordChannelId: asString('discordChannelId', null),
+      discordPublicUrl: asString('discordPublicUrl', null),
+      discordAnnounceNewGames: asBoolean('discordAnnounceNewGames', true),
+      discordAnnounceRequests: asBoolean('discordAnnounceRequests', true),
+      discordRequireGuild: asBoolean('discordRequireGuild', true),
+      discordLastAnnouncedAt: asString('discordLastAnnouncedAt', null),
     };
     return this.cache;
   }

@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { AlertTriangle, CloudUpload, Loader2, Trophy } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useArtwork } from '../hooks/useArtwork.js';
 
@@ -178,6 +178,65 @@ export function Avatar({
         <span className={clsx('presence-dot', presence)} title={presence} />
       ) : null}
     </span>
+  );
+}
+
+/**
+ * Whether a game is set up for cloud saves and achievements.
+ *
+ * Both are things an operator configures per game, and until now the only way
+ * to find out was to play one and see whether anything happened. A player
+ * choosing what to install has a fair claim on knowing which of their games
+ * will carry their saves between machines.
+ *
+ * Absence is stated rather than left blank: a missing badge reads as "the
+ * page has not loaded" where a greyed one reads as "not set up here".
+ */
+export function GameCapabilities({
+  hasSaveRule,
+  achievementCount,
+  unlockedCount = 0,
+  compact = false,
+}: {
+  hasSaveRule: boolean;
+  achievementCount: number;
+  unlockedCount?: number;
+  compact?: boolean;
+}) {
+  const hasAchievements = achievementCount > 0;
+
+  return (
+    <div className={clsx('capabilities', compact && 'compact')}>
+      <span
+        className={clsx('capability', hasSaveRule && 'on')}
+        title={
+          hasSaveRule
+            ? 'Cloud saves are set up: your saves follow you between machines.'
+            : 'No cloud-save rule, so saves for this game stay on this machine.'
+        }
+      >
+        <CloudUpload size={compact ? 11 : 13} aria-hidden />
+        {compact ? null : <span>Cloud saves</span>}
+      </span>
+
+      <span
+        className={clsx('capability', hasAchievements && 'on')}
+        title={
+          hasAchievements
+            ? `${achievementCount} achievements tracked${unlockedCount > 0 ? `, ${unlockedCount} unlocked` : ''}.`
+            : 'No achievements set up for this game.'
+        }
+      >
+        <Trophy size={compact ? 11 : 13} aria-hidden />
+        {compact ? null : (
+          <span>
+            {hasAchievements
+              ? `${unlockedCount > 0 ? `${unlockedCount}/${achievementCount}` : achievementCount} achievements`
+              : 'No achievements'}
+          </span>
+        )}
+      </span>
+    </div>
   );
 }
 

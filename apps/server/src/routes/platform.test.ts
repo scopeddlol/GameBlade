@@ -338,6 +338,31 @@ describe('platform routes', () => {
     expect(body.stats.games).toBe(1);
   });
 
+  /**
+   * The shelves that let a large archive be browsed rather than just searched.
+   *
+   * Each hides itself when empty on the client, so the thing worth pinning is
+   * that the server always sends the keys — an absent key would render as a
+   * missing section rather than an empty one, and be much harder to notice.
+   */
+  it('sends every home shelf, and puts the most-played game on the popular one', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/home', headers: auth(admin) });
+    const body = response.json() as {
+      popularHere: Array<{ id: string }>;
+      acclaimed: unknown[];
+      surprise: Array<{ id: string }>;
+    };
+
+    expect(Array.isArray(body.popularHere)).toBe(true);
+    expect(Array.isArray(body.acclaimed)).toBe(true);
+    expect(Array.isArray(body.surprise)).toBe(true);
+
+    // The one game in this fixture has recorded playtime, so it is the most
+    // played here, and a random pick of one catalog entry can only be it.
+    expect(body.popularHere[0]?.id).toBe(gameId);
+    expect(body.surprise[0]?.id).toBe(gameId);
+  });
+
   it('serves an upload to a token in the query string', async () => {
     // An <img> or <video> tag cannot send an Authorization header, so the
     // desktop client can only load avatars, screenshots and clips this way.

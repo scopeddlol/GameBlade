@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Laptop, LogOut, Swords } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Field, FormError, PageLoader, Spinner } from '../components/ui.js';
+import { Badge, Field, FormError, PageLoader, Spinner } from '../components/ui.js';
 import { useSession } from '../hooks/useSession.js';
 import { api, ApiRequestError } from '../lib/api.js';
 import { formatRelative } from '../lib/format.js';
@@ -44,6 +44,7 @@ export function AccountPage() {
 
       <ProfileSection user={user} onSaved={refresh} />
       <PasswordSection />
+      <DiscordSection />
       <DevicesSection />
     </div>
   );
@@ -182,6 +183,147 @@ function PasswordSection() {
         Change password
       </button>
     </form>
+  );
+}
+
+/**
+ * Linking a Discord account, and deciding whether anyone else sees it.
+ *
+ * The whole section disappears on a server that has not set Discord up, which
+ * is most of them: an integration nobody configured should not leave a dead
+ * panel on everyone's account page.
+ */
+function DiscordSection() {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+
+  const query = useQuery({
+    queryKey: ['account', 'discord'],
+    queryFn: () =>
+      api.get<{
+        link: {
+          username: string;
+          globalName: string | null;
+          avatarUrl: string | null;
+          showUsername: boolean;
+          inGuild: boolean;
+        } | null;
+        status: { configured: boolean; inviteUrl: string | null; requireGuild: boolean };
+      }>('/account/discord'),
+  });
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['account', 'discord'] });
+
+  const start = useMutation({
+    mutationFn: () => api.get<{ url: string }>('/auth/discord/start?intent=link'),
+    onSuccess: (result) => {
+      // A full navigation rather than a popup: the callback needs this
+      // origin's session cookie, and coming back here is the natural end.
+      window.location.href = result.url;
+    },
+    onError: (caught) =>
+      setError(caught instanceof ApiRequestError ? caught.message : 'Could not start.'),
+  });
+
+  const unlink = useMutation({
+    mutationFn: () => api.delete('/account/discord'),
+    onSuccess: refresh,
+  });
+
+  const setVisibility = useMutation({
+    mutationFn: (showUsername: boolean) => api.patch('/account/discord', { showUsername }),
+    onSuccess: refresh,
+  });
+
+  const data = query.data;
+  if (query.isLoading || !data?.status.configured) return null;
+
+  return (
+    <section className="gb-card space-y-4 p-5">
+      <h2 className="text-sm font-semibold tracking-wide uppercase">Discord</h2>
+      <FormError message={error} />
+
+      {data.link ? (
+        <>
+          <div className="flex flex-wrap items-center gap-3">
+            {data.link.avatarUrl ? (
+              <img
+                src={data.link.avatarUrl}
+                alt=""
+                className="h-10 w-10 rounded-full"
+                referrerPolicy="no-referrer"
+              />
+            ) : null}
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{data.link.globalName ?? data.link.username}</p>
+              <p className="text-ink-400 font-mono text-xs">{data.link.username}</p>
+            </div>
+            {data.link.inGuild ? (
+              <Badge tone="success">In the Discord</Badge>
+            ) : (
+              <Badge tone="warning">Not in the Discord</Badge>
+            )}
+            <button
+              type="button"
+              className="gb-btn-ghost ml-auto"
+              onClick={() => unlink.mutate()}
+              disabled={unlink.isPending}
+            >
+              Unlink
+            </button>
+          </div>
+
+          {/* Off unless it is turned on. Linking is for signing in and finding
+              people; neither needs a handle published to anyone. */}
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={data.link.showUsername}
+              onChange={(event) => setVisibility.mutate(event.target.checked)}
+            />
+            <span>
+              Show my Discord username to other players
+              <span className="text-ink-400 block text-xs">
+                Off by default. With it off, your account stays linked and nobody here sees the
+                handle.
+              </span>
+            </span>
+          </label>
+
+          {!data.link.inGuild && data.status.inviteUrl ? (
+            <p className="gb-note-warning">
+              You are not in the server.{' '}
+              <a
+                className="underline"
+                href={data.status.inviteUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Join it
+              </a>{' '}
+              to show up alongside the other players here.
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <p className="text-ink-300 text-sm leading-relaxed">
+            Link your Discord to sign in with it, and to find the other people on this server.
+            {data.status.requireGuild ? ' You will be added to the server as part of linking.' : ''}
+          </p>
+          <button
+            type="button"
+            className="gb-btn-primary"
+            onClick={() => start.mutate()}
+            disabled={start.isPending}
+          >
+            {start.isPending ? <Spinner className="h-4 w-4" /> : null}
+            Connect Discord
+          </button>
+        </>
+      )}
+    </section>
   );
 }
 

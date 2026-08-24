@@ -128,6 +128,36 @@ export function HomeTab({
         />
       </section>
 
+      {/* Each of these hides itself when empty rather than showing an empty
+          box: a new server has no playtime, and a small one may have nothing
+          rated. A shelf with a heading and no games reads as broken. */}
+      {home.popularHere.length > 0 ? (
+        <section>
+          <SectionHeader
+            title="Played the most here"
+            subtitle="By total time across everyone on this server"
+          />
+          <GameShelf games={home.popularHere} onOpen={onOpenGame} />
+        </section>
+      ) : null}
+
+      {home.acclaimed.length > 0 ? (
+        <section>
+          <SectionHeader title="Best reviewed" subtitle="The highest rated on the shelf" />
+          <GameShelf games={home.acclaimed} onOpen={onOpenGame} />
+        </section>
+      ) : null}
+
+      {home.surprise.length > 0 ? (
+        <section>
+          <SectionHeader
+            title="Worth a look"
+            subtitle="A different handful every time you open this"
+          />
+          <GameShelf games={home.surprise} onOpen={onOpenGame} />
+        </section>
+      ) : null}
+
       {/* What the operator has promised and what people are asking for. Both
           are empty on a server nobody has used the request queue on, and the
           whole strip disappears rather than showing two empty boxes. */}

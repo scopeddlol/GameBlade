@@ -8,6 +8,7 @@ import type {
 } from '@gameblade/shared';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { Config } from '../config.js';
+import type { DiscordService } from './discord.js';
 import type { Db } from '../db/index.js';
 import {
   friendships,
@@ -39,6 +40,12 @@ export class ProfileService {
     private readonly db: Db,
     private readonly config: Config,
     private readonly presence: PresenceService,
+    /**
+     * Only ever consulted for handles somebody chose to publish. Injected
+     * rather than read from the table here so the default-off rule stays in
+     * one method and cannot drift between call sites.
+     */
+    private readonly discord: DiscordService,
   ) {}
 
   /** Created with the account so no code path has to handle a missing profile. */
@@ -123,10 +130,16 @@ export class ProfileService {
       .all();
 
     const friends = this.friendIds(viewerId);
+    // One lookup for the whole page rather than one per profile.
+    const handles = this.discord.visibleHandlesFor(rows.map((row) => row.userId));
+
     return new Map(
       rows.map((row) => [
         row.userId,
-        this.summarize(row, { viewerId, areFriends: friends.has(row.userId) }),
+        {
+          ...this.summarize(row, { viewerId, areFriends: friends.has(row.userId) }),
+          discordUsername: handles.get(row.userId) ?? null,
+        },
       ]),
     );
   }

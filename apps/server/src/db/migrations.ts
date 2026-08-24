@@ -628,4 +628,48 @@ export const migrations: Migration[] = [
       CREATE INDEX bug_reports_user_idx ON bug_reports(user_id, created_at);
     `,
   },
+  {
+    id: '0013_achievement_rules_per_source',
+    sql: `
+      -- One rule per achievement was too few.
+      --
+      -- A DRM-free build records unlocks through whichever Steam emulator it
+      -- happens to ship with, and each writes to a different path. The
+      -- operator usually cannot tell which from the outside, and two players
+      -- may hold different copies of the same game. Allowing a rule per
+      -- candidate layout means all of them can be written at once: the ones
+      -- whose file is absent read as nothing and unlock nothing, and whichever
+      -- the copy actually uses is the one that fires.
+      --
+      -- Uniqueness moves to include the source, so the same layout still
+      -- cannot be recorded twice for one achievement.
+      DROP INDEX IF EXISTS game_achievement_rules_key_idx;
+      CREATE UNIQUE INDEX game_achievement_rules_key_idx
+        ON game_achievement_rules(game_id, achievement_key, source_template);
+    `,
+  },
+  {
+    id: '0014_discord_links',
+    sql: `
+      -- One Discord account per player and vice versa, so it can be a way in
+      -- rather than only a badge. The refresh token is kept because guild
+      -- membership has to be re-checkable: a link made while they were in the
+      -- operator's Discord says nothing about whether they still are.
+      CREATE TABLE discord_links (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        discord_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        global_name TEXT,
+        avatar TEXT,
+        access_token TEXT,
+        refresh_token TEXT,
+        token_expires_at TEXT,
+        show_username INTEGER NOT NULL DEFAULT 0,
+        in_guild INTEGER NOT NULL DEFAULT 0,
+        guild_checked_at TEXT,
+        linked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX discord_links_discord_id_idx ON discord_links(discord_id);
+    `,
+  },
 ];

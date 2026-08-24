@@ -699,3 +699,35 @@ export const reorderCollectionsSchema = z.object({
   ids: z.array(z.string().trim().max(64)).max(MAX_COLLECTIONS_PER_USER),
 });
 export type ReorderCollectionsInput = z.infer<typeof reorderCollectionsSchema>;
+
+/* ------------------------------------------------------------------ Discord */
+
+/**
+ * The operator's Discord configuration.
+ *
+ * Secrets are write-only and therefore optional: an omitted one means "leave
+ * what is stored alone", which is what lets the form be saved without
+ * re-typing a token every time. Clearing one goes through its own route.
+ */
+export const discordSettingsSchema = z.object({
+  clientId: z.string().trim().max(64).optional(),
+  clientSecret: z.string().trim().max(200).optional(),
+  botToken: z.string().trim().max(200).optional(),
+  guildId: z.string().trim().max(64).optional(),
+  inviteUrl: z.string().trim().max(400).optional(),
+  channelId: z.string().trim().max(64).optional(),
+  publicUrl: z.string().trim().max(400).optional(),
+  announceNewGames: z.boolean().optional(),
+  announceRequests: z.boolean().optional(),
+  requireGuild: z.boolean().optional(),
+});
+export type DiscordSettingsInput = z.infer<typeof discordSettingsSchema>;
+
+/** A post the operator is sending to the Discord by hand. */
+export const discordAnnounceSchema = z.object({
+  title: z.string().trim().max(200).default(''),
+  message: z.string().trim().min(1).max(1800),
+  /** An embed reads as the server speaking; plain text reads as a person. */
+  asEmbed: z.boolean().default(true),
+});
+export type DiscordAnnounceInput = z.infer<typeof discordAnnounceSchema>;

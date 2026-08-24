@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import { Check, Download, Play, Trophy } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { formatBytes, formatPlaytime, formatYear } from '../lib/format.js';
-import { Artwork } from './ui.js';
+import { Artwork, GameCapabilities } from './ui.js';
 
 /**
  * The poster tile used across Home, Library and Store.
@@ -62,6 +62,14 @@ export function GameCard({
             ? formatPlaytime(game.playSeconds)
             : [year, formatBytes(game.sizeBytes)].filter(Boolean).join(' · ')}
         </p>
+        {/* Icons only under a poster: the labels do not fit, and the tooltip
+            carries the detail for anyone who wants it. */}
+        <GameCapabilities
+          hasSaveRule={game.hasSaveRule}
+          achievementCount={game.achievementCount}
+          unlockedCount={game.unlockedCount}
+          compact
+        />
       </div>
 
       {onPrimary && primaryLabel ? (
