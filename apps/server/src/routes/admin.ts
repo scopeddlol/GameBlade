@@ -32,6 +32,8 @@ import {
   type LibraryInfo,
   type PublicUser,
   type ServerSettings,
+  discordSettingsSchema,
+  discordAnnounceSchema,
 } from '@gameblade/shared';
 import { eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -73,6 +75,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     health,
     checksums,
     bugs,
+    discord,
   } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
@@ -848,6 +851,103 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
    * wrong, and these paths are where the client will later read and write a
    * player's saves.
    */
+  /* -------------------------------------------------------------- Discord */
+
+  /**
+   * What the operator has configured, with the secrets write-only.
+   *
+   * Same shape as the rest of settings: the server says whether a secret is
+   * set, never what it is, so a token cannot be read back out of the panel.
+   */
+  app.get('/admin/discord', async () => {
+    const s = settings.get();
+    return {
+      clientId: s.discordClientId,
+      clientSecretSet: Boolean(s.discordClientSecret),
+      botTokenSet: Boolean(s.discordBotToken),
+      guildId: s.discordGuildId,
+      inviteUrl: s.discordInviteUrl,
+      channelId: s.discordChannelId,
+      publicUrl: s.discordPublicUrl,
+      announceNewGames: s.discordAnnounceNewGames,
+      announceRequests: s.discordAnnounceRequests,
+      requireGuild: s.discordRequireGuild,
+      linkedAccounts: discord.linkedCount(),
+    };
+  });
+
+  app.patch('/admin/discord', async (request) => {
+    const input = discordSettingsSchema.parse(request.body);
+
+    // Turning announcements on starts the clock now rather than announcing the
+    // entire back catalogue; turning them off leaves the watermark alone so a
+    // brief pause does not replay everything since.
+    const wasOn = settings.get().discordAnnounceNewGames;
+    settings.update({
+      ...(input.clientId !== undefined ? { discordClientId: input.clientId || null } : {}),
+      ...(input.clientSecret ? { discordClientSecret: input.clientSecret } : {}),
+      ...(input.botToken ? { discordBotToken: input.botToken } : {}),
+      ...(input.guildId !== undefined ? { discordGuildId: input.guildId || null } : {}),
+      ...(input.inviteUrl !== undefined ? { discordInviteUrl: input.inviteUrl || null } : {}),
+      ...(input.channelId !== undefined ? { discordChannelId: input.channelId || null } : {}),
+      ...(input.publicUrl !== undefined ? { discordPublicUrl: input.publicUrl || null } : {}),
+      ...(input.announceNewGames !== undefined
+        ? { discordAnnounceNewGames: input.announceNewGames }
+        : {}),
+      ...(input.announceRequests !== undefined
+        ? { discordAnnounceRequests: input.announceRequests }
+        : {}),
+      ...(input.requireGuild !== undefined ? { discordRequireGuild: input.requireGuild } : {}),
+    });
+
+    if (!wasOn && input.announceNewGames) {
+      settings.update({ discordLastAnnouncedAt: new Date().toISOString() });
+    }
+    return { ok: true };
+  });
+
+  /** Clearing a secret needs to be possible without a way to read it back. */
+  app.delete('/admin/discord/secret/:which', async (request) => {
+    const { which } = request.params as { which: string };
+    if (which === 'clientSecret') settings.update({ discordClientSecret: null });
+    else if (which === 'botToken') settings.update({ discordBotToken: null });
+    else throw ApiError.badRequest('Unknown secret');
+    return { ok: true };
+  });
+
+  /**
+   * Proves the bot token works before an operator relies on it.
+   *
+   * A token that is merely stored tells you nothing; the first sign of a wrong
+   * one would otherwise be an announcement that never arrived.
+   */
+  app.post('/admin/discord/test', async () => {
+    const identity = await discord.botIdentity();
+    return { ok: true, bot: identity };
+  });
+
+  /** Posts whatever the operator typed, to the configured channel. */
+  app.post('/admin/discord/announce', async (request) => {
+    const input = discordAnnounceSchema.parse(request.body);
+
+    if (input.asEmbed) {
+      await discord.postEmbed({
+        title: input.title || undefined,
+        description: input.message,
+        color: 0x7c5cff,
+      });
+    } else {
+      await discord.post(input.title ? `**${input.title}**\n${input.message}` : input.message);
+    }
+    return { ok: true };
+  });
+
+  /** Runs the new-game announcer now, rather than waiting for the schedule. */
+  app.post('/admin/discord/announce-new-games', async () => {
+    const posted = await discord.announceNewGames();
+    return { posted };
+  });
+
   app.get('/admin/save-manifest', async () => saveManifest.status());
 
   app.post('/admin/save-manifest/refresh', async () => saveManifest.refresh());

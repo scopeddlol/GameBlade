@@ -1,6 +1,6 @@
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { discordLinks, users } from '../db/schema.js';
+import { discordLinks, games, users } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { isoNow } from '../lib/time.js';
 import type { SettingsService } from './settings.js';
@@ -319,6 +319,16 @@ export class DiscordService {
     };
   }
 
+  /** How many players have linked, for the admin panel's own reassurance. */
+  linkedCount(): number {
+    return (
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(discordLinks)
+        .get()?.count ?? 0
+    );
+  }
+
   /** The account a Discord id signs in as, if any. */
   userIdFor(discordId: string): string | null {
     return (
@@ -424,6 +434,90 @@ export class DiscordService {
     });
   }
 
+  /**
+   * Announces games added since the last time this ran.
+   *
+   * A watermark rather than a flag per game: it survives restarts, and does
+   * not need a column. Switching announcements on sets the watermark to now,
+   * which is what stops a server with ten thousand existing games announcing
+   * every one of them the moment the operator ticks the box.
+   *
+   * Only matched games are announced. An unmatched entry is a folder name and
+   * nothing else — no cover, no blurb — and "Some.Game.REPACK-XYZ" is not
+   * worth pushing to a Discord.
+   *
+   * Returns how many were posted. Failures are the caller's to log: a Discord
+   * outage must not stop a scan or a schedule.
+   */
+  async announceNewGames(limit = 5): Promise<number> {
+    const s = this.settings.get();
+    if (!s.discordAnnounceNewGames || !this.hasBot || !s.discordChannelId) return 0;
+
+    // Without an absolute address the embed's artwork would resolve against
+    // discord.com. Posting text-only would be worse than waiting for setup.
+    const publicBaseUrl = s.discordPublicUrl?.replace(/\/+$/, '') ?? null;
+
+    // First run: start the clock rather than announcing the whole back catalog.
+    if (!s.discordLastAnnouncedAt) {
+      this.settings.update({ discordLastAnnouncedAt: isoNow() });
+      return 0;
+    }
+
+    const fresh = this.db
+      .select({
+        id: games.id,
+        title: games.title,
+        summary: games.summary,
+        addedAt: games.addedAt,
+        coverImageId: games.coverImageId,
+        releaseDate: games.releaseDate,
+        genres: games.genres,
+      })
+      .from(games)
+      .where(
+        and(
+          gt(games.addedAt, s.discordLastAnnouncedAt),
+          isNull(games.missingAt),
+          ne(games.matchStatus, 'unmatched'),
+        ),
+      )
+      .orderBy(asc(games.addedAt))
+      .limit(limit)
+      .all();
+
+    if (fresh.length === 0) return 0;
+
+    let posted = 0;
+    for (const game of fresh) {
+      await this.postEmbed({
+        title: game.title,
+        description: game.summary ? truncate(game.summary, 300) : undefined,
+        color: 0x2bb7f5,
+        // Absolute, because Discord fetches it itself rather than through a
+        // player's browser — a relative path would resolve to discord.com.
+        thumbnail:
+          game.coverImageId && publicBaseUrl
+            ? { url: `${publicBaseUrl}${this.basePath}/api/images/${game.coverImageId}` }
+            : undefined,
+        fields: [
+          ...(game.releaseDate
+            ? [{ name: 'Released', value: game.releaseDate.slice(0, 4), inline: true }]
+            : []),
+          ...(game.genres && game.genres.length > 0
+            ? [{ name: 'Genres', value: game.genres.slice(0, 3).join(', '), inline: true }]
+            : []),
+        ],
+        footer: { text: 'Just added to the archive' },
+      });
+      posted += 1;
+      // Advance per game, so a failure part way through does not re-announce
+      // the ones that already went out.
+      this.settings.update({ discordLastAnnouncedAt: game.addedAt });
+    }
+
+    return posted;
+  }
+
   /** Confirms the bot token works and says who it is. */
   async botIdentity(): Promise<{ id: string; username: string }> {
     const { discordBotToken } = this.settings.get();
@@ -432,6 +526,15 @@ export class DiscordService {
       auth: `Bot ${discordBotToken}`,
     });
   }
+}
+
+/** Keeps an embed description inside something a reader will actually read. */
+function truncate(value: string, max: number): string {
+  const collapsed = value.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= max) return collapsed;
+  const cut = collapsed.slice(0, max);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }
 
 /** Discord's CDN path for an avatar, or null when they have never set one. */

@@ -168,6 +168,54 @@ describe('discord', () => {
     );
   });
 
+  /* ----------------------------------------------------------- announcing */
+
+  /**
+   * The new-game announcer.
+   *
+   * The failure that matters is not "a post did not go out" — it is a server
+   * with ten thousand existing games announcing every one of them the moment
+   * the operator ticks the box.
+   */
+  describe('announcing new games', () => {
+    it('does nothing at all while no bot is configured', async () => {
+      // No token means no channel to post to; it must not throw either, since
+      // this runs on a timer where a throw would only fill the log.
+      await expect(app.gameblade.discord.announceNewGames()).resolves.toBe(0);
+    });
+
+    it('starts the clock instead of announcing the back catalogue', async () => {
+      app.gameblade.settings.update({
+        discordBotToken: 'a-bot-token',
+        discordChannelId: '555',
+        discordAnnounceNewGames: true,
+        discordLastAnnouncedAt: null,
+      });
+
+      // First run with no watermark: sets one and posts nothing, however many
+      // games already exist.
+      await expect(app.gameblade.discord.announceNewGames()).resolves.toBe(0);
+      expect(app.gameblade.settings.get().discordLastAnnouncedAt).not.toBeNull();
+    });
+
+    it('stays quiet when the operator has switched announcements off', async () => {
+      app.gameblade.settings.update({ discordAnnounceNewGames: false });
+      await expect(app.gameblade.discord.announceNewGames()).resolves.toBe(0);
+      app.gameblade.settings.update({ discordAnnounceNewGames: true });
+    });
+
+    it('refuses to post with no channel set rather than guessing one', async () => {
+      app.gameblade.settings.update({ discordChannelId: null });
+      await expect(app.gameblade.discord.post('hello')).rejects.toThrow(/channel/i);
+      app.gameblade.settings.update({ discordChannelId: '555' });
+    });
+
+    it('refuses to post with no bot token rather than failing at Discord', async () => {
+      app.gameblade.settings.update({ discordBotToken: null });
+      await expect(app.gameblade.discord.post('hello')).rejects.toThrow(/bot token/i);
+    });
+  });
+
   /* ------------------------------------------------------------ visibility */
 
   describe('handle visibility', () => {

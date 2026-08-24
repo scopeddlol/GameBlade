@@ -45,6 +45,14 @@ export interface RuntimeSettings {
   discordInviteUrl: string | null;
   /** Channel the bot announces into. */
   discordChannelId: string | null;
+  /**
+   * The address players reach this server on, e.g. https://archive.example.com.
+   *
+   * Needed because Discord fetches embedded cover art itself rather than
+   * through anyone's browser, so a relative path would resolve against
+   * discord.com. There is no request to infer it from when a schedule posts.
+   */
+  discordPublicUrl: string | null;
   /** Whether a newly scanned game is announced. */
   discordAnnounceNewGames: boolean;
   /** Whether an approved request is announced. */
@@ -56,6 +64,14 @@ export interface RuntimeSettings {
    * they end up in it.
    */
   discordRequireGuild: boolean;
+  /**
+   * How far the new-game announcer has got.
+   *
+   * A watermark rather than a flag per game: it survives restarts, and setting
+   * it to "now" the moment announcements are switched on is what stops a
+   * server with ten thousand existing games announcing all of them at once.
+   */
+  discordLastAnnouncedAt: string | null;
 }
 
 const DEFAULT_TAGLINE = 'A private home for free-to-play and DRM-free games worth keeping.';
@@ -124,9 +140,11 @@ export class SettingsService {
       discordGuildId: asString('discordGuildId', null),
       discordInviteUrl: asString('discordInviteUrl', null),
       discordChannelId: asString('discordChannelId', null),
+      discordPublicUrl: asString('discordPublicUrl', null),
       discordAnnounceNewGames: asBoolean('discordAnnounceNewGames', true),
       discordAnnounceRequests: asBoolean('discordAnnounceRequests', true),
       discordRequireGuild: asBoolean('discordRequireGuild', true),
+      discordLastAnnouncedAt: asString('discordLastAnnouncedAt', null),
     };
     return this.cache;
   }
