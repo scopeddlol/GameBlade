@@ -127,18 +127,23 @@ button {
 /*
  * The entering half of a tab switch.
  *
- * A few pixels and a fade — enough that the eye follows the change rather than
- * being handed a different screen between frames, and short enough that
- * nothing has to be waited through.
+ * Enough that the eye follows the change rather than being handed a different
+ * screen between frames, and short enough that nothing has to be waited
+ * through.
+ *
+ * Opacity only, deliberately. A few pixels of travel would read better, but a
+ * transform on this wrapper makes it the containing block for `position: fixed`
+ * descendants — and the Library, Store and Social tabs all render dialogs
+ * inside it. One opened during the animation would be positioned against the
+ * wrapper instead of the viewport, with a backdrop that did not cover the
+ * window. A slightly plainer transition is worth more than that.
  */
 @keyframes tab-enter {
   from {
     opacity: 0;
-    transform: translateY(6px);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 .tab-enter {
