@@ -8,7 +8,7 @@ import type {
   Paginated,
   StoreFacets,
 } from '@gameblade/shared';
-import { and, asc, desc, eq, inArray, isNull, like, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, like, or, sql, type SQL } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import {
@@ -67,6 +67,9 @@ function blurb(text: string | null): string | null {
  * where the full history is read.
  */
 const HOME_ACTIVITY_LIMIT = 8;
+
+/** How many games each Home shelf carries. Enough to scroll, not to trawl. */
+const HOME_SHELF_LIMIT = 12;
 
 const GAP_CONDITIONS: Record<CatalogGap, SQL> = {
   'launch-rule': sql`NOT EXISTS (SELECT 1 FROM game_launch_rules r
@@ -384,6 +387,53 @@ export class CatalogService {
       .limit(12)
       .all();
 
+    /**
+     * What this server actually plays, by total time across everyone.
+     *
+     * The most useful signal an archive has and the one it was not using: on a
+     * shelf of thousands, "what do people here keep coming back to" beats any
+     * external chart, because it is about this catalog and these players.
+     */
+    const popularRows = this.db
+      .select({ game: games, seconds: sql<number>`sum(${userGameStats.totalSeconds})` })
+      .from(userGameStats)
+      .innerJoin(games, eq(games.id, userGameStats.gameId))
+      .where(isNull(games.missingAt))
+      .groupBy(userGameStats.gameId)
+      .orderBy(desc(sql`sum(${userGameStats.totalSeconds})`))
+      .limit(HOME_SHELF_LIMIT)
+      .all();
+
+    /**
+     * The best-reviewed things on the shelf.
+     *
+     * A vote floor is not available — only the score is stored — so this leans
+     * on the rating being absent for anything unmatched, which keeps the shelf
+     * to titles metadata actually recognised.
+     */
+    const acclaimedRows = this.db
+      .select()
+      .from(games)
+      .where(and(isNull(games.missingAt), gte(games.rating, 80)))
+      .orderBy(desc(games.rating))
+      .limit(HOME_SHELF_LIMIT)
+      .all();
+
+    /**
+     * A handful at random, so the deep catalog is reachable.
+     *
+     * Every other shelf surfaces the same titles to everyone — the newest, the
+     * most played, the best rated — which on a large archive means most of it
+     * is never seen by anyone. This is the only shelf that reaches the middle.
+     */
+    const surpriseRows = this.db
+      .select()
+      .from(games)
+      .where(isNull(games.missingAt))
+      .orderBy(sql`random()`)
+      .limit(HOME_SHELF_LIMIT)
+      .all();
+
     const friendIds = [...this.profiles.friendIds(userId)];
     const friendProfiles = this.profiles.summarizeMany(friendIds, userId);
 
@@ -415,6 +465,12 @@ export class CatalogService {
         userId,
       ),
       recentlyAdded: this.decorate(recentRows, userId),
+      popularHere: this.decorate(
+        popularRows.map((r) => r.game),
+        userId,
+      ),
+      acclaimed: this.decorate(acclaimedRows, userId),
+      surprise: this.decorate(surpriseRows, userId),
       friendsPlaying,
       // Capped low on purpose: this is a glance on a crowded screen, and the
       // Social tab is where the full history lives.
