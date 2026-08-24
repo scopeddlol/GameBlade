@@ -877,7 +877,9 @@ export const gameAchievementRules = sqliteTable(
   },
   (t) => [
     index('game_achievement_rules_game_idx').on(t.gameId),
-    uniqueIndex('game_achievement_rules_key_idx').on(t.gameId, t.achievementKey),
+    // Includes the source: a game needs one rule per candidate emulator
+    // layout, since which one a given copy uses is not knowable up front.
+    uniqueIndex('game_achievement_rules_key_idx').on(t.gameId, t.achievementKey, t.sourceTemplate),
   ],
 );
 

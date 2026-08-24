@@ -6,7 +6,7 @@ import type {
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Db } from '../db/index.js';
-import { achievements, games, userAchievements } from '../db/schema.js';
+import { achievements, gameAchievementRules, games, userAchievements } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { isoNow } from '../lib/time.js';
@@ -254,11 +254,41 @@ export class AchievementService {
       .get();
   }
 
+  /**
+   * Removes a definition, and any rule that pointed at it.
+   *
+   * `game_achievement_rules.achievement_key` is plain text with no foreign key
+   * to the definition — it cascades on the game, not on the achievement — so a
+   * deleted definition used to leave its rule behind. That rule still matched
+   * on report, and `unlock` then threw for a key with no definition, failing
+   * the whole request: one tidied-up achievement silently stopped *every*
+   * achievement for that game from unlocking, with the client swallowing the
+   * error. The report route no longer throws either, but the orphan should not
+   * exist in the first place.
+   */
   deleteDefinition(gameId: string, achievementId: string): void {
+    const definition = this.db
+      .select({ key: achievements.key })
+      .from(achievements)
+      .where(and(eq(achievements.id, achievementId), eq(achievements.gameId, gameId)))
+      .get();
+
     this.db
       .delete(achievements)
       .where(and(eq(achievements.id, achievementId), eq(achievements.gameId, gameId)))
       .run();
+
+    if (definition) {
+      this.db
+        .delete(gameAchievementRules)
+        .where(
+          and(
+            eq(gameAchievementRules.gameId, gameId),
+            eq(gameAchievementRules.achievementKey, definition.key),
+          ),
+        )
+        .run();
+    }
   }
 
   /**

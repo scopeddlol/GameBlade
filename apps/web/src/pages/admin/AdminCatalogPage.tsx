@@ -1002,6 +1002,21 @@ function AchievementsTab({ game }: { game: GameDetail }) {
       setError(caught instanceof ApiRequestError ? caught.message : 'Import failed.'),
   });
 
+  const generateMutation = useMutation({
+    mutationFn: () =>
+      api.post<{ generated: number; achievements: number; stores: string[] }>(
+        `/games/${game.id}/achievement-rules/generate`,
+      ),
+    onSuccess: (result) => {
+      setError(null);
+      setNotice(
+        `Wrote ${result.generated} rules across ${result.stores.length} layouts, covering ${result.achievements} achievements.`,
+      );
+    },
+    onError: (caught) =>
+      setError(caught instanceof ApiRequestError ? caught.message : 'Could not generate rules.'),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/games/${game.id}/achievements/${id}`),
     onSuccess: () =>
@@ -1041,6 +1056,36 @@ function AchievementsTab({ game }: { game: GameDetail }) {
             )}
             Import
           </button>
+        </div>
+      </section>
+
+      {/* Importing gives you the list; this is what makes any of it unlock. */}
+      <section className="gb-card space-y-3 p-4">
+        <h3 className="text-sm font-semibold tracking-wide uppercase">Write the unlock rules</h3>
+        <p className="text-ink-400 text-xs leading-relaxed">
+          An imported achievement is only a name until something says when it is earned. A DRM-free
+          copy records that through whichever Steam emulator it ships with, and each writes to a
+          predictable file — so the rules can be generated instead of typed. One is written per
+          layout: the ones that do not apply find no file and stay quiet, and whichever the
+          player&rsquo;s copy actually uses is the one that fires.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="gb-btn-primary"
+            disabled={generateMutation.isPending || (listQuery.data ?? []).length === 0}
+            onClick={() => generateMutation.mutate()}
+          >
+            {generateMutation.isPending ? (
+              <Spinner className="h-4 w-4" />
+            ) : (
+              <Wand2 className="h-4 w-4" aria-hidden />
+            )}
+            Generate rules
+          </button>
+          <p className="text-ink-500 text-xs">
+            Replaces any rules this game already has. Needs its Steam app id set.
+          </p>
         </div>
       </section>
 

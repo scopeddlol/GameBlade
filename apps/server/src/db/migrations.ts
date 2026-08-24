@@ -628,4 +628,24 @@ export const migrations: Migration[] = [
       CREATE INDEX bug_reports_user_idx ON bug_reports(user_id, created_at);
     `,
   },
+  {
+    id: '0013_achievement_rules_per_source',
+    sql: `
+      -- One rule per achievement was too few.
+      --
+      -- A DRM-free build records unlocks through whichever Steam emulator it
+      -- happens to ship with, and each writes to a different path. The
+      -- operator usually cannot tell which from the outside, and two players
+      -- may hold different copies of the same game. Allowing a rule per
+      -- candidate layout means all of them can be written at once: the ones
+      -- whose file is absent read as nothing and unlock nothing, and whichever
+      -- the copy actually uses is the one that fires.
+      --
+      -- Uniqueness moves to include the source, so the same layout still
+      -- cannot be recorded twice for one achievement.
+      DROP INDEX IF EXISTS game_achievement_rules_key_idx;
+      CREATE UNIQUE INDEX game_achievement_rules_key_idx
+        ON game_achievement_rules(game_id, achievement_key, source_template);
+    `,
+  },
 ];

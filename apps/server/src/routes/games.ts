@@ -1,6 +1,8 @@
 import {
   achievementRulesSchema,
   reportUnlocksSchema,
+  resolveStoreTemplate,
+  usableStores,
   artworkSearchSchema,
   editGameSchema,
   gameQuerySchema,
@@ -171,6 +173,95 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
         .where(eq(gameAchievementRules.gameId, id))
         .all()
         .map(toAchievementRule),
+    };
+  });
+
+  /**
+   * Writes the rules an operator was never going to type by hand.
+   *
+   * Achievements were definable and never unlocked, because using the rule
+   * engine meant one hand-written rule per achievement per game — fifty
+   * imported Steam achievements meant fifty rules requiring knowledge of that
+   * game's save internals. Nobody was going to do that, so nothing ever fired.
+   *
+   * A DRM-free build almost always carries a Steam emulator in place of Steam,
+   * and each emulator records unlocks at a predictable path in a predictable
+   * shape, keyed by the same API names the importer already pulled down. So
+   * every rule can be derived from what is already known.
+   *
+   * Rules are generated for *every* applicable layout at once, on purpose: one
+   * whose file does not exist reads as nothing and unlocks nothing, so the
+   * layouts that do not apply are silent and whichever the player's copy
+   * actually uses is the one that fires.
+   */
+  app.post('/games/:id/achievement-rules/generate', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const { sources: wanted, replace = true } = (request.body ?? {}) as {
+      sources?: string[];
+      replace?: boolean;
+    };
+
+    const game = db
+      .select({ id: games.id, steamAppId: games.steamAppId })
+      .from(games)
+      .where(eq(games.id, id))
+      .get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    const keys = db
+      .select({ key: achievementDefinitions.key })
+      .from(achievementDefinitions)
+      .where(eq(achievementDefinitions.gameId, id))
+      .all()
+      .map((row) => row.key);
+
+    if (keys.length === 0) {
+      throw ApiError.badRequest(
+        "Import this game's achievements first — there is nothing to write rules for.",
+      );
+    }
+
+    const stores = usableStores(game.steamAppId ?? null).filter(
+      (store) => !wanted || wanted.includes(store.id),
+    );
+    if (stores.length === 0) {
+      throw ApiError.badRequest(
+        game.steamAppId
+          ? 'None of the selected layouts are usable for this game.'
+          : "Set this game's Steam app id first: every emulator layout but the portable one stores saves under it.",
+      );
+    }
+
+    db.transaction((tx) => {
+      // Replacing by default: generating twice should not double every rule.
+      if (replace) {
+        tx.delete(gameAchievementRules).where(eq(gameAchievementRules.gameId, id)).run();
+      }
+      for (const store of stores) {
+        const template = resolveStoreTemplate(store, game.steamAppId ?? null);
+        for (const key of keys) {
+          tx.insert(gameAchievementRules)
+            .values({
+              id: newId('achr'),
+              gameId: id,
+              achievementKey: key,
+              sourceTemplate: template,
+              format: store.format,
+              selector: store.selector(key),
+              comparator: store.comparator,
+              value: null,
+              createdAt: isoNow(),
+            })
+            .run();
+        }
+      }
+    });
+
+    return {
+      generated: stores.length * keys.length,
+      achievements: keys.length,
+      stores: stores.map((store) => store.id),
     };
   });
 
@@ -508,9 +599,18 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     const unlocked = [];
     for (const key of input.keys) {
       if (!ruled.has(key)) continue;
-      // unlock() is idempotent, so a client re-reporting the same save on
-      // every launch cannot fill the activity feed with duplicates.
-      unlocked.push(achievements.unlock(context.user.id, id, key, null));
+      try {
+        // unlock() is idempotent, so a client re-reporting the same save on
+        // every launch cannot fill the activity feed with duplicates.
+        unlocked.push(achievements.unlock(context.user.id, id, key, null));
+      } catch (error) {
+        // One key that cannot be unlocked must not lose the rest of the
+        // report. `unlock` throws when a rule names an achievement whose
+        // definition is gone, which used to fail the whole request — so a
+        // single deleted definition silently stopped every achievement for
+        // that game from ever unlocking, with the client swallowing the error.
+        request.log.warn({ err: error, gameId: id, key }, 'could not unlock a reported key');
+      }
     }
     return { unlocked };
   });
