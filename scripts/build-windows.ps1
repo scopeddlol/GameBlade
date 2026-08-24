@@ -8,8 +8,8 @@
     installed. It exists so a broken CI runner does not mean no releases.
 
     The version is stamped across every manifest that carries one — the five
-    package.json files, the Tauri config, and the Rust crate — because they are
-    read by different things at different times. The client compares its own
+    package.json files, the Tauri config, the Rust crate and its lockfile —
+    because they are read by different things at different times. The client compares its own
     Cargo version against what the server publishes to decide whether to offer
     an update, and the installer names itself from the Tauri config, so a build
     where those two disagree ships an update nobody is offered.
@@ -153,6 +153,27 @@ function Set-WorkspaceVersion {
         -Pattern '(?m)^(version\s*=\s*")[^"]*(")' `
         -Replacement ('${1}' + $NewVersion + '${2}')
     Write-Note ("apps/desktop/src-tauri/Cargo.toml {0}" -f $(if ($changed) { 'updated' } else { 'already correct' }))
+
+    # Cargo.lock records the crate's own version too, and cargo rewrites it on
+    # the next build whether or not anyone asked. Doing it here means the bump
+    # is one complete commit rather than a commit plus a stray lockfile change
+    # that appears during the build and is easy to leave behind.
+    #
+    # `--workspace` touches only the local crate's entry and `--offline` keeps
+    # it from reaching for newer dependencies, so this is the version line and
+    # nothing else.
+    Push-Location (Join-Path $RepoRoot 'apps/desktop/src-tauri')
+    try {
+        cargo update --workspace --offline 2>&1 | ForEach-Object { Write-Note $_ }
+        if ($LASTEXITCODE -ne 0) {
+            # Not fatal: the build regenerates the lock anyway. Worth saying,
+            # because the commit will then need the lockfile added separately.
+            Write-Host '    Could not refresh Cargo.lock; the build will update it.' -ForegroundColor Yellow
+        }
+    }
+    finally {
+        Pop-Location
+    }
 }
 
 <#

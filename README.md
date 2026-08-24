@@ -729,8 +729,8 @@ Node 22, pnpm and the Rust toolchain:
 ```
 
 It asks for the version, stamps it across every manifest that carries one — the
-five `package.json` files, `tauri.conf.json` and the Rust crate, which are read
-by different things and must agree — then typechecks, tests, builds, and copies
+five `package.json` files, `tauri.conf.json`, the Rust crate and its lockfile,
+which are read by different things and must agree — then typechecks, tests, builds, and copies
 the `.exe` and `.msi` into `dist/windows/<version>/`.
 
 `scripts/build-windows.cmd` is a double-clickable wrapper for it, which also
