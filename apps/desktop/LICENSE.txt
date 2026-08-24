@@ -1,0 +1,29 @@
+GAMEBLADE DESKTOP CLIENT - END USER LICENSE AGREEMENT
+
+Copyright (c) 2026 GameBlade. All rights reserved.
+
+By installing and using GameBlade, you agree to the following terms:
+
+1. LICENSE GRANT
+   GameBlade grants you a personal, non-exclusive, non-transferable license to use the desktop client for connecting to your self-hosted GameBlade server.
+
+2. PERMITTED USE
+   - You may install and use GameBlade on multiple computers you own
+   - You may use GameBlade to connect to GameBlade servers you have access to
+   - You may modify the client for personal use
+
+3. RESTRICTIONS
+   - You may not reverse engineer the client for malicious purposes
+   - You may not use GameBlade to access servers without authorization
+   - You may not distribute modified versions without attribution
+
+4. DISCLAIMER
+   GameBlade is provided "as is" without warranty of any kind. The authors are not responsible for any damages arising from use of this software.
+
+5. PRIVACY
+   GameBlade respects your privacy. The client only communicates with servers you explicitly configure and does not collect personal data beyond what is necessary for authentication and gameplay.
+
+6. UPDATES
+   GameBlade may include automatic update functionality. You can disable this in the application settings if preferred.
+
+For full source code and contributions, visit: https://github.com/scopeddlol/GameBlade
