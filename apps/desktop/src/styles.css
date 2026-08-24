@@ -3399,6 +3399,41 @@ textarea::placeholder {
   min-width: 0;
 }
 
+/* Whether a game is set up for cloud saves and achievements. Both states are
+   drawn — an absent badge would read as "still loading" rather than "not set
+   up", which is the thing a player actually wants to know. */
+.capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.capability {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--ink-700);
+  background: var(--ink-850);
+  color: var(--ink-400);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.capability.on {
+  border-color: color-mix(in srgb, var(--blade-500) 45%, transparent);
+  background: color-mix(in srgb, var(--blade-500) 12%, transparent);
+  color: var(--blade-400);
+}
+/* On a poster there is no room for the labels, so the icons carry it alone
+   and the tooltip says the rest. */
+.capabilities.compact {
+  gap: 4px;
+}
+.capabilities.compact .capability {
+  padding: 3px 5px;
+}
+
 /* ------------------------------------------------------- request discovery */
 
 .requests-finder {

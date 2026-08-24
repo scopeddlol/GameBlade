@@ -29,7 +29,16 @@ import {
   type SaveRulePayload,
 } from '../lib/ipc.js';
 import { useAddToLibrary } from '../hooks/useLibrary.js';
-import { Artwork, Badge, ErrorNote, Loading, Modal, ProgressBar, Spinner } from './ui.js';
+import {
+  Artwork,
+  Badge,
+  ErrorNote,
+  GameCapabilities,
+  Loading,
+  Modal,
+  ProgressBar,
+  Spinner,
+} from './ui.js';
 import { InstallDialog } from './InstallDialog.js';
 
 interface Rules {
@@ -294,6 +303,14 @@ export function GameDetailPanel({
               {game.storyline && game.storyline !== game.summary ? (
                 <p className="detail-summary">{game.storyline}</p>
               ) : null}
+
+              {/* Full labels here — there is room, and this is the page
+                  somebody reads before deciding to install. */}
+              <GameCapabilities
+                hasSaveRule={game.hasSaveRule}
+                achievementCount={game.achievementCount}
+                unlockedCount={game.unlockedCount}
+              />
 
               {game.genres.length > 0 ? (
                 <div className="tag-row">
