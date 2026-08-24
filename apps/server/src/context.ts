@@ -18,6 +18,7 @@ import { GameRequestService } from './services/gameRequests.js';
 import { InstallerService } from './services/installer.js';
 import { MediaStore } from './services/media.js';
 import { ImageCache } from './services/metadata/images.js';
+import { DiscordService } from './services/discord.js';
 import { SaveManifestService } from './services/saveManifest.js';
 import { MetadataService } from './services/metadata/service.js';
 import { NotificationService } from './services/notifications.js';
@@ -57,6 +58,8 @@ export interface GamebladeContext {
   /** Reports from the people using it. */
   bugs: BugService;
   apiKeys: ApiKeyService;
+  /** Linking, signing in with, and posting to Discord. */
+  discord: DiscordService;
   bandwidth: BandwidthService;
   analytics: AnalyticsService;
 
@@ -99,6 +102,7 @@ export function createContext(
   const images = new ImageCache(db, config.imageCacheDir, logger);
   const metadata = new MetadataService(db, settings, images, logger, config.basePath);
   const saveManifest = new SaveManifestService(config.dataDir);
+  const discord = new DiscordService(db, settings, config.basePath);
   const backups = new BackupService(config.dataDir, sqlite);
   const scanner = new ScannerService(db, metadata, logger);
   const checksums = new ChecksumService(db, logger);
@@ -160,6 +164,7 @@ export function createContext(
     collections,
     gameRequests,
     saveManifest,
+    discord,
     backups,
     health,
     bugs,

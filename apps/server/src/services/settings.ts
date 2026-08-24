@@ -31,6 +31,31 @@ export interface RuntimeSettings {
   backupEveryHours: number;
   /** Whether cached artwork is archived too. Large, and re-fetchable. */
   backupIncludeImages: boolean;
+
+  /* ------------------------------------------------------------- Discord */
+
+  /** OAuth application credentials, for linking and signing in with Discord. */
+  discordClientId: string | null;
+  discordClientSecret: string | null;
+  /** Bot token, for posting and for adding people to the guild. */
+  discordBotToken: string | null;
+  /** The server players are expected to be in. */
+  discordGuildId: string | null;
+  /** Where to send someone who is not in it yet. */
+  discordInviteUrl: string | null;
+  /** Channel the bot announces into. */
+  discordChannelId: string | null;
+  /** Whether a newly scanned game is announced. */
+  discordAnnounceNewGames: boolean;
+  /** Whether an approved request is announced. */
+  discordAnnounceRequests: boolean;
+  /**
+   * Whether linking requires being in the guild.
+   *
+   * On by default: the point of pointing every player at one Discord is that
+   * they end up in it.
+   */
+  discordRequireGuild: boolean;
 }
 
 const DEFAULT_TAGLINE = 'A private home for free-to-play and DRM-free games worth keeping.';
@@ -93,6 +118,15 @@ export class SettingsService {
       backupEveryHours: asNumber('backupEveryHours', 24),
       backupIncludeImages: asBoolean('backupIncludeImages', false),
       landingBlocks: stored.get('landingBlocks') ?? null,
+      discordClientId: asString('discordClientId', null),
+      discordClientSecret: asString('discordClientSecret', null),
+      discordBotToken: asString('discordBotToken', null),
+      discordGuildId: asString('discordGuildId', null),
+      discordInviteUrl: asString('discordInviteUrl', null),
+      discordChannelId: asString('discordChannelId', null),
+      discordAnnounceNewGames: asBoolean('discordAnnounceNewGames', true),
+      discordAnnounceRequests: asBoolean('discordAnnounceRequests', true),
+      discordRequireGuild: asBoolean('discordRequireGuild', true),
     };
     return this.cache;
   }

@@ -648,4 +648,28 @@ export const migrations: Migration[] = [
         ON game_achievement_rules(game_id, achievement_key, source_template);
     `,
   },
+  {
+    id: '0014_discord_links',
+    sql: `
+      -- One Discord account per player and vice versa, so it can be a way in
+      -- rather than only a badge. The refresh token is kept because guild
+      -- membership has to be re-checkable: a link made while they were in the
+      -- operator's Discord says nothing about whether they still are.
+      CREATE TABLE discord_links (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        discord_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        global_name TEXT,
+        avatar TEXT,
+        access_token TEXT,
+        refresh_token TEXT,
+        token_expires_at TEXT,
+        show_username INTEGER NOT NULL DEFAULT 0,
+        in_guild INTEGER NOT NULL DEFAULT 0,
+        guild_checked_at TEXT,
+        linked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX discord_links_discord_id_idx ON discord_links(discord_id);
+    `,
+  },
 ];
