@@ -117,7 +117,7 @@ export function createContext(
   const analytics = new AnalyticsService(db, bandwidth);
 
   const presence = new PresenceService();
-  const profiles = new ProfileService(db, config, presence);
+  const profiles = new ProfileService(db, config, presence, discord);
   const realtime = new RealtimeGateway(presence, profiles, logger);
   const notifications = new NotificationService(db, profiles, realtime);
   const bugs = new BugService(db, profiles, notifications);

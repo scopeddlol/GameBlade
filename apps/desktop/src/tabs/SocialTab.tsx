@@ -602,6 +602,27 @@ function Friends({ onOpenProfile }: { onOpenProfile: (userId: string) => void })
     enabled: search.trim().length > 1,
   });
 
+  /**
+   * Other players in the same Discord.
+   *
+   * Not a Discord friends list — the platform publishes none to applications.
+   * Since linking pushes everyone into the operator's one server, sharing it
+   * is the closest real signal there is, and in practice nearly the same set.
+   */
+  const neighboursQuery = useQuery({
+    queryKey: ['friends', 'discord-neighbours'],
+    queryFn: () =>
+      ipc.get<{
+        neighbours: Array<{
+          userId: string;
+          username: string;
+          discordUsername: string | null;
+          avatarUrl: string | null;
+        }>;
+      }>('/account/discord/neighbours'),
+    staleTime: 5 * 60_000,
+  });
+
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['friends'] });
 
   const requestMutation = useMutation({
@@ -627,6 +648,16 @@ function Friends({ onOpenProfile }: { onOpenProfile: (userId: string) => void })
   });
 
   const incoming = requestsQuery.data?.incoming ?? [];
+
+  // Anyone already a friend, or already asked, is not a suggestion.
+  const known = new Set([
+    ...(friendsQuery.data ?? []).map((entry) => entry.profile.userId),
+    ...incoming.map((entry) => entry.profile.userId),
+    ...(requestsQuery.data?.outgoing ?? []).map((entry) => entry.profile.userId),
+  ]);
+  const suggestions = (neighboursQuery.data?.neighbours ?? []).filter(
+    (person) => !known.has(person.userId),
+  );
 
   return (
     <>
@@ -721,6 +752,49 @@ function Friends({ onOpenProfile }: { onOpenProfile: (userId: string) => void })
                   onClick={() => removeMutation.mutate(profile.userId)}
                 >
                   Decline
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* Hidden entirely when Discord is not set up, when the player has not
+          linked, or when everyone here is already a friend — an empty
+          "suggestions" box is worse than none. */}
+      {suggestions.length > 0 ? (
+        <section>
+          <SectionHeader
+            title="From your Discord"
+            subtitle="Players here who are in the same Discord as you"
+          />
+          {/* The same list chrome the friends list uses. Inventing classes
+              here would leave them unstyled, which is exactly how the request
+              shelves ended up mismatched. */}
+          <ul className="people">
+            {suggestions.map((person) => (
+              <li key={person.userId}>
+                <button
+                  type="button"
+                  className="person-link"
+                  onClick={() => onOpenProfile(person.userId)}
+                >
+                  <Avatar url={person.avatarUrl} name={person.username} size={38} />
+                  <span>
+                    <strong>{person.username}</strong>
+                    <span className="muted small">
+                      {person.discordUsername ?? 'In your Discord'}
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => requestMutation.mutate(person.userId)}
+                  disabled={requestMutation.isPending}
+                >
+                  <UserPlus size={14} aria-hidden />
+                  Add
                 </button>
               </li>
             ))}

@@ -372,6 +372,8 @@ export interface ProfileSummary {
   playingGameId: string | null;
   playingGameTitle: string | null;
   playingSince: string | null;
+  /** Their Discord handle — only when they have chosen to show it. */
+  discordUsername?: string | null;
 }
 
 export interface ProfileDetail extends ProfileSummary {

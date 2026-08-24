@@ -3399,6 +3399,15 @@ textarea::placeholder {
   min-width: 0;
 }
 
+/* A linked Discord handle, shown only when its owner turned it on. */
+.discord-handle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  color: var(--violet);
+}
+
 /* Whether a game is set up for cloud saves and achievements. Both states are
    drawn — an absent badge would read as "still loading" rather than "not set
    up", which is the thing a player actually wants to know. */
