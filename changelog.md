@@ -1,0 +1,305 @@
+# GameBlade Changelog
+
+## Project Briefing
+
+GameBlade is a self-hosted platform for preserving free-to-play and DRM-free games. It consists of:
+- **Server**: A Docker server that holds the game archive, serves the API, stores saves and profiles
+- **Desktop Client**: A Windows desktop application built with Tauri + React that provides the player experience
+
+### Technology Stack
+- **Frontend**: React 19, Vite, TypeScript
+- **Desktop Framework**: Tauri 2 (Rust-based)
+- **Package Manager**: pnpm with workspace configuration
+- **Build Targets**: MSI and NSIS installers for Windows
+
+### Project Structure
+```
+apps/
+  desktop/          # Tauri desktop client
+  server/           # Backend server
+  web/              # Web interface
+packages/
+  shared/           # Shared packages
+```
+
+---
+
+## Build Session - August 23, 2026
+
+### Task: Build Installer for Desktop App
+
+**Objective**: Build the Windows installer for the GameBlade desktop application.
+
+### Actions Taken
+
+1. **Analyzed Project Structure**
+   - Identified desktop app location: `apps/desktop/`
+   - Confirmed Tauri 2 configuration in `src-tauri/tauri.conf.json`
+   - Verified build targets: MSI and NSIS installers
+   - Current version: 0.4.4
+
+2. **Executed Build Command**
+   - Command: `pnpm build` (from `apps/desktop/` directory)
+   - Build process:
+     - Compiled TypeScript frontend
+     - Built Rust backend with Tauri
+     - Generated Windows installer bundles
+   - Build duration: ~5 minutes 35 seconds
+
+3. **Build Artifacts Generated**
+   - **MSI Installer**: `GameBlade_0.4.4_x64_en-US.msi` (3.7 MB)
+     - Location: `apps/desktop/src-tauri/target/release/bundle/msi/`
+     - Format: Windows Installer package
+   - **NSIS Installer**: `GameBlade_0.4.4_x64-setup.exe` (2.7 MB)
+     - Location: `apps/desktop/src-tauri/target/release/bundle/nsis/`
+     - Format: Nullsoft Scriptable Install System
+   - **Executable**: `gameblade-desktop.exe`
+     - Location: `apps/desktop/src-tauri/target/release/`
+
+### Build Configuration Details
+
+**Tauri Configuration** (`src-tauri/tauri.conf.json`):
+- Product Name: GameBlade
+- Version: 0.4.4
+- Identifier: io.gameblade.desktop
+- Build targets: msi, nsis
+- NSIS install mode: currentUser
+
+**Rust Profile** (release):
+- Optimization level: s (size)
+- LTO: enabled
+- Codegen units: 1
+- Panic mode: abort
+- Symbols: stripped
+
+### Installation Notes
+
+- Both installers are for x64 architecture
+- NSIS installer is recommended for most users (smaller, more user-friendly)
+- MSI installer is suitable for enterprise deployment tools
+- Install mode: per-user (currentUser) - does not require admin privileges
+
+---
+
+## Build Session - August 24, 2026
+
+### Task: Pull Latest from GitHub and Build v0.4.5
+
+**Objective**: Pull the latest changes from the official GitHub repository and build the Windows installer for version 0.4.5.
+
+### Actions Taken
+
+1. **Pulled Latest Changes from GitHub**
+   - Repository: https://github.com/scopeddlol/gameblade
+   - Tag: v0.4.5
+   - Cloned to temporary directory and copied to main workspace
+   - Updated all project files to latest version
+
+2. **Version Updates**
+   - Updated `apps/desktop/package.json`: version 0.4.4 → 0.4.5
+   - Updated `apps/desktop/src-tauri/tauri.conf.json`: version 0.4.4 → 0.4.5
+   - Updated `packages/shared/package.json`: version 0.4.4 → 0.4.5
+
+3. **Dependency Installation**
+   - Ran `pnpm install` from root directory
+   - Lockfile was up to date
+   - Built shared package: `packages/shared` with TypeScript compilation
+
+4. **Executed Build Command**
+   - Command: `pnpm build` (from `apps/desktop/` directory)
+   - Build process:
+     - Compiled TypeScript frontend with Vite
+     - Built Rust backend with Tauri 2
+     - Generated Windows installer bundles
+   - Build duration: ~5 minutes 5 seconds
+
+5. **Build Artifacts Generated**
+   - **MSI Installer**: `GameBlade_0.4.5_x64_en-US.msi` (3.7 MB)
+     - Location: `apps/desktop/src-tauri/target/release/bundle/msi/`
+     - Format: Windows Installer package
+   - **NSIS Installer**: `GameBlade_0.4.5_x64-setup.exe` (2.7 MB)
+     - Location: `apps/desktop/src-tauri/target/release/bundle/nsis/`
+     - Format: Nullsoft Scriptable Install System
+   - **Executable**: `gameblade-desktop.exe`
+     - Location: `apps/desktop/src-tauri/target/release/`
+
+---
+
+## Build Session - August 24, 2026 (Bug Fixes)
+
+### Task: Fix v0.4.5 Build and Runtime Issues
+
+**Objective**: Fix critical issues preventing v0.4.5 from working correctly.
+
+### Issues Identified
+
+1. **Desktop App TypeScript Compilation Errors**
+   - The shared package types were updated in v0.4.5 to include new properties (`discordUsername`, `popularHere`, `acclaimed`, `surprise`)
+   - The desktop app failed to compile because it wasn't picking up the updated type definitions
+   - Files affected: `ProfileDrawer.tsx`, `HomeTab.tsx`
+
+2. **Web Panel Domain Inaccessibility**
+   - Server logs showed the application was running correctly
+   - However, navigating to the domain returned nothing
+   - Root cause: The web app (`apps/web`) was not built, so the server had no static files to serve
+   - The server's `webRoot` configuration checks for built web client files
+
+### Actions Taken
+
+1. **Rebuilt Shared Package**
+   - Command: `pnpm build` in `packages/shared/`
+   - Ensured TypeScript type definitions were up to date
+   - Result: Types now include all v0.4.5 properties
+
+2. **Built Web Application**
+   - Command: `pnpm build` in `apps/web/`
+   - Generated static files in `apps/web/dist/`
+   - Result: Server can now serve the web panel at the domain
+
+3. **Rebuilt Desktop Application**
+   - Command: `pnpm build` in `apps/desktop/`
+   - TypeScript compilation succeeded with updated types
+   - Generated new installers with fixes applied
+   - Build duration: ~3 minutes 52 seconds
+
+4. **Created Pull Request**
+   - Branch: `fix-build-issues-v0.4.5`
+   - Repository: https://github.com/scopeddlol/GameBlade
+   - Commit: Added changelog documenting fixes
+   - Status: Pushed to remote, ready for review
+
+### Build Artifacts Generated (After Fixes)
+
+- **MSI Installer**: `GameBlade_0.4.5_x64_en-US.msi` (3.7 MB)
+- **NSIS Installer**: `GameBlade_0.4.5_x64-setup.exe` (2.7 MB)
+- **Web App**: Built successfully in `apps/web/dist/`
+- **Shared Package**: Type definitions updated and compiled
+
+### Build Configuration Details
+
+**Tauri Configuration** (`src-tauri/tauri.conf.json`):
+- Product Name: GameBlade
+- Version: 0.4.5
+- Identifier: io.gameblade.desktop
+- Build targets: msi, nsis
+- NSIS install mode: currentUser
+
+**Rust Profile** (release):
+- Optimization level: s (size)
+- LTO: enabled
+- Codegen units: 1
+- Panic mode: abort
+- Symbols: stripped
+
+### Installation Notes
+
+- Both installers are for x64 architecture
+- NSIS installer is recommended for most users (smaller, more user-friendly)
+- MSI installer is suitable for enterprise deployment tools
+- Install mode: per-user (currentUser) - does not require admin privileges
+
+---
+
+## Planned Steps Ahead
+
+### Immediate Next Steps
+1. **Test Installers**
+   - Verify NSIS installer installs correctly on a clean Windows machine
+   - Verify MSI installer installs correctly
+   - Test application launch and basic functionality
+
+2. **Distribution Preparation**
+   - Upload installers to server via Admin → Settings
+   - Update CLIENT_DOWNLOAD_URL if hosting externally
+   - Bump client version in settings if this is a new release
+
+### Future Enhancements
+1. **Build Automation**
+   - Set up CI/CD pipeline for automated builds
+   - Configure GitHub Actions for release automation
+   - Add code signing for installers
+
+2. **Additional Platforms**
+   - Consider macOS build (dmg/pkg)
+   - Consider Linux build (AppImage/deb/rpm)
+
+3. **Installer Customization**
+   - Add custom branding to NSIS installer
+   - Configure auto-update mechanism
+   - Add license agreement screen
+
+### Maintenance Tasks
+- Regular dependency updates (pnpm update, cargo update)
+- Monitor Tauri framework updates
+- Test installer compatibility with new Windows versions
+- Maintain changelog for each release
+
+---
+
+## Version History
+
+### v0.4.5 (Current)
+- Built installers: MSI and NSIS
+- Platform: Windows x64
+- Build date: August 24, 2026
+- Tauri version: 2.x
+- React version: 19.0.0
+- Source: Pulled from GitHub tag v0.4.5
+
+### v0.4.4
+- Built installers: MSI and NSIS
+- Platform: Windows x64
+- Build date: August 23, 2026
+- Tauri version: 2.x
+- React version: 19.0.0
+
+---
+
+## Build Commands Reference
+
+### Development
+```bash
+cd apps/desktop
+pnpm dev              # Start development server
+pnpm build:frontend   # Build frontend only
+pnpm typecheck        # Type check TypeScript
+```
+
+### Production Build
+```bash
+cd apps/desktop
+pnpm build            # Build complete app with installers
+```
+
+### Tauri Commands
+```bash
+pnpm tauri build      # Build with Tauri CLI
+pnpm tauri dev        # Development mode with Tauri
+```
+
+---
+
+## Troubleshooting
+
+### Build Issues
+- **Rust toolchain missing**: Install Rust via rustup
+- **Node modules missing**: Run `pnpm install` from root
+- **Frontend build fails**: Check TypeScript errors in `apps/desktop/src/`
+
+### Installer Issues
+- **Antivirus blocking**: Add exception for installer
+- **Permissions**: NSIS installer uses currentUser mode (no admin required)
+- **Path issues**: Ensure install path does not contain special characters
+
+### Runtime Issues
+- **Server connection**: Verify server URL in client settings
+- **WebView2 missing**: Install Microsoft Edge WebView2 runtime
+- **Firewall**: Allow client to access server ports
+
+---
+
+## Contact & Support
+
+- **Repository**: https://github.com/scopeddlol/GameBlade
+- **Documentation**: See README.md and docs/ folder
+- **Bug Reports**: Use the in-app "Report a problem" feature
