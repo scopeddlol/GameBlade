@@ -734,7 +734,13 @@ which are read by different things and must agree — then typechecks, tests, bu
 the `.exe` and `.msi` into `dist/windows/<version>/`.
 
 `scripts/build-windows.cmd` is a double-clickable wrapper for it, which also
-avoids the execution-policy prompt.
+avoids the execution-policy prompt. It always waits for a keypress before
+closing, so a failure cannot vanish with the window; set `GAMEBLADE_NOPAUSE=1`
+to skip that when scripting it.
+
+Every run is transcribed to `build-windows.log` at the repo root, so a message
+that scrolled past — or a window that closed anyway — is still readable
+afterwards.
 
 | Flag             |                                                             |
 | ---------------- | ----------------------------------------------------------- |
@@ -746,6 +752,22 @@ avoids the execution-policy prompt.
 Only the client is built — the server ships as a container image built on
 Linux. Commit the version bump and tag it once the installer is in hand; the
 tag publishes the release and the image, and you attach the `.exe` to it.
+
+**If the window opens and closes doing nothing**, it is almost always a missing
+prerequisite. Open PowerShell in the repo and run the script directly to see
+the message:
+
+```powershell
+.\scripts\build-windows.ps1
+```
+
+It names every missing tool at once rather than one per run. The usual culprit
+is that a tool _is_ installed but the terminal predates the install — a running
+process keeps the PATH it started with, so open a new one. Check with:
+
+```powershell
+node --version; pnpm --version; cargo --version
+```
 
 To have Actions build the client again once a Windows runner is back, run the
 **Publish** workflow manually and tick **Build the Windows installers** — or,

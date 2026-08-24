@@ -200,28 +200,71 @@ function Read-Version {
     }
 }
 
-<# Fails early and with an actionable message when a tool is missing. #>
-function Assert-Tool {
-    param(
-        [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string]$Hint
+<#
+    Checks every prerequisite and reports all of the missing ones together.
+
+    One throw per missing tool would mean installing node, rerunning,
+    discovering pnpm is missing, rerunning, discovering cargo is missing — three
+    round trips to learn something this can say once.
+#>
+function Assert-Toolchain {
+    $required = @(
+        @{ Name = 'node'; Hint = 'Install Node 22 or newer from https://nodejs.org (tick "Add to PATH").' },
+        @{ Name = 'pnpm'; Hint = 'Run:  corepack enable    (corepack ships with Node 22)' },
+        @{ Name = 'cargo'; Hint = 'Install Rust from https://win.rustup.rs, then open a NEW terminal.' }
     )
 
-    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        throw "$Name is not on PATH.`n  $Hint"
+    $missing = @()
+    foreach ($tool in $required) {
+        if (Get-Command $tool.Name -ErrorAction SilentlyContinue) {
+            Write-Good ("found {0}" -f $tool.Name)
+        }
+        else {
+            $missing += $tool
+        }
     }
+
+    if ($missing.Count -eq 0) { return }
+
+    Write-Host ''
+    Write-Host 'Missing prerequisites:' -ForegroundColor Yellow
+    foreach ($tool in $missing) {
+        Write-Host ("  {0}" -f $tool.Name) -ForegroundColor Yellow
+        Write-Host ("      {0}" -f $tool.Hint)
+    }
+    Write-Host ''
+    # Installing a tool updates PATH for processes started afterwards, not for
+    # one already running — the single most common reason a fresh install still
+    # reports as missing.
+    Write-Host 'If you just installed one of these, open a new terminal first:' -ForegroundColor Yellow
+    Write-Host '  a running process keeps the PATH it started with.'
+
+    throw ("Missing: {0}." -f (($missing | ForEach-Object { $_.Name }) -join ', '))
 }
 
 # ---------------------------------------------------------------------- start
 
+# Everything the run prints, kept on disk. A build this long is not something
+# anyone wants to reproduce just to re-read a message that scrolled past — and
+# if the window does close, this is what is left to look at.
+$LogPath = Join-Path $RepoRoot 'build-windows.log'
+$transcribing = $false
+try {
+    Start-Transcript -LiteralPath $LogPath -Force | Out-Null
+    $transcribing = $true
+}
+catch {
+    # Some hosts do not support transcription. Not a reason to refuse to build.
+    Write-Host "    (could not start a transcript: $($_.Exception.Message))" -ForegroundColor DarkGray
+}
+
 Push-Location $RepoRoot
 try {
     Write-Host 'GameBlade — Windows client build' -ForegroundColor White
+    Write-Note "logging to $LogPath"
 
     Write-Step 'Checking the toolchain'
-    Assert-Tool -Name 'node' -Hint 'Install Node 22 or newer from https://nodejs.org.'
-    Assert-Tool -Name 'pnpm' -Hint 'Run: corepack enable'
-    Assert-Tool -Name 'cargo' -Hint 'Install Rust from https://win.rustup.rs, then reopen this terminal.'
+    Assert-Toolchain
 
     # A major version behind is the one that bites: the workspace declares
     # node >= 22, and an older runtime fails deep inside a build rather than here.
@@ -334,6 +377,27 @@ https://visualstudio.microsoft.com/visual-cpp-build-tools/
     }
     Write-Host ''
 }
+catch {
+    # $ErrorActionPreference = 'Stop' turns any failure into a terminating
+    # error, which PowerShell renders as a red stack trace that says nothing
+    # about what to do next. This is the part worth reading.
+    Write-Host ''
+    Write-Host '  BUILD FAILED  ' -ForegroundColor White -BackgroundColor DarkRed
+    Write-Host ''
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    Write-Host ''
+    if ($_.InvocationInfo -and $_.InvocationInfo.ScriptLineNumber) {
+        Write-Note ("at line {0}" -f $_.InvocationInfo.ScriptLineNumber)
+    }
+    Write-Note "the full transcript is in $LogPath"
+    Write-Host ''
+
+    # A non-zero exit code, so the .cmd wrapper and any CI can tell.
+    $script:Failed = $true
+}
 finally {
     Pop-Location
+    if ($transcribing) { try { Stop-Transcript | Out-Null } catch { } }
 }
+
+if ($script:Failed) { exit 1 }

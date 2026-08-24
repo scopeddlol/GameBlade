@@ -1,5 +1,8 @@
 node_modules/
 dist/
+
+# The transcript scripts/build-windows.ps1 leaves behind for troubleshooting.
+build-windows.log
 build/
 out/
 coverage/
