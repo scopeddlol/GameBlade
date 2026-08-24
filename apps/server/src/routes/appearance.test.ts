@@ -1,7 +1,13 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CSRF_HEADER, THEMES, type LandingBlock, type PublicServerInfo } from '@gameblade/shared';
+import {
+  CSRF_HEADER,
+  THEMES,
+  defaultLandingBlocks,
+  type LandingBlock,
+  type PublicServerInfo,
+} from '@gameblade/shared';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
@@ -128,6 +134,23 @@ describe('appearance', () => {
 
   /* -------------------------------------------------------------- landing */
 
+  /**
+   * The built-in page's block sequence.
+   *
+   * Taken from the definition rather than spelled out, so composing a better
+   * default page is not a three-site test failure. What these assertions are
+   * actually about is that the endpoint hands back the built-in page rather
+   * than saved blocks, an empty list or an error — so the anchors below are
+   * what keep a defaults function that returned nothing from passing.
+   */
+  const builtInKinds = () => {
+    const kinds = defaultLandingBlocks().map((block) => block.kind);
+    expect(kinds.length).toBeGreaterThan(2);
+    expect(kinds[0]).toBe('hero');
+    expect(kinds.at(-1)).toBe('cta');
+    return kinds;
+  };
+
   it('starts from the built-in page and reports it as uncustomised', async () => {
     const response = await app.inject({
       method: 'GET',
@@ -137,7 +160,7 @@ describe('appearance', () => {
     const body = response.json() as LandingResponse;
 
     expect(body.isCustomised).toBe(false);
-    expect(body.blocks.map((block) => block.kind)).toEqual(['hero', 'features', 'stats', 'cta']);
+    expect(body.blocks.map((block) => block.kind)).toEqual(builtInKinds());
   });
 
   it('saves an edited page and serves it publicly', async () => {
@@ -227,12 +250,7 @@ describe('appearance', () => {
     expect(response.statusCode).toBe(200);
 
     const body = response.json() as PublicServerInfo;
-    expect(body.landingBlocks.map((block) => block.kind)).toEqual([
-      'hero',
-      'features',
-      'stats',
-      'cta',
-    ]);
+    expect(body.landingBlocks.map((block) => block.kind)).toEqual(builtInKinds());
   });
 
   it('reverts to the built-in page on reset', async () => {
@@ -264,6 +282,6 @@ describe('appearance', () => {
     const after = (
       await app.inject({ method: 'GET', url: '/api/admin/landing', headers: auth() })
     ).json() as LandingResponse;
-    expect(after.blocks.map((block) => block.kind)).toEqual(['hero', 'features', 'stats', 'cta']);
+    expect(after.blocks.map((block) => block.kind)).toEqual(builtInKinds());
   });
 });

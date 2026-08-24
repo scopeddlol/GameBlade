@@ -1,9 +1,11 @@
-import type {
-  ArtKind,
-  ArtworkCandidate,
-  ArtworkSearchResult,
-  MetadataCandidate,
-  ProviderStatus,
+import {
+  DISCOVERY_SHELVES,
+  type ArtKind,
+  type ArtworkCandidate,
+  type ArtworkSearchResult,
+  type DiscoveryShelfId,
+  type MetadataCandidate,
+  type ProviderStatus,
 } from '@gameblade/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../../db/index.js';
@@ -11,12 +13,59 @@ import { games, type Game } from '../../db/schema.js';
 import { ApiError } from '../../lib/errors.js';
 import { matchKey } from '../../lib/titles.js';
 import type { SettingsService } from '../settings.js';
-import { IgdbClient, igdbImageUrl, normalizeIgdbGame } from './igdb.js';
+import { IgdbClient, igdbImageUrl, normalizeIgdbGame, type IgdbGame } from './igdb.js';
 import { ImageCache } from './images.js';
 import { SteamGridDbClient } from './steamgriddb.js';
 
-/** How long the trending list is held before IGDB is asked again. */
+/** How long a discovery shelf is held before IGDB is asked again. */
 const TRENDING_TTL_MS = 60 * 60_000;
+
+/** One title offered on the request page, before the catalog is consulted. */
+export interface DiscoveryCandidate {
+  title: string;
+  coverUrl: string | null;
+  releaseYear: number | null;
+  summary: string | null;
+  rating: number | null;
+}
+
+/**
+ * Which IGDB query backs each shelf.
+ *
+ * A lookup rather than a switch so the shelf list in the shared package stays
+ * the single place a shelf is declared — adding one there is a type error here
+ * until it is given a query.
+ */
+const SHELF_QUERIES: Record<DiscoveryShelfId, (igdb: IgdbClient) => Promise<IgdbGame[]>> = {
+  trending: (igdb) => igdb.popular(24),
+  anticipated: (igdb) => igdb.anticipated(24),
+  recent: (igdb) => igdb.recentlyReleased(24),
+  acclaimed: (igdb) => igdb.acclaimed(24),
+};
+
+/** Trims one IGDB game down to what a request card actually shows. */
+function toCandidate(game: IgdbGame, proxy: (url: string) => string): DiscoveryCandidate {
+  return {
+    title: game.name,
+    coverUrl: game.cover?.image_id ? proxy(igdbImageUrl(game.cover.image_id, 'cover_big')) : null,
+    releaseYear: game.first_release_date
+      ? new Date(game.first_release_date * 1000).getUTCFullYear()
+      : null,
+    // One line, not the whole blurb: these are cards in a row, and a card that
+    // grows to fit four paragraphs breaks the row it sits in.
+    summary: game.summary ? truncate(game.summary, 160) : null,
+    rating: typeof game.total_rating === 'number' ? Math.round(game.total_rating) : null,
+  };
+}
+
+/** Cuts at a word boundary so a card never ends mid-word. */
+function truncate(value: string, max: number): string {
+  const collapsed = value.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= max) return collapsed;
+  const cut = collapsed.slice(0, max);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
 
 export interface Logger {
   info: (obj: unknown, msg?: string) => void;
@@ -66,11 +115,8 @@ interface ProviderHealth {
 export class MetadataService {
   private igdb: { client: IgdbClient; key: string } | null = null;
 
-  /** The trending list is identical for every caller, so it is held once. */
-  private trendingCache: {
-    at: number;
-    items: { title: string; coverUrl: string | null; releaseYear: number | null }[];
-  } | null = null;
+  /** Every shelf is identical for every caller, so each is held once. */
+  private shelfCache = new Map<DiscoveryShelfId, { at: number; items: DiscoveryCandidate[] }>();
   private sgdb: { client: SteamGridDbClient; key: string } | null = null;
   private health: Record<'igdb' | 'steamgriddb', ProviderHealth> = {
     igdb: { reachable: null, lastError: null, lastCheckedAt: null },
@@ -98,45 +144,88 @@ export class MetadataService {
   }
 
   /**
-   * Titles that are being played right now, as request suggestions.
+   * One shelf's worth of titles, ready to be checked against the catalog.
    *
-   * Cached for an hour: it is the same list for every player on the server,
-   * it moves slowly, and IGDB's rate limit is four requests a second shared
-   * across everything the server does — a request page that asked on every
-   * open would spend that budget on identical answers.
+   * Cached for an hour per shelf: the lists are the same for every player on
+   * the server, they move slowly, and IGDB's rate limit is four requests a
+   * second shared across everything the server does — a request page that
+   * asked on every open would spend that budget on identical answers.
    *
    * Returns an empty list rather than throwing when IGDB is not configured or
-   * is unreachable: suggestions are a convenience on a page that works without
-   * them, so a provider outage must not take the page down with it.
+   * is unreachable: discovery is a convenience on a page that works without
+   * it, so a provider outage must not take the page down with it.
    */
-  async trending(
-    limit = 12,
-  ): Promise<{ title: string; coverUrl: string | null; releaseYear: number | null }[]> {
+  async shelf(id: DiscoveryShelfId, limit = 12): Promise<DiscoveryCandidate[]> {
     const now = Date.now();
-    if (this.trendingCache && now - this.trendingCache.at < TRENDING_TTL_MS) {
-      return this.trendingCache.items.slice(0, limit);
+    const cached = this.shelfCache.get(id);
+    if (cached && now - cached.at < TRENDING_TTL_MS) {
+      return cached.items.slice(0, limit);
     }
 
     const igdb = this.getIgdb();
     if (!igdb) return [];
 
     try {
-      const games = await igdb.popular(24);
-      const items = games.map((game) => ({
-        title: game.name,
-        coverUrl: game.cover?.image_id
-          ? this.proxied(igdbImageUrl(game.cover.image_id, 'cover_big'))
-          : null,
-        releaseYear: game.first_release_date
-          ? new Date(game.first_release_date * 1000).getUTCFullYear()
-          : null,
-      }));
-      this.trendingCache = { at: now, items };
+      const games = await SHELF_QUERIES[id](igdb);
+      const items = games.map((game) => toCandidate(game, (url) => this.proxied(url)));
+      this.shelfCache.set(id, { at: now, items });
       return items.slice(0, limit);
-    } catch {
+    } catch (error) {
+      this.logger.warn({ err: error, shelf: id }, 'could not fetch a discovery shelf');
       // Hold the stale list rather than nothing if we ever had one.
-      return this.trendingCache?.items.slice(0, limit) ?? [];
+      return cached?.items.slice(0, limit) ?? [];
     }
+  }
+
+  /**
+   * Every shelf at once, for the client's request page.
+   *
+   * Fetched in parallel and settled independently: one shelf whose IGDB query
+   * IGDB dislikes must leave the other three on the page rather than emptying
+   * it. A shelf that comes back with nothing is dropped here, so the client
+   * never has to render a labelled row with no cards under it.
+   */
+  async discover(limit = 12): Promise<{ id: DiscoveryShelfId; items: DiscoveryCandidate[] }[]> {
+    if (!this.hasIgdb) return [];
+
+    const results = await Promise.all(
+      DISCOVERY_SHELVES.map(async (id) => ({ id, items: await this.shelf(id, limit) })),
+    );
+    return results.filter((shelf) => shelf.items.length > 0);
+  }
+
+  /**
+   * Titles matching a search, for asking about something no shelf is showing.
+   *
+   * The point is that a player can find the exact game — with its cover, its
+   * year and its blurb — rather than typing a title into a box and hoping the
+   * operator recognises it. Uncached: a search is one person's, not the
+   * server's, and IGDB is asked only when somebody actually types something.
+   */
+  async searchForRequest(term: string, limit = 12): Promise<DiscoveryCandidate[]> {
+    const trimmed = term.trim();
+    if (trimmed.length < 2) return [];
+
+    const igdb = this.getIgdb();
+    if (!igdb) return [];
+
+    try {
+      const games = await igdb.search(trimmed, limit);
+      return games.map((game) => toCandidate(game, (url) => this.proxied(url)));
+    } catch (error) {
+      this.logger.warn({ err: error }, 'could not search IGDB for a request');
+      return [];
+    }
+  }
+
+  /**
+   * Titles that are being played right now.
+   *
+   * Kept as its own name because it is the one shelf other callers ask for
+   * directly; it is the `trending` shelf and shares its cache.
+   */
+  async trending(limit = 12): Promise<DiscoveryCandidate[]> {
+    return this.shelf('trending', limit);
   }
 
   /** Clients are rebuilt whenever the stored credentials change. */

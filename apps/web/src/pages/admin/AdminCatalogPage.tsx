@@ -32,6 +32,7 @@ import {
   PageLoader,
   Spinner,
   Notice,
+  RowSkeleton,
 } from '../../components/ui.js';
 import { api, ApiRequestError, queryString } from '../../lib/api.js';
 import { formatBytes } from '../../lib/format.js';
@@ -193,8 +194,7 @@ export function AdminCatalogPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Catalog</h1>
-        <span className="text-ink-400 text-sm">
+        <span className="text-ink-300 text-sm">
           {listQuery.data ? `${listQuery.data.total.toLocaleString()} games` : ''}
         </span>
         <div className="ml-auto">
@@ -280,7 +280,7 @@ export function AdminCatalogPage() {
       </div>
 
       {listQuery.isLoading ? (
-        <PageLoader label="Loading catalog" />
+        <RowSkeleton rows={6} />
       ) : (listQuery.data?.items ?? []).length === 0 ? (
         <EmptyState
           title="Nothing matches"

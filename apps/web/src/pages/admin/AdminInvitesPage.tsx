@@ -2,7 +2,7 @@ import type { InviteInfo } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { Badge, Field, PageLoader } from '../../components/ui.js';
+import { Badge, Field, RowSkeleton } from '../../components/ui.js';
 import { api } from '../../lib/api.js';
 import { BASE_PATH } from '../../lib/base.js';
 import { formatDateTime } from '../../lib/format.js';
@@ -50,7 +50,6 @@ export function AdminInvitesPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Invites</h1>
       <section className="gb-card p-5">
         <h2 className="mb-4 text-sm font-semibold tracking-wide uppercase">Create an invite</h2>
         <form
@@ -118,7 +117,7 @@ export function AdminInvitesPage() {
       <section className="gb-card p-5">
         <h2 className="mb-4 text-sm font-semibold tracking-wide uppercase">Active invites</h2>
         {invitesQuery.isLoading ? (
-          <PageLoader label="Loading invites" />
+          <RowSkeleton rows={4} />
         ) : (invitesQuery.data ?? []).length === 0 ? (
           <p className="text-ink-400 text-sm">No invites yet.</p>
         ) : (

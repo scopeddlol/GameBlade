@@ -2,6 +2,12 @@
 # in a shell script or entrypoint is a runtime failure.
 * text=auto eol=lf
 
+# The exceptions, for the same reason in reverse: these only ever run on
+# Windows, and cmd.exe mis-parses a batch file whose lines end in LF alone.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
 *.png binary
 *.jpg binary
 *.jpeg binary

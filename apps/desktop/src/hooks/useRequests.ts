@@ -1,11 +1,13 @@
 import type {
   CreatedGameRequest,
   CreateGameRequestInput,
+  DiscoveryShelf,
   GameRequestDigest,
   GameRequestInfo,
+  GameRequestSuggestion,
 } from '@gameblade/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ipc } from '../lib/ipc.js';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ipc, queryString } from '../lib/ipc.js';
 
 /**
  * The request panels: what is coming, what people are asking for, and what
@@ -23,7 +25,13 @@ export function useRequestDigest(enabled = true) {
   });
 }
 
-/** The full queue, for the client's browse-and-vote screen. */
+/**
+ * The full queue, for the client's browse-and-vote screen.
+ *
+ * `keepPreviousData` is what makes the status filter feel like a filter: the
+ * rows for the previous status stay on screen, dimmed, while the next set
+ * loads, rather than the list emptying to a spinner on every chip.
+ */
 export function useRequestList(status: string, enabled = true) {
   return useQuery({
     queryKey: ['requests', 'list', status],
@@ -32,6 +40,44 @@ export function useRequestList(status: string, enabled = true) {
         `/requests?sort=votes&limit=100${status ? `&status=${status}` : ''}`,
       ),
     enabled,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * The shelves the request page browses.
+ *
+ * Held for half an hour on the client and an hour on the server: these lists
+ * are the same for everyone and move slowly, so a tab switch should never cost
+ * a round trip, let alone four.
+ */
+export function useDiscovery(enabled = true) {
+  return useQuery({
+    queryKey: ['requests', 'discover'],
+    queryFn: () => ipc.get<{ shelves: DiscoveryShelf[] }>('/requests/discover'),
+    enabled,
+    staleTime: 30 * 60_000,
+  });
+}
+
+/**
+ * Looking a game up to ask for it.
+ *
+ * Only runs once there is something worth searching for — IGDB's rate limit is
+ * shared across everything the server does, and a query per keystroke would
+ * spend it on prefixes nobody meant to search for. The caller debounces.
+ */
+export function useRequestSearch(term: string) {
+  const trimmed = term.trim();
+  return useQuery({
+    queryKey: ['requests', 'search', trimmed],
+    queryFn: () =>
+      ipc.get<{ results: GameRequestSuggestion[] }>(
+        `/requests/search${queryString({ q: trimmed })}`,
+      ),
+    enabled: trimmed.length >= 2,
+    staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 

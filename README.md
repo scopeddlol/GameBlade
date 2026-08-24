@@ -70,7 +70,7 @@ first-run screen is only available while the database has no users.
 
 Once the library has scanned, upload a client build from **Admin → Settings**
 (or point `CLIENT_DOWNLOAD_URL` at one hosted elsewhere) and invite people from
-**Admin → Invites**.
+**Admin → Players → Invites**.
 
 > **If it fails to start with a database error**, the `data` folder is almost
 > certainly owned by root while the container runs as uid 1000. SQLite is built
@@ -110,7 +110,7 @@ game's page.
 ## Metadata providers
 
 Both are optional — GameBlade runs fine without them, it just shows titles and
-file sizes instead of artwork. Add credentials in **Admin → Metadata**, or via
+file sizes instead of artwork. Add credentials in **Admin → Settings**, or via
 environment variables.
 
 | Provider        | What it supplies                          | Where to get credentials                                                                      |
@@ -175,7 +175,7 @@ what the desktop client is for — see below.
 Registration is invite-only unless an administrator turns on self-registration
 in **Admin → Settings**.
 
-To add someone: **Admin → Invites → Create an invite**, then send them the
+To add someone: **Admin → Players → Invites → Create an invite**, then send them the
 copied link. Invites carry a role, a use count and an optional expiry, and can be
 revoked at any time. After registering they download the Windows client and sign
 in there — the web surface has nothing else for them.
@@ -191,36 +191,56 @@ Everything an operator needs, at `/admin` — and it works on a phone: below the
 large breakpoint the sidebar becomes a drawer, and tables and charts stay inside
 the viewport rather than forcing the page sideways.
 
+Six sections, each with its own sub-tabs. Pointing at one starts fetching what
+it needs before the click lands, and a page waiting on data draws its own shape
+rather than a spinner. The flat URLs the sections used to live at still work and
+redirect to where each page moved.
+
 - **Overview** — catalog health, connected clients, scan progress, and a
   broadcast announcement box that pushes a notification to every account.
-- **Catalog** — a worklist of every game, filterable by match status and by
-  what an entry is still missing: no launch executable, no cloud-save rule, no
-  artwork, no achievements, no metadata. Each filter carries a server-wide
-  count, and every row shows the same four things as `EXE / SAVE / ART / ACH`
-  markers, so a scan down the list says where the holes are without opening
-  anything. Opening one gives a full metadata editor: fields, artwork slots,
-  screenshots, Steam achievement import, and the launch and save rules the
-  desktop client needs to actually run and back up that game.
-- **Featured** — curates the carousel on the client's Home tab, in order, with
-  a per-slot image override.
-- **Requests** — the queue of games players have asked for, ranked by how many
-  of them asked. See [Game requests](#game-requests).
-- **Desktop client** — your own links (a Discord invite, a wiki, a support
-  page) rendered in the client's sidebar, on its Home tab, or in the menu that
-  opens when a player right-clicks a game. Links only: the client hands the URL
-  to the player's browser, and only `http(s)` is accepted — pushing anything
-  executable to every player's machine would be a different trust model
-  entirely.
-- **Analytics** — who downloaded what, the most-played titles, bandwidth per
-  day and per month, allowance usage, and a recent-downloads log. Everything is
-  derived from the download and play records already being written, so there is
-  no separate counter to drift out of agreement with them.
-- **API keys** — scoped credentials for the external API. See
-  [docs/API.md](docs/API.md).
-- **Appearance** — the colour theme and the landing page, edited side by side
-  with a live preview of the real page.
-- **Libraries**, **Users**, **Invites**, **Settings** — as before, plus the
-  landing-page copy, the Windows client installer and the bandwidth limits.
+- **Catalog** — the archive itself.
+  - **Games** — a worklist of every game, filterable by match status and by
+    what an entry is still missing: no launch executable, no cloud-save rule,
+    no artwork, no achievements, no metadata. Each filter carries a server-wide
+    count, and every row shows the same four things as `EXE / SAVE / ART / ACH`
+    markers, so a scan down the list says where the holes are without opening
+    anything. Opening one gives a full metadata editor: fields, artwork slots,
+    screenshots, Steam achievement import, and the launch and save rules the
+    desktop client needs to actually run and back up that game.
+  - **Featured** — curates the carousel on the client's Home tab, in order,
+    with a per-slot image override.
+  - **Save paths** — where each game keeps its saves, matched against a public
+    database rather than found by playing every title. See
+    [Cloud saves](#cloud-saves).
+  - **Libraries** — the folders on disk that are scanned, and the scan itself.
+- **Players** — the people in it.
+  - **Accounts** — who is here, and their roles.
+  - **Invites** — codes, their uses and their expiry.
+  - **Game requests** — the queue of games players have asked for, ranked by
+    how many of them asked. See [Game requests](#game-requests).
+  - **Bug reports** — the triage queue. See [Reporting a bug](#reporting-a-bug).
+- **Insights** — numbers and warnings.
+  - **Analytics** — who downloaded what, the most-played titles, bandwidth per
+    day and per month, allowance usage, and a recent-downloads log. Everything
+    is derived from the download and play records already being written, so
+    there is no separate counter to drift out of agreement with them.
+  - **Health** — what needs attention, and the backup schedule.
+- **Appearance** — what everyone else sees.
+  - **Theme** — the colour preset and accent, applied to the panel around you
+    as you pick, and put back if you leave without saving.
+  - **Landing page** — the public page as an ordered list of sections, with a
+    live preview. See [Editing the landing page](#editing-the-landing-page).
+  - **Desktop client** — your own links (a Discord invite, a wiki, a support
+    page) rendered in the client's sidebar, on its Home tab, or in the menu
+    that opens when a player right-clicks a game. Links only: the client hands
+    the URL to the player's browser, and only `http(s)` is accepted — pushing
+    anything executable to every player's machine would be a different trust
+    model entirely.
+- **Settings** — server configuration.
+  - **Server** — the name and tagline, provider credentials, the Windows client
+    installer, and the bandwidth limits.
+  - **API keys** — scoped credentials for the external API. See
+    [docs/API.md](docs/API.md).
 
 ### Picking artwork
 
@@ -286,7 +306,7 @@ IGDB credentials; without them the strip simply does not appear, and the rest of
 the page works as normal. The list is cached for an hour, since it is the same
 for every player and IGDB's rate limit is shared with scanning and matching.
 
-**Admin → Requests** is the other side of it: the queue ranked by votes, with
+**Admin → Players → Game requests** is the other side of it: the queue ranked by votes, with
 four states — pending, coming soon, added, denied — a note players will see, and
 a field linking a fulfilled request to the catalog entry that satisfied it. Who
 asked is shown here and nowhere else; a wish list should not become a public
@@ -312,7 +332,7 @@ moved, and deleting a group leaves every game in it alone.
 
 ### News and announcements
 
-**Admin → Announcements**, or the composer on the client's **News** tab, sends a
+The broadcast box on **Admin → Overview**, or the composer on the client's **News** tab, sends a
 notification to every account _and_ publishes the same text as a post. The
 notification is read once and gone; the News tab is where it stays, and where
 people reply to it. Underneath it is an ordinary post, so comments, reactions,
@@ -326,7 +346,7 @@ body is ignored rather than trusted.
 
 ### Keeping the client up to date
 
-Upload a new installer under **Admin → Client** and bump the client version
+Upload a new installer under **Admin → Settings** and bump the client version
 beside it. Clients older than that version show a banner offering to update, and
 hand off to the installer when the user accepts — nothing is replaced behind
 their back. Declining is remembered per version, so saying no to 0.5.0 stays no
@@ -372,17 +392,36 @@ desktop restyled the next time that choice changes.
 
 ### Editing the landing page
 
-**Admin → Appearance** turns the landing page into an ordered list of sections —
-hero, feature grid, stats, screenshots, prose, call to action. Add, reorder,
-hide and edit them with the real page rendering beside the form; the preview is
-the same component the public page uses, not a mock-up of it.
+**Admin → Appearance → Landing page** turns the landing page into an ordered
+list of sections. Add, reorder, hide and edit them with the real page rendering
+beside the form; the preview is the same component the public page uses, not a
+mock-up of it.
+
+| Section        |                                                                                                                        |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Hero           | The headline, with an eyebrow line, a background image and its dimming, alignment, and four heights up to full-screen. |
+| Feature grid   | Short "what you get" cards, two to four across, as cards or plain.                                                     |
+| How it works   | A numbered sequence — get an invite, install, play.                                                                    |
+| Stats          | A strip of numbers, optionally including the live game count.                                                          |
+| Screenshots    | A grid, two to four across, in widescreen, ultrawide, square or poster shape.                                          |
+| Video          | One embedded YouTube video.                                                                                            |
+| Quote          | A pull quote, larger than body text and attributed.                                                                    |
+| FAQ            | Questions and answers, each one expandable.                                                                            |
+| Text           | Prose, left or centred, at body or display size.                                                                       |
+| Spacer         | Space between two sections, with or without a rule.                                                                    |
+| Call to action | A closing prompt with the same buttons as the hero, as a panel or full width.                                          |
+
+Every section also has its own padding, background (none, a muted band, or an
+accent wash) and content width. Alternating those is most of what makes a page
+read as designed rather than as a stack of boxes, and all three come from theme
+tokens — so a light theme gets a light band rather than a dark stripe.
 
 Blocks rather than free-form positioning is deliberate: an operator says what
 the page contains and in what order, while each section's layout stays something
 that was designed once and works at every width, phones included. Operator copy
-is rendered as text and never as HTML, and a stored page that cannot be parsed
-falls back to the built-in one rather than taking the front door down. **Reset**
-restores the shipped page at any point.
+is rendered as text and never as HTML, only YouTube can be framed, and a stored
+page that cannot be parsed falls back to the built-in one rather than taking the
+front door down. **Reset** restores the shipped page at any point.
 
 ### Reporting a bug
 
@@ -392,7 +431,7 @@ report carries the client version, the platform, the game if one was running,
 and the last few errors the app logged — none of which a reporter should have to
 know, and all of which an operator would otherwise have to go back and ask for.
 
-**Admin → Bug reports** is the queue: filter by state, read what the app logged
+**Admin → Players → Bug reports** is the queue: filter by state, read what the app logged
 just before, and answer. Whatever you set, and anything you write back, reaches
 the reporter as a notification, and they can see where each of their reports got
 to under Settings.
@@ -405,7 +444,7 @@ reason.
 
 ### Health and backups
 
-**Admin → Health** answers "is anything wrong", which analytics does not: disks
+**Admin → Insights → Health** answers "is anything wrong", which analytics does not: disks
 running out, games that have gone from disk, entries with no launch or save
 rule, files whose contents no longer match their recorded checksum, accounts
 that have hit their limit, and when the library was last scanned. Every finding
@@ -444,7 +483,7 @@ keys; the files never leave the machine. A reported key with no rule behind it
 is ignored, so reporting is not a way of simply asking for an achievement, and
 unlocking is idempotent, so re-reading the same save changes nothing.
 
-Rules are written in **Admin → Catalog**, on a game, beside its launch and save
+Rules are written in **Admin → Catalog → Games**, on a game, beside its launch and save
 rules.
 
 ### Bandwidth
@@ -501,6 +540,25 @@ choose which save to destroy.
 Restoring moves the existing save folder aside rather than deleting it, so the
 previous state stays on disk even if the archive turns out to be wrong.
 
+### Where the save paths come from
+
+Finding where a game saves by hand means installing it, playing it, making a
+save and going looking — for every title. **Admin → Catalog → Save paths**
+matches the catalog against
+[Ludusavi's manifest](https://github.com/mtkennerly/ludusavi-manifest), a
+machine-readable digest of PCGamingWiki's save-path data covering some eleven
+thousand games, and proposes the rules instead.
+
+Nothing is written without a tick, and the manifest's own title is shown beside
+the archive's on every row, because a title match is occasionally confident and
+wrong — and these paths are where the client will later read and write a
+player's saves. Titles that already have a rule are hidden by default; the
+toggle above the list brings them back for review.
+
+The index refreshes itself daily. It is decided from the index's own age rather
+than run on a timer, so a server restarted every evening still refreshes once a
+day and one left up for months does not drift. **Refresh index** forces it.
+
 ---
 
 ## Achievements
@@ -508,7 +566,7 @@ previous state stays on disk even if the archive turns out to be wrong.
 Games here have no achievement runtime of their own, so definitions are imported
 and unlocks are reported by the client.
 
-Import a set from **Admin → Catalog → (a game) → Achievements** with a Steam
+Import a set from **Admin → Catalog → Games → (a game) → Achievements** with a Steam
 app id. This reads Steam's _published_ achievement schema — no player data is
 requested and no Steam account is linked — which is what makes it usable for a
 DRM-free copy of a game that also ships there. Global unlock rates come along
@@ -578,8 +636,18 @@ exists to remove that failure mode.
 - Signs in with a **device token stored in the Windows Credential Manager**, never
   a password on disk. Each device is listed and revocable from **Settings**.
 
-Installers are built by CI on every push to `main` and attached to each tagged
-release. Once you have published one, set **Admin → Settings → Windows client
+**Cancelling asks what to do with the bytes already on disk.** Stopping a
+250 GB install 100 GB in leaves 100 GB somewhere, and both answers are
+legitimate — a transfer stopped to be resumed later wants its files, one being
+abandoned wants the space back. Keeping them is the default; removing them
+deletes exactly the paths that download wrote and nothing else in the folder.
+Dismissing a paused or failed transfer asks the same question.
+
+Installers are built with `scripts/build-windows.ps1` — see
+[Building a Windows release by hand](#building-a-windows-release-by-hand). CI
+no longer builds them automatically: a job queued for a Windows runner that is
+not online does not fail, it sits pending until it times out hours later.
+Once you have published an installer, set **Admin → Settings → Windows client
 download URL** so the landing page links it.
 
 To build locally you need the [Rust toolchain](https://rustup.rs):
@@ -645,6 +713,44 @@ pnpm format
 # Rust side of the desktop client
 cd apps/desktop/src-tauri && cargo test && cargo clippy --all-targets -- -D warnings
 ```
+
+### Building a Windows release by hand
+
+The Windows client is built on a real machine rather than by CI. Both Actions
+workflows still know how — the jobs are there and work — but neither starts on
+its own, because a job queued for a self-hosted runner that is offline sits
+pending until it times out hours later rather than failing.
+
+`scripts/build-windows.ps1` does the same job on any Windows machine with
+Node 22, pnpm and the Rust toolchain:
+
+```powershell
+.\scripts\build-windows.ps1
+```
+
+It asks for the version, stamps it across every manifest that carries one — the
+five `package.json` files, `tauri.conf.json`, the Rust crate and its lockfile,
+which are read by different things and must agree — then typechecks, tests, builds, and copies
+the `.exe` and `.msi` into `dist/windows/<version>/`.
+
+`scripts/build-windows.cmd` is a double-clickable wrapper for it, which also
+avoids the execution-policy prompt.
+
+| Flag             |                                                             |
+| ---------------- | ----------------------------------------------------------- |
+| `-Version 0.5.0` | Skip the prompt.                                            |
+| `-KeepVersion`   | Build at the current version, changing no files.            |
+| `-Fast`          | Drop link-time optimisation. Much quicker; not for release. |
+| `-SkipChecks`    | Skip typecheck and tests.                                   |
+
+Only the client is built — the server ships as a container image built on
+Linux. Commit the version bump and tag it once the installer is in hand; the
+tag publishes the release and the image, and you attach the `.exe` to it.
+
+To have Actions build the client again once a Windows runner is back, run the
+**Publish** workflow manually and tick **Build the Windows installers** — or,
+to restore the old automatic behaviour, drop the `if:` guard on the `desktop`
+job in each workflow. The comment above each one says what it used to be.
 
 ### Layout
 

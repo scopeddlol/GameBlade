@@ -37,6 +37,15 @@ export function requestKey(title: string): string {
     .trim();
 }
 
+/** What a provider hands over before the archive's own answers are added. */
+export interface SuggestionCandidate {
+  title: string;
+  coverUrl: string | null;
+  releaseYear: number | null;
+  summary?: string | null;
+  rating?: number | null;
+}
+
 interface RequestRow {
   id: string;
   userId: string | null;
@@ -202,21 +211,32 @@ export class GameRequestService {
    * is already on the shelf. Each suggestion says which of those it is, so the
    * button can read "Request", "Already here" or "Backed".
    */
-  suggestions(
-    userId: string,
-    candidates: { title: string; coverUrl: string | null; releaseYear: number | null }[],
-  ): GameRequestSuggestion[] {
+  suggestions(userId: string, candidates: SuggestionCandidate[]): GameRequestSuggestion[] {
     if (candidates.length === 0) return [];
+    return this.decorateCandidates(userId, [candidates])[0] ?? [];
+  }
 
-    const keys = candidates.map((entry) => requestKey(entry.title)).filter(Boolean);
-    if (keys.length === 0) return [];
+  /**
+   * The same decoration across several lists at once.
+   *
+   * The request page shows four shelves plus a search, and every one of them
+   * needs the same three answers about every title: is it on the shelf, has
+   * anyone asked, has the reader backed it. Doing them together means three
+   * table reads for the whole page rather than three per shelf.
+   */
+  decorateCandidates(userId: string, lists: SuggestionCandidate[][]): GameRequestSuggestion[][] {
+    const keys = lists
+      .flat()
+      .map((entry) => requestKey(entry.title))
+      .filter(Boolean);
+    if (keys.length === 0) return lists.map(() => []);
 
     // Two set lookups over the page rather than a query per suggestion.
     const alreadyRequested = new Map(
       this.db
         .select({ id: gameRequests.id, key: gameRequests.titleKey, status: gameRequests.status })
         .from(gameRequests)
-        .where(inArray(gameRequests.titleKey, keys))
+        .where(inArray(gameRequests.titleKey, [...new Set(keys)]))
         .all()
         .map((row) => [row.key, row]),
     );
@@ -239,19 +259,23 @@ export class GameRequestService {
         .map((row) => row.requestId),
     );
 
-    return candidates.map((entry) => {
-      const key = requestKey(entry.title);
-      const request = alreadyRequested.get(key);
-      return {
-        title: entry.title,
-        coverUrl: entry.coverUrl,
-        releaseYear: entry.releaseYear,
-        inCatalog: inCatalog.has(key),
-        requestId: request?.id ?? null,
-        status: request?.status ?? null,
-        hasVoted: request ? backed.has(request.id) : false,
-      };
-    });
+    return lists.map((list) =>
+      list.map((entry) => {
+        const key = requestKey(entry.title);
+        const request = alreadyRequested.get(key);
+        return {
+          title: entry.title,
+          coverUrl: entry.coverUrl,
+          releaseYear: entry.releaseYear,
+          summary: entry.summary ?? null,
+          rating: entry.rating ?? null,
+          inCatalog: inCatalog.has(key),
+          requestId: request?.id ?? null,
+          status: request?.status ?? null,
+          hasVoted: request ? backed.has(request.id) : false,
+        };
+      }),
+    );
   }
 
   list(query: GameRequestQuery, viewerId: string, includeRequester: boolean): GameRequestInfo[] {

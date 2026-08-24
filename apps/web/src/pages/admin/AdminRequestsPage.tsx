@@ -8,7 +8,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowBigUp, Check, Clock, Search, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
-import { Badge, EmptyState, FormError, PageLoader, Spinner } from '../../components/ui.js';
+import { Badge, EmptyState, FormError, Spinner, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError, queryString } from '../../lib/api.js';
 
 interface RequestsResponse {
@@ -104,12 +104,9 @@ export function AdminRequestsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Requests</h1>
-        <p className="text-ink-400 text-sm">
-          What players have asked for. Deciding one tells every client.
-        </p>
-      </div>
+      <p className="text-ink-300 text-sm">
+        What players have asked for. Deciding one tells every client.
+      </p>
 
       <FormError message={error} />
 
@@ -162,7 +159,7 @@ export function AdminRequestsPage() {
       </div>
 
       {requestsQuery.isLoading ? (
-        <PageLoader label="Loading requests" />
+        <RowSkeleton rows={5} />
       ) : items.length === 0 ? (
         <EmptyState
           title="Nothing here"

@@ -334,8 +334,20 @@ async fn start_download(
 }
 
 #[tauri::command]
-async fn cancel_download(state: State<'_, AppState>, game_id: String) -> AppResult<bool> {
-    Ok(state.downloads.cancel(&game_id).await)
+/// Stops a download. `delete_files` removes what it already wrote.
+///
+/// The choice reaches the user as a prompt rather than being decided here: a
+/// half-finished 250 GB transfer is worth keeping when the plan is to resume
+/// it and worth 100 GB of disk when it is not, and only they know which.
+async fn cancel_download(
+    state: State<'_, AppState>,
+    game_id: String,
+    delete_files: Option<bool>,
+) -> AppResult<bool> {
+    Ok(state
+        .downloads
+        .cancel(&game_id, delete_files.unwrap_or(false))
+        .await)
 }
 
 #[tauri::command]
@@ -344,8 +356,19 @@ async fn pause_download(state: State<'_, AppState>, game_id: String) -> AppResul
 }
 
 #[tauri::command]
-async fn clear_download(state: State<'_, AppState>, game_id: String) -> AppResult<()> {
-    state.downloads.forget(&game_id).await;
+/// Drops a stopped download from the queue. `delete_files` takes its bytes too.
+///
+/// Dismissing a paused or failed row is the other way a partial download used
+/// to disappear from the app while staying on the disk.
+async fn clear_download(
+    state: State<'_, AppState>,
+    game_id: String,
+    delete_files: Option<bool>,
+) -> AppResult<()> {
+    state
+        .downloads
+        .forget(&game_id, delete_files.unwrap_or(false))
+        .await;
     Ok(())
 }
 

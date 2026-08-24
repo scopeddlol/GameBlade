@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
-import { Badge, FormError, PageLoader, Spinner } from '../../components/ui.js';
+import { Badge, FormError, Spinner, SectionSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 import { formatBytes } from '../../lib/format.js';
 
@@ -86,7 +86,7 @@ export function AdminHealthPage() {
     onSuccess: invalidateBackups,
   });
 
-  if (healthQuery.isLoading) return <PageLoader label="Checking" />;
+  if (healthQuery.isLoading) return <SectionSkeleton rows={3} />;
 
   const report = healthQuery.data;
   const backups = backupsQuery.data?.backups ?? [];
@@ -94,8 +94,6 @@ export function AdminHealthPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Health</h1>
-
       <FormError message={error} />
 
       <section className="space-y-3">

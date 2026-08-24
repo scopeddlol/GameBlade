@@ -84,8 +84,18 @@ const ORPHAN_MEDIA_GRACE_HOURS = 6;
 
 /** Periodic background work: rescans plus expiry cleanup. */
 export function startSchedules(app: FastifyInstance): () => void {
-  const { config, scanner, auth, activity, notifications, media, playtime, settings, backups } =
-    app.gameblade;
+  const {
+    config,
+    scanner,
+    auth,
+    activity,
+    notifications,
+    media,
+    playtime,
+    settings,
+    backups,
+    saveManifest,
+  } = app.gameblade;
   const timers: NodeJS.Timeout[] = [];
 
   if (config.scanOnStart) {
@@ -139,6 +149,48 @@ export function startSchedules(app: FastifyInstance): () => void {
   }, 60 * 60_000);
   backupTimer.unref();
   timers.push(backupTimer);
+
+  /**
+   * A daily pull of the save-path manifest.
+   *
+   * Upstream publishes continuously, so an index nobody presses the button for
+   * quietly stops suggesting paths for anything released since it was last
+   * fetched — the operator sees no error, only suggestions that never appear.
+   *
+   * Checked hourly against the index's own age rather than run on a
+   * twenty-four hour timer: a server restarted every evening would never reach
+   * the end of a daily interval, and one up for months would drift. The service
+   * decides whether anything is actually due, so this fetches 17 MB once a day
+   * at most however often the check runs.
+   */
+  let manifestRunning = false;
+  const pullManifest = () => {
+    if (manifestRunning) return;
+    manifestRunning = true;
+    void saveManifest
+      .refreshIfStale()
+      .then((status) => {
+        if (status) app.log.info({ games: status.games }, 'refreshed the save-path manifest');
+      })
+      .catch((error: unknown) => {
+        // A failed pull keeps the existing index, so this is worth a line in
+        // the log and nothing more — the next hourly check tries again.
+        app.log.warn({ err: error }, 'scheduled save-manifest refresh failed');
+      })
+      .finally(() => {
+        manifestRunning = false;
+      });
+  };
+
+  // Behind the initial scan, so a cold start serves requests before it spends
+  // bandwidth on something no one is waiting for.
+  const manifestStart = setTimeout(pullManifest, 30_000);
+  manifestStart.unref();
+  timers.push(manifestStart);
+
+  const manifestTimer = setInterval(pullManifest, 60 * 60_000);
+  manifestTimer.unref();
+  timers.push(manifestTimer);
 
   const cleanup = setInterval(() => {
     try {

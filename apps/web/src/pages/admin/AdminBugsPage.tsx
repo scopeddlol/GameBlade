@@ -8,7 +8,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bug, Monitor } from 'lucide-react';
 import { useState } from 'react';
-import { Badge, EmptyState, FormError, PageLoader, Spinner } from '../../components/ui.js';
+import { Badge, EmptyState, FormError, Spinner, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 
 const TONE: Record<BugStatus, 'danger' | 'warning' | 'success' | 'neutral' | 'info'> = {
@@ -53,8 +53,7 @@ export function AdminBugsPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Bug reports</h1>
-      <p className="text-ink-300 -mt-3 text-sm">
+      <p className="text-ink-300 text-sm">
         What your players have run into. Whatever you set here, and anything you write back, reaches
         them as a notification.
       </p>
@@ -82,7 +81,7 @@ export function AdminBugsPage() {
       </div>
 
       {bugsQuery.isLoading ? (
-        <PageLoader label="Loading reports" />
+        <RowSkeleton rows={4} />
       ) : reports.length === 0 ? (
         <EmptyState
           title={status ? 'Nothing with that status' : 'No reports yet'}

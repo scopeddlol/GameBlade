@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Maximize2, Minimize2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { AreaChart, ColumnChart, Meter, RankedBars, StatTile } from '../../components/charts.js';
-import { Badge, EmptyState, PageLoader } from '../../components/ui.js';
+import { Badge, EmptyState, SectionSkeleton } from '../../components/ui.js';
 import { api } from '../../lib/api.js';
 import { formatBytes } from '../../lib/format.js';
 
@@ -114,7 +114,7 @@ export function AdminAnalyticsPage() {
     queryFn: () => api.get<AnalyticsReport>(`/admin/analytics?days=${days}`),
   });
 
-  if (reportQuery.isLoading) return <PageLoader label="Loading analytics" />;
+  if (reportQuery.isLoading) return <SectionSkeleton rows={4} />;
   const report = reportQuery.data;
   if (!report) {
     return <EmptyState title="No data yet" message="Analytics appear once games are downloaded." />;
@@ -128,8 +128,6 @@ export function AdminAnalyticsPage() {
   return (
     <div className={compact ? 'space-y-3' : 'space-y-6'}>
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
-
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           {RANGES.map((range) => (
             <button

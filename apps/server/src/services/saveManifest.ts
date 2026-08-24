@@ -15,8 +15,15 @@ import { pipeline } from 'node:stream/promises';
 const MANIFEST_URL =
   'https://raw.githubusercontent.com/mtkennerly/ludusavi-manifest/master/data/manifest.yaml';
 
-/** Refreshed weekly; the upstream data changes slowly and is 17 MB a time. */
-export const MANIFEST_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+/**
+ * How old the cached index may get before it counts as stale.
+ *
+ * A day. Upstream publishes continuously, and the server now refreshes on this
+ * same figure rather than waiting for an operator to press the button — so an
+ * index that has aged past it means the scheduled pull has not run yet, not
+ * that nobody has been looking after it.
+ */
+export const MANIFEST_MAX_AGE_MS = 24 * 60 * 60_000;
 
 /**
  * A parse that finds fewer than this many games did not understand the file.
@@ -239,6 +246,22 @@ export class SaveManifestService {
       this.cached = [];
     }
     return this.cached;
+  }
+
+  /**
+   * Refreshes only when the cached index has aged past `MANIFEST_MAX_AGE_MS`.
+   *
+   * What the daily schedule calls. Deciding from the index's own mtime rather
+   * than from a timer means a server that is restarted every day still pulls
+   * once a day, and one that has been up for a month does not skip a month of
+   * upstream changes because the interval never came round.
+   *
+   * Returns null when the index was already current and nothing was fetched.
+   */
+  async refreshIfStale(): Promise<ManifestStatus | null> {
+    const current = await this.status();
+    if (!current.stale) return null;
+    return this.refresh();
   }
 
   /** Downloads and re-indexes. Returns how many games the index now holds. */

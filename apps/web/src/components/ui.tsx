@@ -15,6 +15,41 @@ export function PageLoader({ label = 'Loading' }: { label?: string }) {
   );
 }
 
+/**
+ * A page's shape while its data is on the way.
+ *
+ * Replaces the spinner that used to sit in the middle of an empty screen.
+ * Holding the layout means arriving content does not shove the page around,
+ * and a panel that is visibly *there* reads as fast where a lone spinner reads
+ * as broken — which is most of what "the admin panel is slow" was describing.
+ */
+export function SectionSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="space-y-3" role="status" aria-label="Loading">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="gb-card gb-skeleton h-24" />
+      ))}
+    </div>
+  );
+}
+
+/** The same idea for a list of rows rather than a stack of panels. */
+export function RowSkeleton({ rows = 6 }: { rows?: number }) {
+  return (
+    <div className="gb-card divide-ink-700/70 divide-y" role="status" aria-label="Loading">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="flex items-center gap-3 px-4 py-3">
+          <div className="gb-skeleton h-9 w-9 rounded-lg" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="gb-skeleton h-3 w-1/3 rounded" />
+            <div className="gb-skeleton h-3 w-1/5 rounded" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ErrorState({
   title = 'Something went wrong',
   message,

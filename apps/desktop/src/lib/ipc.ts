@@ -159,9 +159,13 @@ export const ipc = {
 
   startDownload: (gameId: string, destination?: string) =>
     invoke<void>('start_download', { gameId, destination }),
-  cancelDownload: (gameId: string) => invoke<boolean>('cancel_download', { gameId }),
+  /** `deleteFiles` removes the bytes already written; the user is asked first. */
+  cancelDownload: (gameId: string, deleteFiles = false) =>
+    invoke<boolean>('cancel_download', { gameId, deleteFiles }),
   pauseDownload: (gameId: string) => invoke<boolean>('pause_download', { gameId }),
-  clearDownload: (gameId: string) => invoke<void>('clear_download', { gameId }),
+  /** Dismisses a stopped download, optionally taking what it left on disk. */
+  clearDownload: (gameId: string, deleteFiles = false) =>
+    invoke<void>('clear_download', { gameId, deleteFiles }),
   listDownloads: () => invoke<DownloadState[]>('list_downloads'),
   diskUsage: () => invoke<DiskUsage>('disk_usage'),
   listStorageLocations: () => invoke<StorageLocation[]>('list_storage_locations'),

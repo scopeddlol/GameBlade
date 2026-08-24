@@ -2,6 +2,8 @@ import type { PublicServerInfo } from '@gameblade/shared';
 import { useQuery } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { AdminSection } from './components/AdminSection.js';
+import { ADMIN_REDIRECTS } from './components/adminNav.js';
 import { Layout } from './components/Layout.js';
 import { PageLoader } from './components/ui.js';
 import { useSession } from './hooks/useSession.js';
@@ -9,7 +11,8 @@ import { useApplyTheme } from './hooks/useTheme.js';
 import { api } from './lib/api.js';
 import { AdminCatalogPage } from './pages/admin/AdminCatalogPage.js';
 import { AdminAnalyticsPage } from './pages/admin/AdminAnalyticsPage.js';
-import { AdminAppearancePage } from './pages/admin/AdminAppearancePage.js';
+import { AdminLandingPage } from './pages/admin/AdminLandingPage.js';
+import { AdminThemePage } from './pages/admin/AdminThemePage.js';
 import { AdminApiPage } from './pages/admin/AdminApiPage.js';
 import { AdminBugsPage } from './pages/admin/AdminBugsPage.js';
 import { AdminHealthPage } from './pages/admin/AdminHealthPage.js';
@@ -107,20 +110,49 @@ export function App() {
         }
       >
         <Route index element={<AdminOverviewPage />} />
-        <Route path="catalog" element={<AdminCatalogPage />} />
-        <Route path="featured" element={<AdminFeaturedPage />} />
-        <Route path="requests" element={<AdminRequestsPage />} />
-        <Route path="client" element={<AdminClientPage />} />
-        <Route path="api" element={<AdminApiPage />} />
-        <Route path="analytics" element={<AdminAnalyticsPage />} />
-        <Route path="appearance" element={<AdminAppearancePage />} />
-        <Route path="save-paths" element={<AdminSavePathsPage />} />
-        <Route path="health" element={<AdminHealthPage />} />
-        <Route path="bugs" element={<AdminBugsPage />} />
-        <Route path="libraries" element={<AdminLibrariesPage />} />
-        <Route path="users" element={<AdminUsersPage />} />
-        <Route path="invites" element={<AdminInvitesPage />} />
-        <Route path="settings" element={<AdminSettingsPage />} />
+
+        {/* Six sections rather than fifteen, each a shell with its own
+            sub-tabs. The grouping and the sub-tab strip both come from
+            `adminNav`, so the sidebar and the page can never disagree about
+            where something lives. */}
+        <Route element={<AdminSection />}>
+          <Route path="catalog">
+            <Route index element={<AdminCatalogPage />} />
+            <Route path="featured" element={<AdminFeaturedPage />} />
+            <Route path="save-paths" element={<AdminSavePathsPage />} />
+            <Route path="libraries" element={<AdminLibrariesPage />} />
+          </Route>
+
+          <Route path="players">
+            <Route index element={<AdminUsersPage />} />
+            <Route path="invites" element={<AdminInvitesPage />} />
+            <Route path="requests" element={<AdminRequestsPage />} />
+            <Route path="bugs" element={<AdminBugsPage />} />
+          </Route>
+
+          <Route path="insights">
+            <Route index element={<AdminAnalyticsPage />} />
+            <Route path="health" element={<AdminHealthPage />} />
+          </Route>
+
+          <Route path="appearance">
+            <Route index element={<AdminThemePage />} />
+            <Route path="landing" element={<AdminLandingPage />} />
+            <Route path="client" element={<AdminClientPage />} />
+          </Route>
+
+          <Route path="settings">
+            <Route index element={<AdminSettingsPage />} />
+            <Route path="api" element={<AdminApiPage />} />
+          </Route>
+        </Route>
+
+        {/* Where the old flat URLs went. Operators bookmark these, and a dead
+            bookmark that lands on the landing page reads as "that feature is
+            gone" rather than "it moved". */}
+        {Object.entries(ADMIN_REDIRECTS).map(([from, to]) => (
+          <Route key={from} path={from} element={<Navigate to={to} replace />} />
+        ))}
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

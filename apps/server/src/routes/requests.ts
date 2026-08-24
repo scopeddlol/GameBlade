@@ -1,4 +1,5 @@
 import {
+  type DiscoveryShelfId,
   bugReportSchema,
   collectionGamesSchema,
   collectionSchema,
@@ -8,6 +9,24 @@ import {
 } from '@gameblade/shared';
 import type { FastifyInstance } from 'fastify';
 import { requireUser } from '../auth/middleware.js';
+
+/** How many titles each shelf and each search carries. Enough to scroll, not to trawl. */
+const DISCOVERY_LIMIT = 18;
+
+/** Shelf copy lives here rather than in the client so it can change without a client release. */
+const DISCOVERY_SHELF_LABELS: Record<DiscoveryShelfId, string> = {
+  trending: 'Trending right now',
+  anticipated: 'Coming soon',
+  recent: 'Just released',
+  acclaimed: 'All-time greats',
+};
+
+const DISCOVERY_SHELF_HINTS: Record<DiscoveryShelfId, string> = {
+  trending: 'Most played elsewhere this week',
+  anticipated: 'Not out yet, and widely followed',
+  recent: 'Out in the last few months',
+  acclaimed: 'Consistently highly rated',
+};
 
 /**
  * The player-facing halves of two features an administrator also touches:
@@ -68,6 +87,51 @@ export async function requestRoutes(app: FastifyInstance): Promise<void> {
     const context = requireUser(request);
     const candidates = await metadata.trending(12);
     return gameRequests.suggestions(context.user.id, candidates);
+  });
+
+  /**
+   * Everything the request page browses, as labelled shelves.
+   *
+   * One call rather than one per shelf: they share a cache on the server and
+   * the same three catalog lookups when they are marked up, so splitting them
+   * would cost four round trips to answer the same question.
+   *
+   * Returns an empty list when no metadata provider is configured. The page is
+   * built to work without it — you can still ask for anything by name.
+   */
+  app.get('/requests/discover', async (request) => {
+    const context = requireUser(request);
+    const shelves = await metadata.discover(DISCOVERY_LIMIT);
+    if (shelves.length === 0) return { shelves: [] };
+
+    const decorated = gameRequests.decorateCandidates(
+      context.user.id,
+      shelves.map((shelf) => shelf.items),
+    );
+
+    return {
+      shelves: shelves.map((shelf, index) => ({
+        id: shelf.id,
+        label: DISCOVERY_SHELF_LABELS[shelf.id],
+        hint: DISCOVERY_SHELF_HINTS[shelf.id],
+        items: decorated[index] ?? [],
+      })),
+    };
+  });
+
+  /**
+   * Looking a game up rather than browsing to it.
+   *
+   * The shelves cover what is popular; this covers everything else, which is
+   * most of what anyone actually wants to ask for. Finding the real title with
+   * its cover also means the operator gets a request they can act on rather
+   * than a half-remembered name typed into a box.
+   */
+  app.get('/requests/search', async (request) => {
+    const context = requireUser(request);
+    const { q } = request.query as { q?: string };
+    const candidates = await metadata.searchForRequest(q ?? '', DISCOVERY_LIMIT);
+    return { results: gameRequests.suggestions(context.user.id, candidates) };
   });
 
   app.post('/requests', async (request, reply) => {

@@ -1,5 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { matchCatalog, parseManifest, rankSaves, translatePath } from './saveManifest.js';
+import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  MANIFEST_MAX_AGE_MS,
+  SaveManifestService,
+  matchCatalog,
+  parseManifest,
+  rankSaves,
+  translatePath,
+} from './saveManifest.js';
 
 /**
  * Translating save paths from the upstream manifest.
@@ -188,5 +198,49 @@ describe('rankSaves', () => {
       { pathTemplate: '{documents}\\b', include: null },
     ];
     expect(rankSaves(saves)).toHaveLength(3);
+  });
+});
+
+/**
+ * The daily schedule's guard.
+ *
+ * `refreshIfStale` is what the hourly timer calls, so the thing worth pinning
+ * down is that a fresh index costs nothing: without this, an hourly check would
+ * pull 17 MB from upstream twenty-four times a day.
+ */
+describe('refreshIfStale', () => {
+  it('does nothing while the cached index is current', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'gb-manifest-'));
+    const service = new SaveManifestService(dir);
+
+    // A plausible index, written now — so its mtime is inside the max age.
+    await writeFile(
+      path.join(dir, 'save-manifest.json'),
+      JSON.stringify([{ title: 'Celeste', saves: [{ pathTemplate: '{install}', include: null }] }]),
+      'utf8',
+    );
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    try {
+      await expect(service.refreshIfStale()).resolves.toBeNull();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports an index older than the max age as stale', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'gb-manifest-'));
+    const indexPath = path.join(dir, 'save-manifest.json');
+    await writeFile(indexPath, JSON.stringify([{ title: 'Celeste', saves: [] }]), 'utf8');
+
+    // Backdate it past the ceiling; `status` reads the file's own mtime.
+    const old = new Date(Date.now() - MANIFEST_MAX_AGE_MS - 60_000);
+    await utimes(indexPath, old, old);
+
+    const service = new SaveManifestService(dir);
+    await expect(service.status()).resolves.toMatchObject({ stale: true });
+    await rm(dir, { recursive: true, force: true });
   });
 });

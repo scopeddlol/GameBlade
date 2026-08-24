@@ -2,8 +2,8 @@ import type { ClientInstallerInfo, ServerSettings } from '@gameblade/shared';
 import { MAX_INSTALLER_BYTES } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trash2, Upload } from 'lucide-react';
-import { useRef, useState, type FormEvent } from 'react';
-import { Badge, Field, FormError, PageLoader, Spinner, Notice } from '../../components/ui.js';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { Badge, Field, FormError, Spinner, Notice, SectionSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError, queryString, uploadFile } from '../../lib/api.js';
 import { formatBytes } from '../../lib/format.js';
 
@@ -30,20 +30,34 @@ export function AdminSettingsPage() {
 
   const settingsQuery = useQuery({
     queryKey: ['admin', 'settings'],
-    queryFn: async () => {
-      const data = await api.get<ServerSettings>('/admin/settings');
-      setForm((current) => ({
-        serverName: current.serverName || data.serverName,
-        tagline: current.tagline || data.tagline,
-        downloadUrl: current.downloadUrl || (data.downloadUrl ?? ''),
-        clientVersion: current.clientVersion || (data.clientVersion ?? ''),
-        igdbClientId: current.igdbClientId || (data.igdbClientId ?? ''),
-        downloadSpeedLimitKbps: String(data.downloadSpeedLimitKbps ?? 0),
-        monthlyQuotaMb: String(data.monthlyQuotaMb ?? 0),
-      }));
-      return data;
-    },
+    queryFn: () => api.get<ServerSettings>('/admin/settings'),
   });
+
+  /**
+   * Seeds the form from the server's answer.
+   *
+   * In an effect rather than inside `queryFn`, which is where it used to be:
+   * react-query only calls the fetcher on a cache miss, so leaving this page
+   * and coming back inside the stale window seeded nothing and left every box
+   * blank — with a save from that state about to write the blanks back.
+   *
+   * Keyed on the query's own object, so it runs when the server's answer
+   * changes and not on every keystroke; and each field keeps whatever is
+   * already typed, so a refetch landing mid-edit does not overwrite it.
+   */
+  const settings = settingsQuery.data;
+  useEffect(() => {
+    if (!settings) return;
+    setForm((current) => ({
+      serverName: current.serverName || settings.serverName,
+      tagline: current.tagline || settings.tagline,
+      downloadUrl: current.downloadUrl || (settings.downloadUrl ?? ''),
+      clientVersion: current.clientVersion || (settings.clientVersion ?? ''),
+      igdbClientId: current.igdbClientId || (settings.igdbClientId ?? ''),
+      downloadSpeedLimitKbps: String(settings.downloadSpeedLimitKbps ?? 0),
+      monthlyQuotaMb: String(settings.monthlyQuotaMb ?? 0),
+    }));
+  }, [settings]);
 
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -84,13 +98,10 @@ export function AdminSettingsPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'settings'] }),
   });
 
-  if (settingsQuery.isLoading) return <PageLoader label="Loading settings" />;
-  const settings = settingsQuery.data;
+  if (settingsQuery.isLoading) return <SectionSkeleton rows={4} />;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-
       <FormError message={error} />
       <Notice message={notice} />
 

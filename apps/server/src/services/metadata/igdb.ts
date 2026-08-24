@@ -233,6 +233,62 @@ export class IgdbClient {
   }
 
   /**
+   * Releases that have not landed yet, ranked by how many people are waiting.
+   *
+   * `hypes` is IGDB's own count of members who have followed a game before
+   * release, which is the closest thing it publishes to "people want this".
+   * A dated future release is required so the shelf cannot fill up with
+   * announced-but-undated entries that may never arrive.
+   */
+  async anticipated(limit = 12): Promise<IgdbGame[]> {
+    const capped = Math.min(Math.max(limit, 1), 30);
+    const now = Math.floor(Date.now() / 1000);
+    return this.queryGames(
+      (fields) =>
+        `fields ${fields}; ` +
+        `where first_release_date > ${now} & hypes > 0 & cover != null; ` +
+        `sort hypes desc; limit ${capped};`,
+    );
+  }
+
+  /**
+   * What came out recently, ranked by how many people have rated it.
+   *
+   * Rating *count* rather than rating value: a month-old game with four
+   * glowing scores is noise, and what this shelf is for is "did I miss
+   * something" rather than "what is good".
+   */
+  async recentlyReleased(limit = 12): Promise<IgdbGame[]> {
+    const capped = Math.min(Math.max(limit, 1), 30);
+    const now = Math.floor(Date.now() / 1000);
+    const since = now - 120 * 86_400;
+    return this.queryGames(
+      (fields) =>
+        `fields ${fields}; ` +
+        `where first_release_date > ${since} & first_release_date < ${now} ` +
+        '& total_rating_count > 5 & cover != null; ' +
+        `sort total_rating_count desc; limit ${capped};`,
+    );
+  }
+
+  /**
+   * The consistently well regarded, as a shelf that does not move week to week.
+   *
+   * The rating floor is paired with a vote floor on purpose: IGDB will happily
+   * report a perfect score backed by three people, and a shelf of those is
+   * worse than no shelf.
+   */
+  async acclaimed(limit = 12): Promise<IgdbGame[]> {
+    const capped = Math.min(Math.max(limit, 1), 30);
+    return this.queryGames(
+      (fields) =>
+        `fields ${fields}; ` +
+        'where total_rating > 88 & total_rating_count > 200 & cover != null; ' +
+        `sort total_rating desc; limit ${capped};`,
+    );
+  }
+
+  /**
    * Every image IGDB has for the top matches on a title, for the admin picker.
    *
    * Uses its own narrow field list rather than the shared one: `artworks` is

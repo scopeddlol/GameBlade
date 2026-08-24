@@ -2,7 +2,7 @@ import type { PublicUser } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { Badge, FormError, PageLoader } from '../../components/ui.js';
+import { Badge, FormError, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 
@@ -36,7 +36,7 @@ export function AdminUsersPage() {
       setError(caught instanceof ApiRequestError ? caught.message : 'Could not delete user.'),
   });
 
-  if (usersQuery.isLoading) return <PageLoader label="Loading users" />;
+  if (usersQuery.isLoading) return <RowSkeleton rows={5} />;
 
   return (
     <section className="gb-card mx-auto max-w-5xl p-5">

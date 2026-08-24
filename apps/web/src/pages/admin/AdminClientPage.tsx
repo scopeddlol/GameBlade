@@ -8,7 +8,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, ExternalLink, Plus, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Icon, IconPicker } from '../../components/icons.js';
-import { Badge, EmptyState, Field, FormError, PageLoader, Spinner } from '../../components/ui.js';
+import { Badge, EmptyState, Field, FormError, Spinner, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 
 const PLACEMENT_LABELS: Record<ClientButtonPlacement, string> = {
@@ -110,8 +110,7 @@ export function AdminClientPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Desktop client</h1>
-      <p className="text-ink-300 -mt-3 text-sm">
+      <p className="text-ink-300 text-sm">
         Add your own links to the desktop client — a Discord invite, a wiki, a support page. They
         open in the player&rsquo;s browser.
       </p>
@@ -226,7 +225,7 @@ export function AdminClientPage() {
       </form>
 
       {buttonsQuery.isLoading ? (
-        <PageLoader label="Loading buttons" />
+        <RowSkeleton rows={3} />
       ) : buttons.length === 0 ? (
         <EmptyState
           title="No custom buttons yet"

@@ -16,6 +16,46 @@ export function Loading({ label = 'Loading' }: { label?: string }) {
   );
 }
 
+/**
+ * A page's shape while its data is on the way.
+ *
+ * The spinner it replaces sat in the middle of an empty screen, which reads as
+ * "nothing is here" rather than "this is arriving" — and then everything
+ * appeared at once and shoved the page around. Holding the layout costs
+ * nothing and makes the same wait feel like a fraction of it.
+ */
+export function CardSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="skeleton-stack" role="status" aria-label="Loading">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="skeleton skeleton-card" />
+      ))}
+    </div>
+  );
+}
+
+/** The same idea for a grid of covers. */
+export function GridSkeleton({ count = 12 }: { count?: number }) {
+  return (
+    <div className="skeleton-grid" role="status" aria-label="Loading">
+      {Array.from({ length: count }, (_, index) => (
+        <div key={index} className="skeleton skeleton-cover" />
+      ))}
+    </div>
+  );
+}
+
+/** And for a list of rows — requests, friends, announcements. */
+export function ListSkeleton({ rows = 6 }: { rows?: number }) {
+  return (
+    <div className="skeleton-stack" role="status" aria-label="Loading">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="skeleton skeleton-row" />
+      ))}
+    </div>
+  );
+}
+
 export function Empty({
   title,
   message,

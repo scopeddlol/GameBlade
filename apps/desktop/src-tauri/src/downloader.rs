@@ -82,7 +82,91 @@ struct Handle {
     /// (and leave the `.gbpart` sidecars alone for a later resume) instead
     /// of `Canceled`.
     paused: Arc<AtomicBool>,
+    /// Set alongside `cancel` when the user asked for the bytes already on
+    /// disk to go too. Read by the finalizer once every segment has stopped
+    /// writing, so a purge can never race a write.
+    purge: Arc<AtomicBool>,
     state: Arc<Mutex<DownloadState>>,
+    /// Exactly what this download is responsible for, so cancelling can remove
+    /// what it wrote and nothing else.
+    cleanup: Arc<CleanupPlan>,
+}
+
+/// The paths one download owns.
+///
+/// Held rather than derived at deletion time because `forget` can be asked to
+/// clean up a download whose task ended long ago and whose manifest is gone.
+#[derive(Debug)]
+pub struct CleanupPlan {
+    root: PathBuf,
+    /// True only when `root` was created for this download alone — a folder
+    /// game unpacks into a directory named after its title, where a
+    /// single-archive game lands directly in the folder the user picked.
+    owns_root: bool,
+    /// Relative to `root`, already sanitised.
+    files: Vec<PathBuf>,
+}
+
+impl CleanupPlan {
+    fn new(manifest: &DownloadManifest, root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            owns_root: manifest.kind == "folder",
+            files: manifest
+                .files
+                .iter()
+                .filter_map(|file| sanitise_relative_path(&file.path).ok())
+                .collect(),
+        }
+    }
+}
+
+/// Removes what a cancelled download wrote, and nothing else.
+///
+/// Path by path from the manifest rather than a recursive delete of `root`:
+/// for a single-archive game `root` is the install folder the user chose,
+/// which may well hold every other game they own. Directories this download
+/// created are pruned deepest-first and only while they are empty, so a folder
+/// that already had something else in it survives. `root` itself goes only
+/// when this download created it.
+///
+/// Every failure is ignored on purpose. A file the user has since opened, or
+/// moved, or that was never written in the first place, is not a reason to
+/// leave the rest of a 100 GB abandoned transfer sitting on the disk.
+async fn purge_download(plan: &CleanupPlan) {
+    let mut directories: Vec<PathBuf> = Vec::new();
+
+    for relative in &plan.files {
+        let dest = plan.root.join(relative);
+        // The sidecar first: on its own it is worthless, and leaving one
+        // behind would make a later download think it can resume into a file
+        // that is no longer there.
+        let _ = tokio::fs::remove_file(part_path_for(&dest)).await;
+        let _ = tokio::fs::remove_file(&dest).await;
+
+        let mut parent = dest.parent().map(Path::to_path_buf);
+        while let Some(directory) = parent {
+            if directory == plan.root || !directory.starts_with(&plan.root) {
+                break;
+            }
+            if !directories.contains(&directory) {
+                directories.push(directory.clone());
+            }
+            parent = directory.parent().map(Path::to_path_buf);
+        }
+    }
+
+    // Deepest first, so a nested tree empties from the leaves inwards.
+    directories.sort_by_key(|directory| std::cmp::Reverse(directory.components().count()));
+    for directory in directories {
+        // Fails while anything is left inside, which is exactly the guard that
+        // keeps a shared folder from being taken with the download.
+        let _ = tokio::fs::remove_dir(&directory).await;
+    }
+
+    if plan.owns_root {
+        let _ = tokio::fs::remove_dir(&plan.root).await;
+    }
 }
 
 #[derive(Default)]
@@ -101,10 +185,22 @@ impl DownloadManager {
         out
     }
 
-    pub async fn cancel(&self, game_id: &str) -> bool {
+    /// Stops a transfer, optionally taking the bytes already on disk with it.
+    ///
+    /// A cancelled 250 GB download that got 100 GB in used to leave all 100 GB
+    /// behind with nothing in the app ever mentioning them again. The deletion
+    /// itself happens in the finalizer rather than here: segments are still
+    /// writing at this point, and removing a file out from under them would
+    /// only recreate it.
+    pub async fn cancel(&self, game_id: &str, delete_files: bool) -> bool {
         let downloads = self.downloads.lock().await;
         match downloads.get(game_id) {
             Some(handle) => {
+                // Recorded before the stop signal, so the finalizer cannot
+                // observe the transfer ending before it observes the intent.
+                if delete_files {
+                    handle.purge.store(true, Ordering::SeqCst);
+                }
                 handle.cancel.store(true, Ordering::SeqCst);
                 true
             }
@@ -127,8 +223,29 @@ impl DownloadManager {
         }
     }
 
-    pub async fn forget(&self, game_id: &str) {
-        self.downloads.lock().await.remove(game_id);
+    /// Drops a finished entry from the queue, optionally deleting what it left.
+    ///
+    /// The counterpart to `cancel` for a download that has already stopped: a
+    /// paused or failed one keeps every byte it fetched, and dismissing its row
+    /// was the last time anyone was ever told about them.
+    pub async fn forget(&self, game_id: &str, delete_files: bool) {
+        let handle = self.downloads.lock().await.remove(game_id);
+        if !delete_files {
+            return;
+        }
+        let Some(handle) = handle else { return };
+
+        // A live download is `cancel`'s job — it waits for the segments to stop
+        // before deleting under them, which this cannot do.
+        let status = handle.state.lock().await.status;
+        if matches!(
+            status,
+            DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Verifying
+        ) {
+            return;
+        }
+
+        purge_download(&handle.cleanup).await;
     }
 
     /// Begin (or resume) a download. Returns immediately; progress arrives as
@@ -183,12 +300,16 @@ impl DownloadManager {
 
         let cancel = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
+        let purge = Arc::new(AtomicBool::new(false));
+        let cleanup = Arc::new(CleanupPlan::new(&manifest, &root));
         self.downloads.lock().await.insert(
             game_id.clone(),
             Handle {
                 cancel: cancel.clone(),
                 paused: paused.clone(),
+                purge: purge.clone(),
                 state: state.clone(),
+                cleanup: cleanup.clone(),
             },
         );
 
@@ -204,8 +325,20 @@ impl DownloadManager {
             )
             .await;
 
+            // Every segment has stopped writing by the time `run_download`
+            // returns, so this is the first moment a purge cannot race one.
+            // It runs before the final event, so the queue never shows a
+            // cancelled download for the seconds it takes to free the space.
+            let purged = purge.load(Ordering::SeqCst);
+            if purged {
+                purge_download(&cleanup).await;
+            }
+
             let mut guard = state.lock().await;
             guard.status = match result {
+                // Ahead of `paused`: pausing and then cancelling with deletion
+                // sets both, and what the user last asked for was to cancel.
+                Ok(()) if purged => DownloadStatus::Canceled,
                 Ok(()) if paused.load(Ordering::SeqCst) => DownloadStatus::Paused,
                 Ok(()) if cancel.load(Ordering::SeqCst) => DownloadStatus::Canceled,
                 Ok(()) => DownloadStatus::Completed,
@@ -214,6 +347,11 @@ impl DownloadManager {
                     DownloadStatus::Failed
                 }
             };
+            // Nothing is on disk any more, so a progress bar left at 40% would
+            // be describing files that no longer exist.
+            if purged {
+                guard.downloaded_bytes = 0;
+            }
             guard.bytes_per_second = 0;
             guard.current_file = None;
             let snapshot = guard.clone();
@@ -759,5 +897,109 @@ mod tests {
             archive_file_path(root, "archive", &[file("a.zip"), file("b.zip")]),
             None,
         );
+    }
+
+    /* ------------------------------------------------------------- purging */
+
+    fn manifest(kind: &str, paths: &[&str]) -> DownloadManifest {
+        DownloadManifest {
+            game_id: "g1".to_string(),
+            title: "Cave Story".to_string(),
+            kind: kind.to_string(),
+            total_bytes: 0,
+            files: paths.iter().map(|path| file(path)).collect(),
+            token: String::new(),
+        }
+    }
+
+    fn temp_root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "gb-purge-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn write(path: &Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, b"partial").unwrap();
+    }
+
+    #[tokio::test]
+    async fn purging_removes_the_files_and_their_resume_sidecars() {
+        let destination = temp_root();
+        let root = destination.join("Cave Story");
+        let plan = CleanupPlan::new(&manifest("folder", &["data/game.dat", "game.exe"]), &root);
+
+        write(&root.join("data/game.dat"));
+        write(&part_path_for(&root.join("data/game.dat")));
+        write(&root.join("game.exe"));
+
+        purge_download(&plan).await;
+
+        // The whole tree goes: this download created the folder it sits in.
+        assert!(!root.exists(), "the game folder should be gone");
+        std::fs::remove_dir_all(&destination).ok();
+    }
+
+    #[tokio::test]
+    async fn purging_an_archive_game_leaves_the_install_folder_alone() {
+        // The case that rules out a recursive delete: `root` here is the folder
+        // the user picked, which holds everything else they have installed.
+        let root = temp_root();
+        let plan = CleanupPlan::new(&manifest("archive", &["Cave Story.zip"]), &root);
+
+        write(&root.join("Cave Story.zip"));
+        let neighbour = root.join("Some Other Game/game.exe");
+        write(&neighbour);
+
+        purge_download(&plan).await;
+
+        assert!(
+            !root.join("Cave Story.zip").exists(),
+            "the archive should go"
+        );
+        assert!(neighbour.exists(), "a neighbouring game must survive");
+        assert!(root.exists(), "the chosen install folder must survive");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn purging_keeps_a_directory_that_still_holds_something_else() {
+        let destination = temp_root();
+        let root = destination.join("Cave Story");
+        let plan = CleanupPlan::new(&manifest("folder", &["data/game.dat"]), &root);
+
+        write(&root.join("data/game.dat"));
+        let stranger = root.join("data/save.bin");
+        write(&stranger);
+
+        purge_download(&plan).await;
+
+        assert!(!root.join("data/game.dat").exists());
+        assert!(
+            stranger.exists(),
+            "a file this download did not write must stay"
+        );
+        std::fs::remove_dir_all(&destination).ok();
+    }
+
+    #[tokio::test]
+    async fn purging_a_download_that_wrote_nothing_is_not_an_error() {
+        let destination = temp_root();
+        let root = destination.join("Cave Story");
+        let plan = CleanupPlan::new(&manifest("folder", &["data/game.dat"]), &root);
+
+        // Cancelled before the first byte landed, so nothing exists to remove.
+        purge_download(&plan).await;
+
+        std::fs::remove_dir_all(&destination).ok();
     }
 }

@@ -10,6 +10,11 @@ on:
         description: 'Cut a release at this version, e.g. 0.3.0. Leave blank to only refresh latest.'
         required: false
         type: string
+      build_client:
+        description: 'Build the Windows installers. Needs a Windows runner to be online.'
+        required: false
+        default: false
+        type: boolean
       platforms:
         description: 'Server image architectures. arm64 is emulated and adds ~15 minutes.'
         required: false
@@ -85,9 +90,17 @@ jobs:
 
   desktop:
     name: Build Windows installers
-    # Built on every main push as well as on tags: the server image and the
-    # client that talks to it are one release, and an image published without a
-    # matching installer leaves users nothing to connect with.
+    # Opt-in, because there is currently no Windows runner to pick this up. It
+    # used to build on every main push and every tag, on the reasoning that the
+    # server image and the client that talks to it are one release — which is
+    # still true, but a job queued for a label nothing answers to does not fail.
+    # It sits pending until it times out hours later and takes the release job
+    # waiting on it down with it.
+    #
+    # Until a runner is back the client is built with scripts/build-windows.ps1
+    # on a real machine and attached to the release by hand; the release job
+    # below publishes without installers rather than refusing to.
+    if: inputs.build_client
     runs-on: [self-hosted, windows, x64]
     permissions:
       contents: write
@@ -161,9 +174,25 @@ jobs:
     # a plain main push just refreshes `latest` and leaves installers as
     # artifacts. The dispatch path exists because some environments cannot push
     # tag refs, and the release is then what creates the tag.
+    #
+    # `!cancelled()` rather than a bare condition, because `desktop` is now
+    # opt-in: a job whose `needs` were skipped is skipped too by default, which
+    # would have stopped releases happening at all rather than producing one
+    # without installers.
+    #
+    # The two results spelled out are the ones that mean "nothing went wrong":
+    # skipped is the normal path while the client is built by hand, success is
+    # the path once a Windows runner is back. A desktop job that was asked for
+    # and *failed* still blocks the release — publishing one silently missing
+    # the installers somebody just asked to build is the wrong answer. `image`
+    # must have succeeded outright; a broken server image must never ship a
+    # release pointing at it.
     if: >-
-      startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.version != '')
+      !cancelled() &&
+      needs.image.result == 'success' &&
+      (needs.desktop.result == 'success' || needs.desktop.result == 'skipped') &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.version != ''))
     needs: [image, desktop]
     runs-on: [self-hosted, linux, x64]
     permissions:
@@ -171,14 +200,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Only when the desktop job actually ran. Downloading an artifact that
+      # was never uploaded is an error, not an empty directory.
       - name: Fetch the installers built above
+        if: needs.desktop.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: gameblade-windows-installers
           path: installers
 
       - name: Show what was downloaded
-        run: find installers -type f -printf '%s\t%p\n' | sort
+        run: |
+          if [ -d installers ]; then
+            find installers -type f -printf '%s\t%p\n' | sort
+          else
+            echo "no installers in this run — build them with scripts/build-windows.ps1"
+            echo "and attach them to the release by hand"
+          fi
 
       - name: Resolve the release tag
         id: tag
@@ -215,6 +253,22 @@ jobs:
           else
             echo "commitish=${{ github.sha }}" >> "$GITHUB_OUTPUT"
           fi
+
+          # The client paragraph depends on whether this run built installers.
+          # Notes that say "download the .exe below" with no .exe below are
+          # worse than notes that say where it actually is.
+          if [ -d installers ]; then
+            client='**Windows client** — download the `.exe` installer below. The `.msi` is there for deployment tooling; the `.exe` is what most people want.'
+          else
+            client='**Windows client** — not built by this run. Build it with `scripts/build-windows.ps1` and attach the `.exe` to this release.'
+          fi
+          # Written with echo rather than a heredoc so the delimiter lines are
+          # never at the mercy of this block scalar's indentation.
+          {
+            echo 'client<<CLIENT_EOF'
+            echo "$client"
+            echo 'CLIENT_EOF'
+          } >> "$GITHUB_OUTPUT"
         env:
           REGISTRY: ${{ env.REGISTRY }}
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
@@ -236,9 +290,11 @@ jobs:
           files: |
             installers/**/*.exe
             installers/**/*.msi
-          # Without this a glob that matches nothing only warns, and the run
-          # goes green having published a release with no installers attached.
-          fail_on_unmatched_files: true
+          # Enforced only when the desktop job actually ran: without it a glob
+          # that matches nothing only warns, and a run that was supposed to
+          # build installers goes green having attached none. When the client
+          # is built by hand there is deliberately nothing to match.
+          fail_on_unmatched_files: ${{ needs.desktop.result == 'success' }}
           body: |
             ## Install
 
@@ -250,8 +306,7 @@ jobs:
 
             Architectures in this build: `${{ inputs.platforms || 'linux/amd64' }}`.
 
-            **Windows client** — download the `.exe` installer below. The `.msi`
-            is there for deployment tooling; the `.exe` is what most people want.
+            ${{ steps.tag.outputs.client }}
 
             The client connects to `archive.scopedd.lol` and no other server;
             just sign in with the account an invite created. After installing,

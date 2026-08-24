@@ -31,7 +31,7 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useClientButtons } from './components/GameContextMenu.js';
 import { DownloadQueue } from './components/DownloadQueue.js';
 import { FriendsRail } from './components/FriendsRail.js';
@@ -86,10 +86,32 @@ const queryClient = new QueryClient({
       // regains focus is what keeps a friends list from going stale on alt-tab.
       refetchOnWindowFocus: true,
       retry: 1,
-      staleTime: 15_000,
+      // A minute. Tabs unmount when you leave them, so at fifteen seconds
+      // every switch back re-asked the server for what it had just said —
+      // and anything the app changes itself invalidates its own keys.
+      staleTime: 60_000,
+      // Ten minutes in cache after the last component stops using it, so
+      // moving between tabs draws from what is already there instead of
+      // starting from an empty screen each time.
+      gcTime: 10 * 60_000,
     },
   },
 });
+
+/**
+ * What each tab asks for the moment it opens.
+ *
+ * Pointing at a tab is a few hundred milliseconds of doing nothing, which is
+ * most of what these requests cost — spending it means the tab usually has its
+ * data by the time it renders. `prefetchQuery` is a no-op for anything already
+ * cached and fresh, so running the pointer down the sidebar costs nothing.
+ */
+const TAB_PREFETCH: Partial<Record<TabId, { key: readonly unknown[]; path: string }[]>> = {
+  home: [{ key: ['home'], path: '/home' }],
+  requests: [{ key: ['requests', 'digest'], path: '/requests/digest' }],
+  news: [{ key: ['news'], path: '/feed?scope=everyone&kind=announcement&limit=50' }],
+  social: [{ key: ['feed', 'friends'], path: '/feed?scope=friends&limit=30' }],
+};
 
 export function App() {
   return (
@@ -178,6 +200,45 @@ function Shell() {
 
   const openGame = useCallback((game: GameSummary) => setOpenGameId(game.id), []);
 
+  /**
+   * Remembers where each tab was scrolled to.
+   *
+   * One scroll container is reused for every tab, so without this switching
+   * from halfway down the Library to the Store opened the Store already
+   * scrolled — and coming back to the Library landed at the top, having lost
+   * the place you were keeping.
+   */
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollTops = useRef<Partial<Record<TabId, number>>>({});
+  const previousTab = useRef<TabId>(tab);
+
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    if (previousTab.current !== tab) {
+      // Before the browser paints, so the new tab is never seen at the old
+      // tab's offset first.
+      element.scrollTop = scrollTops.current[tab] ?? 0;
+      previousTab.current = tab;
+    }
+  }, [tab]);
+
+  const rememberScroll = useCallback(() => {
+    const element = scrollRef.current;
+    if (element) scrollTops.current[previousTab.current] = element.scrollTop;
+  }, []);
+
+  /** Starts a tab's requests while the pointer is still travelling to it. */
+  const prefetchTab = useCallback((next: TabId) => {
+    for (const hint of TAB_PREFETCH[next] ?? []) {
+      void queryClient.prefetchQuery({
+        queryKey: [...hint.key],
+        queryFn: () => ipc.get(hint.path),
+        staleTime: 30_000,
+      });
+    }
+  }, []);
+
   // The webview's built-in menu offers Reload and View Source, which are
   // meaningless in a packaged app and make it look like a browser. Suppressing
   // it here rather than per-component is what lets any surface opt back in by
@@ -222,7 +283,11 @@ function Shell() {
     <div className="app">
       <Sidebar
         tab={tab}
-        onTab={setTab}
+        onTab={(next) => {
+          rememberScroll();
+          setTab(next);
+        }}
+        onHoverTab={prefetchTab}
         downloadCount={activeDownloads.length}
         onDownloads={() => setShowDownloads(true)}
         onReportBug={() => setReportingBug(true)}
@@ -235,16 +300,23 @@ function Shell() {
 
         <UpdateBanner />
 
-        <div className="scroll">
-          {tab === 'home' ? <HomeTab onOpenGame={openGame} onOpenGameId={setOpenGameId} /> : null}
-          {tab === 'library' ? (
-            <LibraryTab onOpenGame={openGame} installed={installed} running={running} />
-          ) : null}
-          {tab === 'store' ? <StoreTab onOpenGame={openGame} onOpenGameId={setOpenGameId} /> : null}
-          {tab === 'requests' ? <RequestsTab onOpenGameId={setOpenGameId} /> : null}
-          {tab === 'news' ? <NewsTab onOpenProfile={setProfileId} /> : null}
-          {tab === 'social' ? <SocialTab onOpenProfile={setProfileId} /> : null}
-          {tab === 'settings' ? <SettingsTab /> : null}
+        <div className="scroll" ref={scrollRef}>
+          {/* Keyed on the tab so React remounts the wrapper and the enter
+              animation actually replays; without the key the class is already
+              on the element and the switch is a hard cut. */}
+          <div key={tab} className="tab-enter">
+            {tab === 'home' ? <HomeTab onOpenGame={openGame} onOpenGameId={setOpenGameId} /> : null}
+            {tab === 'library' ? (
+              <LibraryTab onOpenGame={openGame} installed={installed} running={running} />
+            ) : null}
+            {tab === 'store' ? (
+              <StoreTab onOpenGame={openGame} onOpenGameId={setOpenGameId} />
+            ) : null}
+            {tab === 'requests' ? <RequestsTab onOpenGameId={setOpenGameId} /> : null}
+            {tab === 'news' ? <NewsTab onOpenProfile={setProfileId} /> : null}
+            {tab === 'social' ? <SocialTab onOpenProfile={setProfileId} /> : null}
+            {tab === 'settings' ? <SettingsTab /> : null}
+          </div>
         </div>
       </div>
 
@@ -279,9 +351,12 @@ function Shell() {
           onClose={() => setShowDownloads(false)}
           onPause={(id) => void ipc.pauseDownload(id)}
           onResume={(id) => void ipc.startDownload(id)}
-          onCancel={(id) => void ipc.cancelDownload(id)}
-          onClear={(id) => {
-            void ipc.clearDownload(id);
+          // The row stays put: the Rust side reports the transfer stopping —
+          // and, when asked, the space being freed — through the same progress
+          // event as everything else.
+          onCancel={(id, deleteFiles) => void ipc.cancelDownload(id, deleteFiles)}
+          onClear={(id, deleteFiles) => {
+            void ipc.clearDownload(id, deleteFiles);
             setDownloads((current) => current.filter((d) => d.game_id !== id));
           }}
         />
@@ -295,12 +370,14 @@ function Shell() {
 function Sidebar({
   tab,
   onTab,
+  onHoverTab,
   downloadCount,
   onDownloads,
   onReportBug,
 }: {
   tab: TabId;
   onTab: (tab: TabId) => void;
+  onHoverTab: (tab: TabId) => void;
   downloadCount: number;
   onDownloads: () => void;
   onReportBug: () => void;
@@ -321,6 +398,8 @@ function Sidebar({
               type="button"
               className={clsx('nav-item', tab === entry.id && 'active')}
               onClick={() => onTab(entry.id)}
+              onMouseEnter={() => onHoverTab(entry.id)}
+              onFocus={() => onHoverTab(entry.id)}
               aria-current={tab === entry.id ? 'page' : undefined}
             >
               <entry.icon size={18} aria-hidden />

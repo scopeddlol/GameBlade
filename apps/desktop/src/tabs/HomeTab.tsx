@@ -13,7 +13,7 @@ import {
 import { useEffect, useState } from 'react';
 import { GameShelf } from '../components/GameCard.js';
 import { REQUEST_ICONS, RequestPanel } from '../components/GameRequests.js';
-import { Artwork, Avatar, Empty, Loading, SectionHeader } from '../components/ui.js';
+import { Artwork, Avatar, Empty, SectionHeader, CardSkeleton } from '../components/ui.js';
 import { useSession } from '../hooks/useSession.js';
 import { formatBytes, formatPlaytime, formatRelative } from '../lib/format.js';
 import { ipc } from '../lib/ipc.js';
@@ -47,7 +47,7 @@ export function HomeTab({
     staleTime: 30_000,
   });
 
-  if (homeQuery.isLoading) return <Loading label="Loading your library" />;
+  if (homeQuery.isLoading) return <CardSkeleton rows={3} />;
   const home = homeQuery.data;
   if (!home) return <Empty title="Could not reach the server" message="Check Settings." />;
 
