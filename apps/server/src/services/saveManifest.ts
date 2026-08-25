@@ -32,10 +32,14 @@ export const MANIFEST_MAX_AGE_MS = 24 * 60 * 60_000;
  * failed parse would quietly replace a good index with an empty one, and every
  * suggestion would silently stop appearing rather than reporting a problem.
  *
- * The real figure is around 11,600, so this leaves room for upstream to prune
- * without crying wolf while still catching a parse that understood nothing.
+ * The real figure is around 19,700 of upstream's 53,000 entries — most of the
+ * rest carry no `files:` at all, being in the manifest for their store ID or
+ * install directory alone. The floor sits well under that so upstream can
+ * prune without crying wolf, but above the ~11,700 a parser that ignored
+ * untagged paths used to return, so that particular regression cannot come
+ * back unnoticed.
  */
-const MIN_PLAUSIBLE_ENTRIES = 5_000;
+const MIN_PLAUSIBLE_ENTRIES = 14_000;
 
 /** One save location, already translated into this project's own template. */
 export interface ManifestSavePath {
@@ -62,6 +66,11 @@ const PLACEHOLDERS: Record<string, string> = {
   '<game>': '{install}',
   '<home>': '{userprofile}',
   '<winAppData>': '{appdata}',
+  // Upstream currently writes this one out as `<home>/AppData/LocalLow`, but
+  // the placeholder is in their spec, so a switch to it should not silently
+  // drop every Unity game that keeps its saves there. It has to be substituted
+  // before `<winLocalAppData>`, which is a prefix of it.
+  '<winLocalAppDataLow>': '{userprofile}/AppData/LocalLow',
   '<winLocalAppData>': '{localappdata}',
   '<winDocuments>': '{documents}',
   '<winPublic>': '{public}',
@@ -87,7 +96,10 @@ export function translatePath(raw: string): ManifestSavePath | null {
   if (UNSUPPORTED.some((token) => raw.includes(token))) return null;
 
   let translated = raw;
-  for (const [token, replacement] of Object.entries(PLACEHOLDERS)) {
+  // Longest first: `<winLocalAppData>` is a prefix of `<winLocalAppDataLow>`,
+  // and substituting the short one first would leave a stray "Low>" behind.
+  const tokens = Object.entries(PLACEHOLDERS).sort((a, b) => b[0].length - a[0].length);
+  for (const [token, replacement] of tokens) {
     translated = translated.split(token).join(replacement);
   }
   for (const token of WILDCARD_PLACEHOLDERS) {
@@ -128,30 +140,69 @@ export function translatePath(raw: string): ManifestSavePath | null {
  * lot to ask of a machine whose day job is serving files. The format is
  * regular — two-space indentation, quoted keys — so it is read a line at a
  * time and only the few fields that matter are kept.
+ *
+ * The shape being read, for one game:
+ *
+ * ```yaml
+ * "Some Game":
+ *   files:
+ *     "<winAppData>/Some Game/Saves":
+ *       tags:
+ *         - save
+ *       when:
+ *         - os: windows
+ *           store: steam
+ * ```
  */
 export function parseManifest(text: string): ManifestEntry[] {
   const entries: ManifestEntry[] = [];
 
   let title: string | null = null;
   let saves: ManifestSavePath[] = [];
-  let currentPath: string | null = null;
-  let currentIsSave = false;
-  let currentIsWindows = false;
-  let seenWhen = false;
+
   let inFiles = false;
+  let currentPath: string | null = null;
+  /** Which key under the current path is being read: `tags:` or `when:`. */
+  let field: 'tags' | 'when' | null = null;
+  /** Whether the current path carried a `tags:` key at all. */
+  let tagged = false;
+  /** Whether those tags included `save`. */
+  let taggedSave = false;
+  /**
+   * One entry per `when:` clause, holding that clause's `os:` or null for a
+   * clause that names no operating system.
+   */
+  let whenClauses: Array<string | null> = [];
 
   const flushPath = () => {
-    // `when` absent means every platform, which includes Windows.
-    if (currentPath && currentIsSave && (currentIsWindows || !seenWhen)) {
+    // An untagged path is save data. Upstream's own worked example spells this
+    // out: `<base>/other`, carrying no tags, "will be backed up". Tags mark the
+    // exception — a path that is *only* `config` is settings rather than a
+    // save, and is the one thing left out here.
+    const isSaveData = !tagged || taggedSave;
+
+    // No `when:` means every platform, which includes Windows. A clause naming
+    // only a store ("when: - store: steam") likewise constrains where the game
+    // came from rather than which operating system it runs on.
+    const onWindows =
+      whenClauses.length === 0 || whenClauses.some((os) => os === null || os === 'windows');
+
+    if (currentPath && isSaveData && onWindows) {
       const translated = translatePath(currentPath);
-      if (translated && !saves.some((s) => s.pathTemplate === translated.pathTemplate)) {
-        saves.push(translated);
-      }
+      // Two paths in one folder — `<base>/save.dat` and `<base>/slot2.dat` —
+      // share a template and differ only in `include`, so both halves have to
+      // match before one is dropped as a repeat.
+      const duplicate = saves.some(
+        (s) => s.pathTemplate === translated?.pathTemplate && s.include === translated?.include,
+      );
+      if (translated && !duplicate) saves.push(translated);
     }
+
     currentPath = null;
-    currentIsSave = false;
-    currentIsWindows = false;
-    seenWhen = false;
+    field = null;
+    tagged = false;
+    taggedSave = false;
+    whenClauses = [];
   };
 
   const flushGame = () => {
@@ -170,12 +221,13 @@ export function parseManifest(text: string): ManifestEntry[] {
 
     if (indent === 0) {
       flushGame();
-      const match = /^"((?:[^"\\]|\\.)*)":$/.exec(content) ?? /^([^:]+):$/.exec(content);
-      if (match) title = (match[1] ?? '').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      title = readKey(content);
       continue;
     }
     if (!title) continue;
 
+    // `files:`, `registry:`, `steam:` and the rest. Anything but `files:` ends
+    // the run of paths that was being read.
     if (indent === 2) {
       flushPath();
       inFiles = content === 'files:';
@@ -185,18 +237,62 @@ export function parseManifest(text: string): ManifestEntry[] {
 
     if (indent === 4) {
       flushPath();
-      const match = /^"((?:[^"\\]|\\.)*)":$/.exec(content) ?? /^(.+):$/.exec(content);
-      if (match) currentPath = (match[1] ?? '').replace(/\\"/g, '"');
+      currentPath = readKey(content);
+      continue;
+    }
+    if (!currentPath) continue;
+
+    if (indent === 6) {
+      field = content === 'tags:' ? 'tags' : content === 'when:' ? 'when' : null;
+      // Recorded on the key rather than on the items, so that a `tags:` block
+      // listing only `config` still counts as "this path was tagged".
+      if (field === 'tags') tagged = true;
       continue;
     }
 
-    if (content === '- save') currentIsSave = true;
-    if (content === 'when:') seenWhen = true;
-    if (content.includes('os: windows')) currentIsWindows = true;
+    // Deeper than 6: an item of whichever key is open. A `when:` clause is a
+    // list of maps, so `- os: windows` opens one and a plainer `store: epic`
+    // on the next line still belongs to it.
+    if (field === 'tags') {
+      if (content === '- save') taggedSave = true;
+      continue;
+    }
+    if (field === 'when') {
+      if (content.startsWith('-')) {
+        whenClauses.push(readOs(content.replace(/^-\s*/, '')));
+      } else if (whenClauses.length > 0) {
+        const os = readOs(content);
+        if (os !== null) whenClauses[whenClauses.length - 1] = os;
+      }
+    }
   }
   flushGame();
 
   return entries;
+}
+
+/** Reads `"a key":` or `a key:` into the key itself, or null. */
+function readKey(content: string): string | null {
+  // A key whose value is an inline empty map — `"<path>": {}` — is the same as
+  // one with nothing indented under it. Upstream does not write file paths that
+  // way today, but it is ordinary YAML and costs one substitution to accept.
+  const line = content.replace(/:\s*\{\s*\}$/, ':');
+
+  const quoted = /^"((?:[^"\\]|\\.)*)":$/.exec(line);
+  if (quoted) return unescapeKey(quoted[1] ?? '');
+  const plain = /^(.+):$/.exec(line);
+  return plain ? (plain[1] ?? '') : null;
+}
+
+/** `\"` and `\\` are the only escapes upstream's quoted keys use. */
+function unescapeKey(raw: string): string {
+  return raw.replace(/\\(.)/g, (_, char: string) => char);
+}
+
+/** Reads the `os:` out of one `when:` clause line, or null if it names none. */
+function readOs(content: string): string | null {
+  const match = /^os:\s*"?([A-Za-z]+)"?$/.exec(content.trim());
+  return match ? (match[1] ?? null) : null;
 }
 
 /** The cached index and when it was written. */
@@ -278,6 +374,18 @@ export class SaveManifestService {
     const download = path.join(this.dataDir, 'save-manifest.yaml.part');
     await pipeline(Readable.fromWeb(response.body as never), createWriteStream(download));
 
+    // A connection dropped mid-download leaves valid YAML that simply stops
+    // early, and the parser would read it happily and index whichever games
+    // came alphabetically first. Comparing against the length upstream promised
+    // is what tells the two apart.
+    const expected = Number(response.headers.get('content-length'));
+    const written = (await stat(download)).size;
+    if (Number.isFinite(expected) && expected > 0 && written !== expected) {
+      throw new Error(
+        `The save manifest download stopped early (${written} of ${expected} bytes). The existing index was kept.`,
+      );
+    }
+
     const text = await readFile(download, 'utf8');
     const entries = parseManifest(text);
 
@@ -332,7 +440,7 @@ export interface SaveRuleSuggestion {
  *
  * On the normalised key the catalog already uses for its own matching, so
  * "Half-Life 2: Episode One" and "half life 2 episode one" land together. Only
- * exact key matches count — a fuzzy match across 11,000 titles produces
+ * exact key matches count — a fuzzy match across twenty thousand titles produces
  * confident nonsense, and this writes paths the client will later read and
  * write files at.
  */

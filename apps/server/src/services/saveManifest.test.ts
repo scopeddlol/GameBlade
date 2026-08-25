@@ -71,6 +71,15 @@ describe('translatePath', () => {
     // in a stored path, which resolves to a directory that cannot exist.
     expect(translatePath('<somethingNew>/saves')).toBeNull();
   });
+
+  it('does not mistake the LocalLow placeholder for its shorter prefix', () => {
+    // `<winLocalAppData>` is a prefix of `<winLocalAppDataLow>`; substituting
+    // the short one first would leave a stray "Low" in the middle of the path.
+    expect(translatePath('<winLocalAppDataLow>/Studio/Game')).toEqual({
+      pathTemplate: '{userprofile}\\AppData\\LocalLow\\Studio\\Game',
+      include: null,
+    });
+  });
 });
 
 describe('parseManifest', () => {
@@ -104,12 +113,104 @@ describe('parseManifest', () => {
 "No Files At All":
   steam:
     id: 2
+"Untagged Path":
+  files:
+    "<winAppData>/Untagged/Saves":
+      when:
+        - os: windows
+"Untagged Inline":
+  files:
+    "<winAppData>/Inline/Saves": {}
+"Store Clause Only":
+  files:
+    "<home>/StoreOnly/save.dat":
+      when:
+        - store: steam
+"Bit Before Os":
+  files:
+    "<winAppData>/BitFirst":
+      tags:
+        - save
+      when:
+        - bit: 64
+          os: windows
+"Config Only":
+  files:
+    "<winAppData>/ConfigOnly":
+      tags:
+        - config
+"Two Files One Folder":
+  files:
+    "<base>/save.dat":
+      tags:
+        - save
+    "<base>/slot2.dat":
+      tags:
+        - save
+"Registry Only":
+  registry:
+    HKEY_CURRENT_USER/Software/Thing:
+      tags:
+        - save
 `;
 
-  it('keeps only paths tagged as saves', () => {
+  it('leaves out a path tagged only as config', () => {
     const entries = parseManifest(sample);
     const game = entries.find((e) => e.title === 'Test Game');
     expect(game?.saves).toEqual([{ pathTemplate: '{appdata}\\TestGame\\Saves', include: null }]);
+  });
+
+  /**
+   * The case that used to cost roughly 8,000 games.
+   *
+   * Upstream tags a path to mark an exception, not to opt it in: their own
+   * worked example has `<base>/other` carrying no tags at all and says it
+   * "will be backed up". Requiring a `save` tag threw away every such entry.
+   */
+  it('treats a path with no tags at all as save data', () => {
+    const game = parseManifest(sample).find((e) => e.title === 'Untagged Path');
+    expect(game?.saves).toEqual([{ pathTemplate: '{appdata}\\Untagged\\Saves', include: null }]);
+  });
+
+  it('accepts a path written with an inline empty map', () => {
+    // `"<path>": {}` carries neither tags nor platform clause, so it is a save
+    // on every platform.
+    const game = parseManifest(sample).find((e) => e.title === 'Untagged Inline');
+    expect(game?.saves).toEqual([{ pathTemplate: '{appdata}\\Inline\\Saves', include: null }]);
+  });
+
+  it('keeps a clause that names a store but no platform', () => {
+    // "when: - store: steam" says where the game came from, not what it runs
+    // on, so it does not rule Windows out.
+    const game = parseManifest(sample).find((e) => e.title === 'Store Clause Only');
+    expect(game?.saves).toEqual([
+      { pathTemplate: '{userprofile}\\StoreOnly', include: 'save.dat' },
+    ]);
+  });
+
+  it('finds the platform on a continuation line of the same clause', () => {
+    // `- bit: 64` opens the clause and `os: windows` lands on the next line.
+    const game = parseManifest(sample).find((e) => e.title === 'Bit Before Os');
+    expect(game?.saves).toEqual([{ pathTemplate: '{appdata}\\BitFirst', include: null }]);
+  });
+
+  it('drops a game whose only path is config', () => {
+    expect(parseManifest(sample).find((e) => e.title === 'Config Only')).toBeUndefined();
+  });
+
+  it('keeps two files in one folder as separate candidates', () => {
+    // They share a pathTemplate and differ only in `include`; collapsing on
+    // the template alone would silently hide the second save slot.
+    const game = parseManifest(sample).find((e) => e.title === 'Two Files One Folder');
+    expect(game?.saves).toEqual([
+      { pathTemplate: '{install}', include: 'save.dat' },
+      { pathTemplate: '{install}', include: 'slot2.dat' },
+    ]);
+  });
+
+  it('skips a game that only saves to the registry', () => {
+    // Nothing here is a file, so there is no rule the client could act on.
+    expect(parseManifest(sample).find((e) => e.title === 'Registry Only')).toBeUndefined();
   });
 
   it('drops a game whose saves are another platform’s', () => {

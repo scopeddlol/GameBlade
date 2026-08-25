@@ -646,8 +646,8 @@ Finding where a game saves by hand means installing it, playing it, making a
 save and going looking — for every title. **Admin → Catalog → Save paths**
 matches the catalog against
 [Ludusavi's manifest](https://github.com/mtkennerly/ludusavi-manifest), a
-machine-readable digest of PCGamingWiki's save-path data covering some eleven
-thousand games, and proposes the rules instead.
+machine-readable digest of PCGamingWiki's save-path data covering close to
+twenty thousand games, and proposes the rules instead.
 
 Nothing is written without a tick, and the manifest's own title is shown beside
 the archive's on every row, because a title match is occasionally confident and
