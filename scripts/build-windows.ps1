@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Builds the Windows desktop client, at a version it asks you for.
 
@@ -164,7 +164,19 @@ function Set-WorkspaceVersion {
     # nothing else.
     Push-Location (Join-Path $RepoRoot 'apps/desktop/src-tauri')
     try {
-        cargo update --workspace --offline 2>&1 | ForEach-Object { Write-Note $_ }
+        # Windows PowerShell 5.1 wraps a native command's stderr in an
+        # ErrorRecord when 2>&1 merges it, and $ErrorActionPreference = 'Stop'
+        # then makes that terminating. Cargo writes its ordinary progress to
+        # stderr, so without this the script dies on cargo's success message
+        # and never reaches the exit-code check below.
+        $previousPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            cargo update --workspace --offline 2>&1 | ForEach-Object { Write-Note $_ }
+        }
+        finally {
+            $ErrorActionPreference = $previousPreference
+        }
         if ($LASTEXITCODE -ne 0) {
             # Not fatal: the build regenerates the lock anyway. Worth saying,
             # because the commit will then need the lockfile added separately.
