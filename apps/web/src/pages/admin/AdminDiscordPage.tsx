@@ -1,16 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  Check,
-  CircleAlert,
-  CircleCheck,
-  MessageSquare,
-  Send,
-  TestTube2,
-  Trash2,
-} from 'lucide-react';
+import { Check, CircleAlert, CircleCheck, MessageSquare, TestTube2, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Badge, Field, FormError, Notice, SectionSkeleton, Spinner } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
+import {
+  BotControl,
+  ChannelPicker,
+  PostSection,
+  TicketSection,
+  useGuild,
+  type DiscordBotStatus,
+  type DiscordPresenceConfig,
+  type DiscordTicketConfig,
+} from './discordSections.js';
 
 /** One step between a stored token and a message actually arriving. */
 interface DiscordCheck {
@@ -32,6 +34,9 @@ interface DiscordConfig {
   announceRequests: boolean;
   requireGuild: boolean;
   linkedAccounts: number;
+  bot: DiscordBotStatus;
+  presence: DiscordPresenceConfig;
+  tickets: DiscordTicketConfig;
 }
 
 /**
@@ -59,11 +64,17 @@ export function AdminDiscordPage() {
   // Write-only: a blank box means "leave what is stored alone", so these are
   // never seeded from the server and are cleared after a save.
   const [secrets, setSecrets] = useState({ clientSecret: '', botToken: '' });
-  const [announcement, setAnnouncement] = useState({ title: '', message: '', asEmbed: true });
 
   const configQuery = useQuery({
     queryKey: ['admin', 'discord'],
     queryFn: () => api.get<DiscordConfig>('/admin/discord'),
+    // Connecting takes a few seconds and goes through two or three states on
+    // the way. Without a poll the badge would sit on "Connecting" until
+    // somebody reloaded, which reads as a bot that never came up.
+    refetchInterval: (query) => {
+      const state = query.state.data?.bot.state;
+      return state === 'connecting' || state === 'reconnecting' ? 2000 : false;
+    },
   });
 
   // Seeded in an effect rather than inside `queryFn` — the fetcher only runs
@@ -79,6 +90,10 @@ export function AdminDiscordPage() {
       publicUrl: current.publicUrl || (config.publicUrl ?? ''),
     }));
   }, [config]);
+
+  // Shared by every channel and role picker on the page. Only worth asking
+  // for once the bot has a token and a server to look at.
+  const guild = useGuild(Boolean(configQuery.data?.botTokenSet && configQuery.data?.guildId));
 
   const fail = (caught: unknown) =>
     setError(caught instanceof ApiRequestError ? caught.message : 'Could not save.');
@@ -126,16 +141,6 @@ export function AdminDiscordPage() {
     },
   });
 
-  const announce = useMutation({
-    mutationFn: () => api.post('/admin/discord/announce', announcement),
-    onSuccess: () => {
-      setError(null);
-      setNotice('Posted.');
-      setAnnouncement({ title: '', message: '', asEmbed: true });
-    },
-    onError: fail,
-  });
-
   const announceGames = useMutation({
     mutationFn: () => api.post<{ posted: number }>('/admin/discord/announce-new-games'),
     onSuccess: (result) => {
@@ -155,6 +160,16 @@ export function AdminDiscordPage() {
     <div className="gb-page-narrow">
       <FormError message={error} />
       <Notice message={notice} />
+
+      {/* First, because it is the thing an operator comes here to check: is
+          the bot on, and what does it look like in the member list. */}
+      <BotControl
+        status={config.bot}
+        presence={config.presence}
+        hasToken={config.botTokenSet}
+        onError={setError}
+        onNotice={setNotice}
+      />
 
       {/* ------------------------------------------------------ application */}
       <section className="gb-card space-y-4 p-5">
@@ -335,12 +350,16 @@ export function AdminDiscordPage() {
           </div>
         </Field>
 
-        <Field label="Channel ID" htmlFor="d-channel" hint="Where announcements are posted.">
-          <input
+        <Field
+          label="Announcement channel"
+          htmlFor="d-channel"
+          hint="Where new games and granted requests are posted, and the default for a post below."
+        >
+          <ChannelPicker
             id="d-channel"
-            className="gb-input font-mono"
             value={form.channelId}
-            onChange={(e) => setForm({ ...form, channelId: e.target.value })}
+            guild={guild}
+            onChange={(channelId) => setForm({ ...form, channelId })}
           />
         </Field>
 
@@ -424,59 +443,21 @@ export function AdminDiscordPage() {
         </button>
       </div>
 
-      {/* --------------------------------------------------------- announce */}
-      <section className="gb-card space-y-3 p-5">
-        <h2 className="text-sm font-semibold tracking-wide uppercase">Post something</h2>
-        <p className="text-ink-400 text-xs leading-relaxed">
-          Goes to the channel above, as the bot.
-        </p>
+      <PostSection
+        hasToken={config.botTokenSet}
+        defaultChannelId={config.channelId}
+        guild={guild}
+        onError={setError}
+        onNotice={setNotice}
+      />
 
-        <Field label="Title" htmlFor="a-title" hint="Optional.">
-          <input
-            id="a-title"
-            className="gb-input"
-            maxLength={200}
-            value={announcement.title}
-            onChange={(e) => setAnnouncement({ ...announcement, title: e.target.value })}
-          />
-        </Field>
-
-        <Field label="Message" htmlFor="a-body">
-          <textarea
-            id="a-body"
-            className="gb-input min-h-28"
-            maxLength={1800}
-            value={announcement.message}
-            onChange={(e) => setAnnouncement({ ...announcement, message: e.target.value })}
-          />
-        </Field>
-
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={announcement.asEmbed}
-            onChange={(e) => setAnnouncement({ ...announcement, asEmbed: e.target.checked })}
-          />
-          Send as an embed
-          <span className="text-ink-500 text-xs">
-            (reads as the server speaking; unchecked reads as a person)
-          </span>
-        </label>
-
-        <button
-          type="button"
-          className="gb-btn-primary"
-          disabled={!config.botTokenSet || !announcement.message.trim() || announce.isPending}
-          onClick={() => announce.mutate()}
-        >
-          {announce.isPending ? (
-            <Spinner className="h-4 w-4" />
-          ) : (
-            <Send className="h-4 w-4" aria-hidden />
-          )}
-          Post to Discord
-        </button>
-      </section>
+      <TicketSection
+        config={config.tickets}
+        guild={guild}
+        botOnline={config.bot.state === 'ready'}
+        onError={setError}
+        onNotice={setNotice}
+      />
 
       {!config.clientId && !config.botTokenSet ? (
         <p className="text-ink-500 flex items-start gap-2 text-xs">

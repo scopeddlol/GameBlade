@@ -37,6 +37,9 @@ import {
   type ServerSettings,
   discordSettingsSchema,
   discordAnnounceSchema,
+  discordPresenceSchema,
+  discordTicketSettingsSchema,
+  MAX_DISCORD_ATTACHMENT_BYTES,
 } from '@gameblade/shared';
 import { eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -44,6 +47,8 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { requireAdmin } from '../auth/middleware.js';
+import type { DiscordUpload } from '../services/discord.js';
+import type { MediaStore } from '../services/media.js';
 import { toPublicUser } from '../auth/service.js';
 import { gameFiles, gameSaveRules, games, invites, libraries, users } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
@@ -79,6 +84,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     checksums,
     bugs,
     discord,
+    discordBot,
+    media,
   } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
@@ -921,6 +928,23 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       announceRequests: s.discordAnnounceRequests,
       requireGuild: s.discordRequireGuild,
       linkedAccounts: discord.linkedCount(),
+
+      bot: discordBot.status,
+      presence: {
+        status: s.discordPresenceStatus,
+        activityType: s.discordActivityType,
+        activityName: s.discordActivityName ?? '',
+        preview: discordBot.activityPreview(),
+      },
+      tickets: {
+        enabled: s.discordTicketsEnabled,
+        supportChannelId: s.discordSupportChannelId,
+        categoryId: s.discordTicketCategoryId,
+        staffRoleId: s.discordStaffRoleId,
+        panelTitle: s.discordTicketPanelTitle ?? '',
+        panelMessage: s.discordTicketPanelMessage ?? '',
+        counts: discordBot.ticketCounts(),
+      },
     };
   });
 
@@ -980,19 +1004,182 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { ok: result.checks.every((check) => check.ok), ...result };
   });
 
-  /** Posts whatever the operator typed, to the configured channel. */
+  /* ----------------------------------------------------------- the bot */
+
+  /**
+   * Brings the gateway connection up, which is what makes the bot *online*.
+   *
+   * Distinct from having a token: a token lets the server post, and posting is
+   * something a webhook could do. Being in the member list, answering a slash
+   * command and reacting to a button all need a live connection, and that is
+   * what this switch is.
+   */
+  app.post('/admin/discord/bot/start', async () => {
+    discordBot.start();
+    return { ok: true, bot: discordBot.status };
+  });
+
+  app.post('/admin/discord/bot/stop', async () => {
+    discordBot.stop();
+    return { ok: true, bot: discordBot.status };
+  });
+
+  /** How the bot presents itself: the dot, and the line under its name. */
+  app.patch('/admin/discord/bot/presence', async (request) => {
+    const input = discordPresenceSchema.parse(request.body ?? {});
+    settings.update({
+      ...(input.status !== undefined ? { discordPresenceStatus: input.status } : {}),
+      ...(input.activityType !== undefined ? { discordActivityType: input.activityType } : {}),
+      ...(input.activityName !== undefined
+        ? { discordActivityName: input.activityName || null }
+        : {}),
+    });
+    // Pushed over the open socket rather than by reconnecting: a reconnect
+    // would take the bot offline and back for what is a cosmetic edit.
+    discordBot.applyPresence();
+    return { ok: true, preview: discordBot.activityPreview(), bot: discordBot.status };
+  });
+
+  /**
+   * The guild's channels and roles, so the pickers are pickers.
+   *
+   * Every id on this page used to be a text box expecting a snowflake copied
+   * out of a right-click menu, with no feedback until something failed to post.
+   */
+  app.get('/admin/discord/channels', async () => {
+    const [channels, roles] = await Promise.all([discord.listChannels(), discord.listRoles()]);
+    return { channels, roles };
+  });
+
+  /* --------------------------------------------------------- attachments */
+
+  /**
+   * Takes the image for a post, before the post itself is sent.
+   *
+   * Two steps rather than one multipart request because everything else in
+   * this panel speaks JSON, and because the upload is the slow part: it can
+   * finish, and be previewed, while the operator is still writing the message.
+   * The bytes go to the ordinary media store, so the size and type checks are
+   * the same ones every other upload gets.
+   */
+  app.post(
+    '/admin/discord/attachment',
+    { bodyLimit: MAX_DISCORD_ATTACHMENT_BYTES },
+    async (request, reply) => {
+      const context = requireAdmin(request);
+      const contentType = request.headers['content-type'];
+      if (!contentType) throw ApiError.badRequest('A Content-Type header is required');
+
+      const declared = Number(request.headers['content-length'] ?? 0);
+      const info = await media.store(
+        context.user.id,
+        {
+          kind: 'image',
+          contentType,
+          sizeBytes: Number.isFinite(declared) && declared > 0 ? declared : 1,
+        },
+        request.raw,
+        MAX_DISCORD_ATTACHMENT_BYTES,
+      );
+      return reply.code(201).send(info);
+    },
+  );
+
+  /* -------------------------------------------------------------- tickets */
+
+  app.get('/admin/discord/tickets', async (request) => {
+    const { status } = request.query as { status?: string };
+    return { tickets: discordBot.listTickets(status), counts: discordBot.ticketCounts() };
+  });
+
+  app.patch('/admin/discord/tickets/settings', async (request) => {
+    const input = discordTicketSettingsSchema.parse(request.body ?? {});
+    settings.update({
+      ...(input.enabled !== undefined ? { discordTicketsEnabled: input.enabled } : {}),
+      ...(input.supportChannelId !== undefined
+        ? { discordSupportChannelId: input.supportChannelId || null }
+        : {}),
+      ...(input.categoryId !== undefined
+        ? { discordTicketCategoryId: input.categoryId || null }
+        : {}),
+      ...(input.staffRoleId !== undefined ? { discordStaffRoleId: input.staffRoleId || null } : {}),
+      ...(input.panelTitle !== undefined
+        ? { discordTicketPanelTitle: input.panelTitle || null }
+        : {}),
+      ...(input.panelMessage !== undefined
+        ? { discordTicketPanelMessage: input.panelMessage || null }
+        : {}),
+    });
+    return { ok: true };
+  });
+
+  /** Posts the panel with the button people press. */
+  app.post('/admin/discord/tickets/panel', async () => {
+    if (!settings.get().discordTicketsEnabled) {
+      throw ApiError.badRequest('Turn tickets on first, or the button will refuse every press');
+    }
+    const result = await discordBot.publishPanel();
+    return { ok: true, ...result };
+  });
+
+  /**
+   * Posts whatever the operator typed, wherever they chose.
+   *
+   * An attached image is sent as a real Discord attachment rather than as a
+   * URL in the embed: the media route needs authentication, so a link to it
+   * would give Discord a 401, and opening the whole media store to the world
+   * to avoid that is not a trade worth making for an announcement.
+   */
   app.post('/admin/discord/announce', async (request) => {
     const input = discordAnnounceSchema.parse(request.body);
+    if (!input.message && !input.imageMediaId) {
+      throw ApiError.badRequest('Write something, or attach an image');
+    }
+
+    const file = input.imageMediaId ? await readMedia(media, input.imageMediaId) : undefined;
 
     if (input.asEmbed) {
-      await discord.postEmbed({
-        title: input.title || undefined,
-        description: input.message,
-        color: 0x7c5cff,
-      });
+      await discord.postMessage(
+        {
+          embeds: [
+            {
+              title: input.title || undefined,
+              description: input.message || undefined,
+              color: 0x7c5cff,
+              // `attachment://` is how an embed refers to a file travelling in
+              // the same request.
+              image: file ? { url: `attachment://${file.fileName}` } : undefined,
+            },
+          ],
+        },
+        { channelId: input.channelId, file },
+      );
     } else {
-      await discord.post(input.title ? `**${input.title}**\n${input.message}` : input.message);
+      const content = input.title ? `**${input.title}**\n${input.message}` : input.message;
+      await discord.postMessage(
+        { content: content || undefined },
+        {
+          channelId: input.channelId,
+          file,
+        },
+      );
     }
+
+    // Discord has its own copy now, and this one is referenced by nothing —
+    // no post, no profile — so leaving it would grow the media store by an
+    // image per announcement for ever, against the admin's own quota.
+    // Deliberately after the post and deliberately not fatal: an announcement
+    // that went out and then failed to tidy up is a housekeeping problem, not
+    // a failed announcement.
+    if (input.imageMediaId) {
+      const context = requireAdmin(request);
+      await media
+        .delete(context.user.id, input.imageMediaId)
+        .catch((error: unknown) =>
+          app.log.warn({ err: error }, 'could not clean up a posted Discord attachment'),
+        );
+    }
+
     return { ok: true };
   });
 
@@ -1166,4 +1353,28 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string };
     return profiles.detail(id, context.user.id);
   });
+}
+
+/**
+ * Reads a stored upload back into memory so it can travel to Discord.
+ *
+ * Buffered rather than streamed because Discord's multipart body needs a known
+ * length, and because the cap on these is a few megabytes — small enough that
+ * holding one briefly costs nothing, and small enough that the alternative
+ * (a temporary file and a second read) would be more moving parts for no gain.
+ */
+async function readMedia(store: MediaStore, mediaId: string): Promise<DiscordUpload> {
+  const { stream, record } = await store.open(mediaId);
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.from(chunk as Buffer));
+  }
+
+  const extension =
+    record.contentType.split('/')[1]?.split(';')[0]?.replace('jpeg', 'jpg') ?? 'png';
+  return {
+    fileName: `attachment.${extension}`,
+    contentType: record.contentType,
+    bytes: Buffer.concat(chunks),
+  };
 }

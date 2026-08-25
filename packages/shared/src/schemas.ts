@@ -1,6 +1,7 @@
 import { ACHIEVEMENT_COMPARATORS, ACHIEVEMENT_FORMATS } from './achievementRules.js';
 import { BUG_SEVERITY, BUG_STATUS } from './constants.js';
 import { z } from 'zod';
+import type { DiscordActivityType } from './constants.js';
 import { THEME_PRESETS } from './theme.js';
 import {
   ACHIEVEMENT_SOURCE,
@@ -10,6 +11,8 @@ import {
   CLIENT_BUTTON_ICONS,
   CLIENT_BUTTON_PLACEMENT,
   COLLECTION_COLORS,
+  DISCORD_ACTIVITY_TYPES,
+  DISCORD_PRESENCE_STATUS,
   GAME_REQUEST_STATUS,
   MAX_CLIP_BYTES,
   MAX_COLLECTIONS_PER_USER,
@@ -786,8 +789,42 @@ export type DiscordSettingsInput = z.infer<typeof discordSettingsSchema>;
 /** A post the operator is sending to the Discord by hand. */
 export const discordAnnounceSchema = z.object({
   title: z.string().trim().max(200).default(''),
-  message: z.string().trim().min(1).max(1800),
+  /**
+   * Optional once an image can carry the post on its own — a screenshot with
+   * no caption is a perfectly ordinary announcement.
+   */
+  message: z.string().trim().max(1800).default(''),
   /** An embed reads as the server speaking; plain text reads as a person. */
   asEmbed: z.boolean().default(true),
+  /** Where it goes. Blank uses the configured announcement channel. */
+  channelId: z.string().trim().max(64).optional(),
+  /** A media id already uploaded to this server, attached to the message. */
+  imageMediaId: z.string().trim().max(64).optional(),
 });
 export type DiscordAnnounceInput = z.infer<typeof discordAnnounceSchema>;
+
+/** How the bot presents itself in the member list. */
+export const discordPresenceSchema = z.object({
+  status: z.enum(DISCORD_PRESENCE_STATUS).optional(),
+  activityType: z
+    .number()
+    .int()
+    .refine((value): value is DiscordActivityType =>
+      (DISCORD_ACTIVITY_TYPES as readonly number[]).includes(value),
+    )
+    .optional(),
+  /** Blank means no activity line at all, just the coloured dot. */
+  activityName: z.string().trim().max(128).optional(),
+});
+export type DiscordPresenceInput = z.infer<typeof discordPresenceSchema>;
+
+/** Everything the ticket system needs to know about this server. */
+export const discordTicketSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  supportChannelId: z.string().trim().max(64).optional(),
+  categoryId: z.string().trim().max(64).optional(),
+  staffRoleId: z.string().trim().max(64).optional(),
+  panelTitle: z.string().trim().max(200).optional(),
+  panelMessage: z.string().trim().max(1500).optional(),
+});
+export type DiscordTicketSettingsInput = z.infer<typeof discordTicketSettingsSchema>;

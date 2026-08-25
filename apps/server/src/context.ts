@@ -19,6 +19,7 @@ import { InstallerService } from './services/installer.js';
 import { MediaStore } from './services/media.js';
 import { ImageCache } from './services/metadata/images.js';
 import { DiscordService } from './services/discord.js';
+import { DiscordBotService } from './services/discordBot.js';
 import { SaveManifestService } from './services/saveManifest.js';
 import { MetadataService } from './services/metadata/service.js';
 import { NotificationService } from './services/notifications.js';
@@ -60,6 +61,8 @@ export interface GamebladeContext {
   apiKeys: ApiKeyService;
   /** Linking, signing in with, and posting to Discord. */
   discord: DiscordService;
+  /** The live half: presence, slash commands, buttons and tickets. */
+  discordBot: DiscordBotService;
   bandwidth: BandwidthService;
   analytics: AnalyticsService;
 
@@ -126,6 +129,8 @@ export function createContext(
   const friends = new FriendService(db, profiles, notifications, activity, realtime);
   const media = new MediaStore(db, config, logger);
   const social = new SocialService(db, config, profiles, friends, media, notifications, activity);
+  // After profiles and media: `/profile` reads both.
+  const discordBot = new DiscordBotService(db, settings, discord, profiles, media, logger);
   const playtime = new PlaytimeService(db, config, presence, activity);
   const achievements = new AchievementService(
     db,
@@ -165,6 +170,7 @@ export function createContext(
     gameRequests,
     saveManifest,
     discord,
+    discordBot,
     backups,
     health,
     bugs,

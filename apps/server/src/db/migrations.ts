@@ -672,4 +672,35 @@ export const migrations: Migration[] = [
       CREATE UNIQUE INDEX discord_links_discord_id_idx ON discord_links(discord_id);
     `,
   },
+  {
+    id: '0015_discord_tickets',
+    sql: `
+      -- A ticket outlives its channel on purpose.
+      --
+      -- Closing deletes the channel, because a Discord that accumulates two
+      -- hundred dead #ticket-0042 channels is worse than no ticket system at
+      -- all. That makes the channel the wrong place to keep the record of who
+      -- asked for what, so it is kept here instead.
+      --
+      -- opener_discord_id is required and user_id is not: anybody in the
+      -- server can open a ticket whether or not they have ever linked a
+      -- GameBlade account, and a linked account may be deleted later.
+      CREATE TABLE discord_tickets (
+        id TEXT PRIMARY KEY,
+        number INTEGER NOT NULL,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT,
+        opener_discord_id TEXT NOT NULL,
+        opener_name TEXT NOT NULL,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        subject TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        opened_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        closed_at TEXT,
+        closed_by TEXT
+      );
+      CREATE INDEX discord_tickets_status_idx ON discord_tickets(status, opened_at);
+      CREATE UNIQUE INDEX discord_tickets_number_idx ON discord_tickets(number);
+    `,
+  },
 ];

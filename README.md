@@ -449,6 +449,59 @@ A linked player's handle is **private by default**. The toggle to show it lives
 on their account page, and re-linking — which happens on every Discord sign-in
 — does not turn it back on.
 
+#### Starting it
+
+A token lets this server _post_; it does not make the bot **online**. Being in
+the member list, answering a slash command and reacting to a button all need a
+live gateway connection, and **Start the bot** is what opens one. The switch is
+remembered, so the bot comes back by itself after a restart, and it reconnects
+on its own if Discord drops it. A wrong token stops it outright and says so
+rather than retrying for ever.
+
+It asks for **no intents at all**, so there is nothing to enable in the
+developer portal and the bot cannot read anybody's messages even in principle —
+interactions are delivered regardless. **How it appears** sets the coloured dot
+(online, idle, do not disturb, invisible) and the line under the name: Playing,
+Streaming, Listening to, Watching, Custom or Competing in, plus the text. A
+change is pushed over the open connection, so it takes effect immediately
+rather than bouncing the bot offline and back.
+
+#### Posting
+
+**Post something** goes to whichever channel you pick — the channel and role
+boxes are real pickers once the bot can see your server, and fall back to
+pasting an ID when it cannot. An attached image is sent as a genuine Discord
+attachment rather than as a link, so it works whether or not this server is
+reachable from the internet.
+
+#### Tickets
+
+**Support tickets** work the way Ticket Tool does. Post a panel into a channel
+and it carries a button; pressing it asks what the problem is, then opens a
+private channel that only that person, your staff role and the bot can see.
+Closing it asks once, deletes the channel and keeps the record in the panel —
+a Discord that accumulates two hundred dead `#ticket-0042` channels is worse
+than no ticket system at all, which is why the record lives here rather than
+there. One open ticket per person. The bot needs **Manage Channels** for this.
+
+Without a staff role every ticket is private to the person who opened it, which
+is almost certainly not what you want — the picker says so.
+
+#### `/profile`
+
+Anyone who has linked their account can run `/profile` in your server and the
+bot answers with their GameBlade profile: their avatar, how many games they
+have, hours played, achievements, friends, when they joined and what they are
+playing right now. The avatar travels as an attachment rather than a link,
+because the media route needs authentication and opening it to the world to
+save a round trip is not a trade worth making. Someone who has not linked is
+told how to.
+
+The command is registered against your server rather than globally, so it
+appears the moment the bot connects instead of up to an hour later.
+
+#### Configuration
+
 **The bot** needs a token, a channel and this server's public address. The
 address is for cover art: Discord fetches images itself, so a relative path
 would resolve against discord.com. Paste the bare token from the Bot tab; a

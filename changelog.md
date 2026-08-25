@@ -86,6 +86,82 @@ packages/
 
 ---
 
+## Build Session - August 25, 2026 (Discord bot)
+
+## Version 0.5.2 - August 25, 2026
+
+The Discord integration gains a live bot. Everything before this was REST: the
+server could post, which a webhook could also do. A bot that is _online_, that
+answers a slash command and that reacts to a button all need a gateway
+connection, and that is what this adds.
+
+Written against Node's own `WebSocket` rather than pulling in discord.js — the
+library is excellent and roughly two hundred times the size of what is needed
+here, which is identify, heartbeat, resume, one presence frame and one dispatch
+event. No new dependency.
+
+### The bot
+
+- **Start and stop it** from the panel. Starting opens the gateway connection,
+  which is what puts it in the member list. The switch is persisted, so the bot
+  comes back by itself after a restart, and the connection resumes on its own
+  when Discord drops it.
+- It asks for **no intents at all**, so nothing has to be enabled in the
+  developer portal and the bot cannot read anybody's messages even in
+  principle. Interactions arrive regardless.
+- A wrong token, or a refused intent, **stops the bot and says which** rather
+  than reconnecting for ever against an error only the operator can fix.
+- A connection whose heartbeats stop being acknowledged is torn down and
+  rebuilt. Without that check a bot reads as online in the panel and offline in
+  the server, which is the most confusing state this can be in.
+- **Status and activity** are configurable: the coloured dot (online, idle, do
+  not disturb, invisible) and the line under the name (Playing, Streaming,
+  Listening to, Watching, Custom, Competing in). A change is pushed over the
+  open socket rather than reconnecting for a cosmetic edit. A custom status
+  puts its text in `state`, which is where Discord reads it from.
+
+### Posting
+
+- **Pick the channel** a post goes to. The channel and role boxes are real
+  pickers once the bot can see the server, and fall back to pasting an ID when
+  it cannot.
+- **Attach an image.** It is uploaded here first and sent on as a genuine
+  Discord attachment rather than as a link — the media route needs
+  authentication, so a link would hand Discord a 401, and opening the media
+  store to the internet to avoid that is not a trade worth making.
+- A post may now be a picture with no caption.
+
+### Tickets
+
+- A **Ticket Tool-style system**: a panel with a button in a support channel,
+  a modal asking what the problem is, and a private channel per ticket that
+  only the opener, the staff role and the bot can see.
+- Closing asks once, deletes the channel and keeps the record in the panel. A
+  Discord that accumulates two hundred dead `#ticket-0042` channels is worse
+  than no ticket system, which is why the record lives in the database rather
+  than in the channel.
+- One open ticket per person, so a bored click cannot open forty channels.
+- Switching tickets off makes the button refuse politely: a panel is a message
+  and outlives the setting that produced it, so it cannot be unposted.
+
+### `/profile`
+
+- A slash command that answers with the caller's GameBlade profile — avatar,
+  games, hours, achievements, friends, join date and what they are playing.
+  Registered against the operator's guild rather than globally, so it appears
+  the moment the bot connects instead of up to an hour later.
+- Someone who has not linked their account is told how to, rather than getting
+  an error.
+
+### Notes
+
+- No desktop client changes; none of this touches it. Its version moves with
+  the workspace so the repository has one number, but no installer is built
+  for this release.
+- One migration, `0015_discord_tickets`.
+
+---
+
 ## Build Session - August 25, 2026
 
 ## Version 0.5.1 - August 25, 2026
