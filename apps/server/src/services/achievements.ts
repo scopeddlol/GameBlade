@@ -1,7 +1,10 @@
-import type {
-  AchievementDefinitionInput,
-  AchievementProgress,
-  AchievementSummary,
+import {
+  resolveStoreTemplate,
+  usableStores,
+  type AchievementDefinitionInput,
+  type AchievementProgress,
+  type AchievementSummary,
+  type BulkImportResult,
 } from '@gameblade/shared';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
@@ -425,6 +428,259 @@ export class AchievementService {
     return { ...match, ...imported };
   }
 
+  /**
+   * Writes the rules that make an imported list actually unlock.
+   *
+   * Lifted out of the route it used to live in so the bulk importer can call
+   * it too: importing a hundred games and leaving every one of them with names
+   * that never fire is not a feature, it is a hundred games to go back through
+   * by hand.
+   *
+   * Rules are written for *every* applicable emulator layout at once, on
+   * purpose: one whose file does not exist reads as nothing and unlocks
+   * nothing, so the layouts that do not apply stay silent and whichever the
+   * player's copy actually uses is the one that fires.
+   */
+  generateRules(
+    gameId: string,
+    options: { sources?: string[]; replace?: boolean } = {},
+  ): { generated: number; achievements: number; stores: string[] } {
+    const { sources: wanted, replace = true } = options;
+
+    const game = this.db
+      .select({ id: games.id, steamAppId: games.steamAppId })
+      .from(games)
+      .where(eq(games.id, gameId))
+      .get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    const keys = this.db
+      .select({ key: achievements.key })
+      .from(achievements)
+      .where(eq(achievements.gameId, gameId))
+      .all()
+      .map((row) => row.key);
+
+    if (keys.length === 0) {
+      throw ApiError.badRequest(
+        "Import this game's achievements first — there is nothing to write rules for.",
+      );
+    }
+
+    const stores = usableStores(game.steamAppId ?? null).filter(
+      (store) => !wanted || wanted.includes(store.id),
+    );
+    if (stores.length === 0) {
+      throw ApiError.badRequest(
+        game.steamAppId
+          ? 'None of the selected layouts are usable for this game.'
+          : "Set this game's Steam app id first: every emulator layout but the portable one stores saves under it.",
+      );
+    }
+
+    this.db.transaction((tx) => {
+      // Replacing by default: generating twice should not double every rule.
+      if (replace) {
+        tx.delete(gameAchievementRules).where(eq(gameAchievementRules.gameId, gameId)).run();
+      }
+      for (const store of stores) {
+        const template = resolveStoreTemplate(store, game.steamAppId ?? null);
+        for (const key of keys) {
+          tx.insert(gameAchievementRules)
+            .values({
+              id: newId('achr'),
+              gameId,
+              achievementKey: key,
+              sourceTemplate: template,
+              format: store.format,
+              selector: store.selector(key),
+              comparator: store.comparator,
+              value: null,
+              createdAt: isoNow(),
+            })
+            .run();
+        }
+      }
+    });
+
+    return {
+      generated: stores.length * keys.length,
+      achievements: keys.length,
+      stores: stores.map((store) => store.id),
+    };
+  }
+
+  /**
+   * Writes many definitions to one game in a single transaction.
+   *
+   * Adding achievements one PUT at a time is fine for a correction and absurd
+   * for a game that ships two hundred of them, which is the whole reason the
+   * paste box exists. One transaction, so a bad row half way down cannot leave
+   * the game with the first half of a list.
+   */
+  bulkUpsertDefinitions(
+    gameId: string,
+    inputs: AchievementDefinitionInput[],
+    replace: boolean,
+  ): { written: number; total: number } {
+    const game = this.db.select({ id: games.id }).from(games).where(eq(games.id, gameId)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    // The last row wins, rather than the insert failing on its own conflict
+    // target: a pasted list with a repeated key is a typo, not a reason to
+    // reject two hundred good rows.
+    const byKey = new Map(inputs.map((input) => [input.key, input]));
+
+    // Statements run through `this.db` rather than the callback's handle, and
+    // that is fine here: better-sqlite3 is one synchronous connection, so
+    // everything issued inside the callback — including `upsertDefinition`,
+    // which has no transaction parameter to take — is inside the same
+    // transaction.
+    this.db.transaction(() => {
+      if (replace) {
+        this.db.delete(achievements).where(eq(achievements.gameId, gameId)).run();
+        // The rules point at keys by name with no foreign key of their own, so
+        // wiping the definitions without them leaves rules that can never fire.
+        this.db.delete(gameAchievementRules).where(eq(gameAchievementRules.gameId, gameId)).run();
+      }
+      let index = 0;
+      for (const input of byKey.values()) {
+        this.upsertDefinition(gameId, {
+          ...input,
+          // A pasted list has an order, and it is the order it was pasted in.
+          sortOrder: input.sortOrder || index,
+        });
+        index += 1;
+      }
+    });
+
+    return {
+      written: byKey.size,
+      total: this.definitionsForGame(gameId).length,
+    };
+  }
+
+  /**
+   * Imports a batch of games from Steam, one at a time, and reports each.
+   *
+   * One game's failure is never the batch's: an ambiguous title, a game that
+   * is not on Steam at all, and a game whose Steam entry has no achievements
+   * are all ordinary and all common across a real catalog. Each is recorded
+   * against its own row so the operator gets a list of what to look at by hand
+   * rather than a request that stopped at the first awkward title.
+   *
+   * Sequential rather than parallel on purpose. Steam rate-limits the store
+   * search hard, and eight concurrent lookups is the reliable way to be told
+   * to go away for the rest of the batch.
+   */
+  async bulkImportFromSteam(
+    gameIds: string[],
+    options: { replace: boolean; generateRules: boolean; skipExisting: boolean },
+  ): Promise<BulkImportResult[]> {
+    const results: BulkImportResult[] = [];
+
+    for (const gameId of gameIds) {
+      const game = this.db
+        .select({ id: games.id, title: games.title, steamAppId: games.steamAppId })
+        .from(games)
+        .where(eq(games.id, gameId))
+        .get();
+
+      if (!game) {
+        results.push({
+          gameId,
+          title: gameId,
+          status: 'failed',
+          steamAppId: null,
+          imported: 0,
+          rules: null,
+          message: 'That game is no longer in the catalog.',
+        });
+        continue;
+      }
+
+      const existing = this.definitionsForGame(gameId).length;
+      if (options.skipExisting && existing > 0) {
+        results.push({
+          gameId,
+          title: game.title,
+          status: 'skipped',
+          steamAppId: game.steamAppId,
+          imported: 0,
+          rules: null,
+          message: `Already has ${existing} ${existing === 1 ? 'achievement' : 'achievements'}.`,
+        });
+        continue;
+      }
+
+      try {
+        // A stored app id is the operator's own answer and beats searching for
+        // one — the search is a guess, and this game has already been decided.
+        const steamAppId = game.steamAppId ?? (await this.findSteamAppId(gameId)).steamAppId;
+        const { imported } = await this.importFromSteam(gameId, steamAppId, options.replace);
+
+        if (imported === 0) {
+          results.push({
+            gameId,
+            title: game.title,
+            status: 'skipped',
+            steamAppId,
+            imported: 0,
+            rules: null,
+            message: 'Steam publishes no achievements for this game.',
+          });
+          continue;
+        }
+
+        let rules: number | null = null;
+        if (options.generateRules) {
+          try {
+            rules = this.generateRules(gameId).generated;
+          } catch (error) {
+            // The import itself succeeded and is worth keeping; say plainly
+            // that the half which makes them unlock did not happen.
+            this.logger.warn({ err: error, gameId }, 'could not generate achievement rules');
+            results.push({
+              gameId,
+              title: game.title,
+              status: 'imported',
+              steamAppId,
+              imported,
+              rules: null,
+              message: `Imported ${imported}, but the unlock rules could not be written: ${messageOf(error)}`,
+            });
+            continue;
+          }
+        }
+
+        results.push({
+          gameId,
+          title: game.title,
+          status: 'imported',
+          steamAppId,
+          imported,
+          rules,
+          message:
+            rules === null
+              ? `Imported ${imported}.`
+              : `Imported ${imported} and wrote ${rules} unlock rules.`,
+        });
+      } catch (error) {
+        results.push({
+          gameId,
+          title: game.title,
+          status: 'failed',
+          steamAppId: game.steamAppId,
+          imported: 0,
+          rules: null,
+          message: messageOf(error),
+        });
+      }
+    }
+
+    return results;
+  }
+
   private async fetchGlobalPercentages(steamAppId: number): Promise<Map<string, number>> {
     try {
       const data = await this.fetchJson<SteamGlobalPercentages>(
@@ -479,6 +735,11 @@ export class AchievementService {
       progress,
     };
   }
+}
+
+/** Whatever a failed step said, in one line fit for a results table. */
+function messageOf(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : 'Something went wrong.';
 }
 
 function steamTitleKey(title: string): string {

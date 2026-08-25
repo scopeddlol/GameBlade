@@ -102,7 +102,7 @@ export function createContext(
   const images = new ImageCache(db, config.imageCacheDir, logger);
   const metadata = new MetadataService(db, settings, images, logger, config.basePath);
   const saveManifest = new SaveManifestService(config.dataDir);
-  const discord = new DiscordService(db, settings, config.basePath);
+  const discord = new DiscordService(db, settings, config.basePath, logger);
   const backups = new BackupService(config.dataDir, sqlite);
   const scanner = new ScannerService(db, metadata, logger);
   const checksums = new ChecksumService(db, logger);

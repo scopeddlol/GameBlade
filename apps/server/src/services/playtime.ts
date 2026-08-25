@@ -29,7 +29,12 @@ export class PlaytimeService {
    * user is closed first — one person cannot be playing two things at once, and
    * leaving strays open would double-count the next close.
    */
-  start(userId: string, gameId: string, deviceId: string | null): PlaySessionInfo {
+  start(
+    userId: string,
+    gameId: string,
+    deviceId: string | null,
+    shareActivity = true,
+  ): PlaySessionInfo {
     const game = this.db.select({ id: games.id }).from(games).where(eq(games.id, gameId)).get();
     if (!game) throw ApiError.notFound('Game not found');
 
@@ -66,6 +71,10 @@ export class PlaytimeService {
       })
       .run();
 
+    // Set before the update, and left set for the rest of the session: the
+    // heartbeat re-asserts in-game every time it fires, so a one-off override
+    // would last exactly one beat.
+    this.presence.setSharing(userId, shareActivity);
     this.presence.update(userId, 'in-game', gameId);
 
     return {
@@ -113,6 +122,9 @@ export class PlaytimeService {
       .run();
 
     this.applySeconds(userId, session.gameId, seconds, endedAt);
+    // The session is over, so the machine that asked to be quiet no longer
+    // gets to speak for the next one.
+    this.presence.setSharing(userId, true);
     this.presence.update(userId, 'online', null);
     this.activity.record({ userId, kind: 'played', gameId: session.gameId, seconds });
 

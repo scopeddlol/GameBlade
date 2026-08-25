@@ -95,6 +95,11 @@ describe('discord', () => {
       expect(response.statusCode).toBe(200);
 
       const { url } = response.json() as { url: string };
+      // The consent screen, not the REST API. Building this from the API base
+      // sent everyone to /api/v10/oauth2/authorize, which answers no GET — so
+      // the screen never appeared and nothing downstream could ever run.
+      expect(url.startsWith('https://discord.com/oauth2/authorize?')).toBe(true);
+      expect(url).not.toContain('/api/');
       expect(url).toContain('client_id=123456789');
       // The scopes are the whole security surface of the integration.
       expect(url).toContain('identify');
@@ -213,6 +218,17 @@ describe('discord', () => {
     it('refuses to post with no bot token rather than failing at Discord', async () => {
       app.gameblade.settings.update({ discordBotToken: null });
       await expect(app.gameblade.discord.post('hello')).rejects.toThrow(/bot token/i);
+    });
+
+    it('treats a token pasted as "Bot <token>" as configured', () => {
+      // The portal copies the bare token, but every example writes it with the
+      // prefix, so it gets pasted that way — and sending "Bot Bot <token>"
+      // fails with a 401 that reads exactly like a wrong token.
+      app.gameblade.settings.update({ discordBotToken: 'Bot a-bot-token' });
+      expect(app.gameblade.discord.hasBot).toBe(true);
+      app.gameblade.settings.update({ discordBotToken: '   ' });
+      expect(app.gameblade.discord.hasBot).toBe(false);
+      app.gameblade.settings.update({ discordBotToken: null });
     });
   });
 

@@ -50,7 +50,7 @@ export function AdminOverviewPage() {
   const scanning = stats?.scan.state === 'scanning' || stats?.scan.state === 'matching';
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="gb-page">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
         <button

@@ -261,6 +261,14 @@ export function maxBytesForMedia(kind: MediaUploadInput['kind']): number {
 
 export const startPlaySessionSchema = z.object({
   gameId: z.string().trim().min(1).max(64),
+  /**
+   * Whether this machine publishes what is being played.
+   *
+   * Per session rather than per account, because the client's switch is a
+   * per-machine one: someone can be quiet on a work laptop and visible on the
+   * machine in the front room. Absent from an older client, which means yes.
+   */
+  shareActivity: z.boolean().default(true),
 });
 export type StartPlaySessionInput = z.infer<typeof startPlaySessionSchema>;
 
@@ -311,6 +319,50 @@ export const autoImportAchievementsSchema = z.object({
   replace: z.boolean().default(false),
 });
 export type AutoImportAchievementsInput = z.infer<typeof autoImportAchievementsSchema>;
+
+/**
+ * How many games one bulk-import request may carry.
+ *
+ * Deliberately small. Every game in the batch is two or three round trips to
+ * Steam, so a request covering a whole catalog would sit open for minutes,
+ * report nothing on the way, and lose everything if the connection dropped.
+ * The client sends batches of this size and shows progress between them, which
+ * also gives it somewhere to put a Stop button.
+ */
+export const BULK_ACHIEVEMENT_BATCH = 8;
+
+/** One slice of a bulk achievement import. */
+export const bulkImportAchievementsSchema = z.object({
+  gameIds: z.array(z.string().trim().min(1).max(64)).min(1).max(BULK_ACHIEVEMENT_BATCH),
+  /** Wipe previously imported Steam entries instead of merging by key. */
+  replace: z.boolean().default(false),
+  /** Also write the unlock rules, without which an imported list never fires. */
+  generateRules: z.boolean().default(true),
+  /** Skip a game that already has achievements rather than re-importing it. */
+  skipExisting: z.boolean().default(true),
+});
+export type BulkImportAchievementsInput = z.infer<typeof bulkImportAchievementsSchema>;
+
+/** What became of one game in a bulk import. */
+export interface BulkImportResult {
+  gameId: string;
+  title: string;
+  status: 'imported' | 'skipped' | 'failed';
+  steamAppId: number | null;
+  imported: number;
+  /** Rules written, or null when rule generation was not asked for or could not run. */
+  rules: number | null;
+  /** Always set — for a success it says what happened, for a failure why not. */
+  message: string;
+}
+
+/** Many definitions written to one game at once, from a pasted list. */
+export const bulkAchievementDefinitionsSchema = z.object({
+  achievements: z.array(achievementDefinitionSchema).min(1).max(2000),
+  /** Wipe every existing definition for the game first. */
+  replace: z.boolean().default(false),
+});
+export type BulkAchievementDefinitionsInput = z.infer<typeof bulkAchievementDefinitionsSchema>;
 
 /* ---------------------------------------------------------------- cloud saves */
 

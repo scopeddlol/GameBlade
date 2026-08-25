@@ -130,8 +130,14 @@ export function GameDetailPanel({
 
   const launchMutation = useMutation({
     mutationFn: async () => {
-      // Pull the cloud save first, so a session never starts from a stale one.
-      if (saveRule) await syncBeforeLaunch(gameId, saveRule, installed);
+      // Pull the cloud save first, so a session never starts from a stale one —
+      // unless the player turned automatic syncing off, which is the whole
+      // point of that switch and until now was the one thing it did not do.
+      if (saveRule && (settingsQuery.data?.syncSaves ?? true)) {
+        await syncBeforeLaunch(gameId, saveRule, installed, {
+          promptOnConflict: settingsQuery.data?.promptOnSaveConflict ?? true,
+        });
+      }
       return ipc.launch(gameId, {
         executableOverride: launchRule?.executable ?? undefined,
         args: launchRule?.args ?? undefined,
@@ -470,18 +476,37 @@ function toPayload(rule: SaveRule): SaveRulePayload {
  * A conflict is deliberately *not* resolved here — starting a game is the wrong
  * moment to make someone choose which save to destroy, so the launch proceeds
  * on the local copy and the drawer keeps showing the conflict for them to
- * settle deliberately.
+ * settle deliberately. Unless they have said they would rather not be asked,
+ * which is what the setting of that name has always offered and never done.
  */
 async function syncBeforeLaunch(
   gameId: string,
   rule: SaveRule,
   installed: InstalledGame | undefined,
+  options: { promptOnConflict: boolean },
 ): Promise<void> {
   if (!installed) return;
   try {
     const status = await ipc.saveStatus(gameId, toPayload(rule));
-    if (status.remote.state === 'remote-newer' && status.remote.slotId) {
-      await ipc.pullSave(gameId, toPayload(rule), status.remote.slotId);
+    const slotId = status.remote.slotId;
+    if (!slotId) return;
+
+    if (status.remote.state === 'remote-newer') {
+      await ipc.pullSave(gameId, toPayload(rule), slotId);
+      return;
+    }
+
+    // With "ask before overwriting" turned off, the setting promises to take
+    // whichever copy was captured later — so a conflict is settled here rather
+    // than waiting in the drawer for someone who has said they do not want to
+    // be asked. The other copy stays in the cloud's version history either way,
+    // so nothing is destroyed by getting this wrong.
+    if (status.remote.state === 'conflict' && !options.promptOnConflict) {
+      const remoteAt = status.remote.remote?.capturedAt;
+      const localAt = status.local?.capturedAt;
+      if (remoteAt && (!localAt || Date.parse(remoteAt) > Date.parse(localAt))) {
+        await ipc.pullSave(gameId, toPayload(rule), slotId);
+      }
     }
   } catch {
     // A sync failure must never block play; the save is still on disk.

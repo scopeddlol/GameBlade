@@ -326,10 +326,20 @@ async fn start_download(
         None => state.install_dir().await,
     };
 
+    // The two transfer preferences the settings page has always offered and
+    // nothing ever read.
+    let options = {
+        let settings = state.settings.read().await;
+        downloader::TransferOptions {
+            files_in_flight: settings.download_concurrency,
+            verify: settings.verify_downloads,
+        }
+    };
+
     state
         .downloads
         .clone()
-        .start(app, client, manifest, target)
+        .start(app, client, manifest, target, options)
         .await
 }
 
@@ -707,11 +717,16 @@ async fn launch_game(
     });
 
     let client = state.client().await?;
-    state
+    let (minimize, share_activity) = {
+        let settings = state.settings.read().await;
+        (settings.minimize_on_launch, settings.share_activity)
+    };
+
+    let running = state
         .launcher
         .clone()
         .launch(
-            app,
+            app.clone(),
             client,
             LaunchRequest {
                 game_id,
@@ -719,9 +734,26 @@ async fn launch_game(
                 executable,
                 args,
                 working_dir: working,
+                share_activity,
             },
         )
-        .await
+        .await?;
+
+    // Only once the game actually started. Minimizing first and then failing to
+    // launch hides the error the player needs to read.
+    //
+    // This preference has been in settings.json since the settings page was
+    // written and nothing ever read it, so the switch saved a value and the
+    // window stayed exactly where it was.
+    if minimize {
+        if let Some(window) = app.get_webview_window("main") {
+            // A window that will not minimize is not a reason to report the
+            // launch as failed — the game is running either way.
+            let _ = window.minimize();
+        }
+    }
+
+    Ok(running)
 }
 
 #[tauri::command]

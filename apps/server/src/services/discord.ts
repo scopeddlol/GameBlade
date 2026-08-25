@@ -1,4 +1,5 @@
 import { and, asc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
+import type { FastifyBaseLogger } from 'fastify';
 import type { Db } from '../db/index.js';
 import { discordLinks, games, users } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
@@ -7,6 +8,25 @@ import type { SettingsService } from './settings.js';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const DISCORD_CDN = 'https://cdn.discordapp.com';
+
+/**
+ * Where a *browser* is sent to authorise, which is not the REST API.
+ *
+ * This used to be built from `DISCORD_API`, so everyone was sent to
+ * `/api/v10/oauth2/authorize` — a path that only answers to the token
+ * exchange's POST and refuses the browser's GET. The consent screen never
+ * appeared, which took the whole integration down with it: no consent, no
+ * code, no link, and so no account for the bot's guild-join to act on.
+ */
+const DISCORD_AUTHORIZE = 'https://discord.com/oauth2/authorize';
+
+/**
+ * Discord requires applications to identify themselves and will answer a
+ * request without a User-Agent with a Cloudflare challenge page rather than
+ * an API error — which, arriving as a 403 full of HTML, reads exactly like a
+ * rejected token.
+ */
+const USER_AGENT = 'GameBlade (https://github.com/scopeddlol/gameblade, 0.5.0)';
 
 /**
  * What the OAuth flow asks for, and why each one.
@@ -75,19 +95,37 @@ export class DiscordService {
     private readonly db: Db,
     private readonly settings: SettingsService,
     private readonly basePath = '',
+    private readonly logger?: FastifyBaseLogger,
   ) {}
 
   /* --------------------------------------------------------------- config */
 
+  /**
+   * The bot token as Discord wants it.
+   *
+   * Trimmed, and with a leading `Bot ` removed. The portal's Reset Token
+   * button copies the bare token, but the docs and every tutorial show it
+   * written as `Bot <token>` in an Authorization header — so it is pasted that
+   * way often enough to be worth handling. Sending `Bot Bot <token>` gets a
+   * 401 that reads exactly like a wrong token, which is the worst kind of
+   * configuration mistake: the operator re-copies a token that was already
+   * right.
+   */
+  private get botToken(): string | null {
+    const raw = this.settings.get().discordBotToken?.trim();
+    if (!raw) return null;
+    return raw.replace(/^bot\s+/i, '').trim() || null;
+  }
+
   /** Whether linking and signing in are available at all. */
   get isConfigured(): boolean {
     const { discordClientId, discordClientSecret } = this.settings.get();
-    return Boolean(discordClientId && discordClientSecret);
+    return Boolean(discordClientId?.trim() && discordClientSecret?.trim());
   }
 
   /** Whether the bot half — posting, adding people to the guild — can work. */
   get hasBot(): boolean {
-    return Boolean(this.settings.get().discordBotToken);
+    return this.botToken !== null;
   }
 
   /** What the client is allowed to know about the configuration. */
@@ -129,33 +167,51 @@ export class DiscordService {
       // impossible without visiting Discord's own settings.
       prompt: 'consent',
     });
-    return `${DISCORD_API}/oauth2/authorize?${params.toString()}`;
+    return `${DISCORD_AUTHORIZE}?${params.toString()}`;
   }
 
   /* ----------------------------------------------------------------- http */
 
   private async call<T>(path: string, init: RequestInit & { auth: string }): Promise<T> {
     const { auth, ...rest } = init;
-    const response = await fetch(`${DISCORD_API}${path}`, {
-      ...rest,
-      headers: {
-        ...(rest.headers ?? {}),
-        Authorization: auth,
-        'Content-Type': 'application/json',
-      },
-    });
 
-    if (response.status === 204) return undefined as T;
+    // Discord rate-limits per route and says how long to wait. One retry is
+    // enough for the bursts this server makes — a handful of announcements in
+    // a row — and refusing to retry at all is how a five-game scan posts two
+    // games and drops three.
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await fetch(`${DISCORD_API}${path}`, {
+        ...rest,
+        headers: {
+          ...(rest.headers ?? {}),
+          Authorization: auth,
+          // Discord asks applications to identify themselves, and answers a
+          // request with no User-Agent with a Cloudflare block page rather
+          // than an API error — which reads as "the token is wrong".
+          'User-Agent': USER_AGENT,
+          // Only when there is something to describe. A GET carrying a JSON
+          // content-type is malformed, and Cloudflare is entitled to say so.
+          ...(rest.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+      });
 
-    const text = await response.text();
-    if (!response.ok) {
-      // Discord's own message is far more useful than a status code — it names
-      // the missing permission, the bad snowflake, the unverified bot.
-      throw ApiError.badRequest(
-        `Discord refused ${path} (${response.status}): ${text.slice(0, 300)}`,
-      );
+      if (response.status === 429 && attempt === 0) {
+        const wait = retryAfterMs(response.headers.get('retry-after'));
+        this.logger?.warn({ path, wait }, 'Discord rate-limited the request; retrying once');
+        await sleep(wait);
+        continue;
+      }
+
+      if (response.status === 204) return undefined as T;
+
+      const text = await response.text();
+      if (!response.ok) {
+        // Discord's own message is far more useful than a status code — it
+        // names the missing permission, the bad snowflake, the unverified bot.
+        throw ApiError.badRequest(`${explain(response.status, path)} ${text.slice(0, 300)}`.trim());
+      }
+      return (text ? JSON.parse(text) : undefined) as T;
     }
-    return (text ? JSON.parse(text) : undefined) as T;
   }
 
   /* ---------------------------------------------------------------- oauth */
@@ -211,19 +267,26 @@ export class DiscordService {
    * can fall back to showing the invite link.
    */
   async addToGuild(discordId: string, accessToken: string): Promise<boolean> {
-    const { discordBotToken, discordGuildId } = this.settings.get();
-    if (!discordBotToken || !discordGuildId) return false;
+    const botToken = this.botToken;
+    const { discordGuildId } = this.settings.get();
+    if (!botToken || !discordGuildId) return false;
 
     try {
       await this.call(`/guilds/${discordGuildId}/members/${discordId}`, {
         method: 'PUT',
-        auth: `Bot ${discordBotToken}`,
+        auth: `Bot ${botToken}`,
         body: JSON.stringify({ access_token: accessToken }),
       });
       return true;
-    } catch {
+    } catch (error) {
       // A 204 means "already a member", which `call` treats as success; any
-      // real failure here is a permissions problem the invite link works around.
+      // real failure here is a permissions problem the invite link works
+      // around. It is logged rather than swallowed, because the operator's
+      // only other evidence is players quietly never landing in the server.
+      this.logger?.warn(
+        { err: error, discordId, guildId: discordGuildId },
+        'could not add the linked account to the Discord server',
+      );
       return false;
     }
   }
@@ -421,15 +484,15 @@ export class DiscordService {
   }
 
   private async send(payload: Record<string, unknown>, channelId?: string): Promise<void> {
-    const { discordBotToken, discordChannelId } = this.settings.get();
-    const target = channelId ?? discordChannelId;
+    const botToken = this.botToken;
+    const target = (channelId ?? this.settings.get().discordChannelId)?.trim();
 
-    if (!discordBotToken) throw ApiError.badRequest('No Discord bot token is configured');
+    if (!botToken) throw ApiError.badRequest('No Discord bot token is configured');
     if (!target) throw ApiError.badRequest('No Discord channel is configured');
 
     await this.call(`/channels/${target}/messages`, {
       method: 'POST',
-      auth: `Bot ${discordBotToken}`,
+      auth: `Bot ${botToken}`,
       body: JSON.stringify(payload),
     });
   }
@@ -451,7 +514,7 @@ export class DiscordService {
    */
   async announceNewGames(limit = 5): Promise<number> {
     const s = this.settings.get();
-    if (!s.discordAnnounceNewGames || !this.hasBot || !s.discordChannelId) return 0;
+    if (!s.discordAnnounceNewGames || !this.hasBot || !s.discordChannelId?.trim()) return 0;
 
     // Without an absolute address the embed's artwork would resolve against
     // discord.com. Posting text-only would be worse than waiting for setup.
@@ -520,11 +583,136 @@ export class DiscordService {
 
   /** Confirms the bot token works and says who it is. */
   async botIdentity(): Promise<{ id: string; username: string }> {
-    const { discordBotToken } = this.settings.get();
-    if (!discordBotToken) throw ApiError.badRequest('No Discord bot token is configured');
+    const botToken = this.botToken;
+    if (!botToken) throw ApiError.badRequest('No Discord bot token is configured');
     return this.call<{ id: string; username: string }>('/users/@me', {
-      auth: `Bot ${discordBotToken}`,
+      auth: `Bot ${botToken}`,
     });
+  }
+
+  /**
+   * Everything that has to be true before an announcement can arrive, checked
+   * one at a time.
+   *
+   * "Test" used to prove the token and stop. That answers the one question an
+   * operator is least likely to have got wrong, and none of the three that
+   * actually break this: a bot that was never invited to the server, a channel
+   * id copied from the wrong place, and the Send Messages permission missing
+   * on the channel itself. Each failure is reported against its own step, with
+   * Discord's own words, so the panel says which part to go and fix rather
+   * than "it did not work".
+   */
+  async diagnose(): Promise<{
+    bot: { id: string; username: string } | null;
+    checks: Array<{ id: string; label: string; ok: boolean; detail: string }>;
+  }> {
+    const botToken = this.botToken;
+    const s = this.settings.get();
+    const checks: Array<{ id: string; label: string; ok: boolean; detail: string }> = [];
+    let bot: { id: string; username: string } | null = null;
+
+    if (!botToken) {
+      checks.push({
+        id: 'token',
+        label: 'Bot token',
+        ok: false,
+        detail: 'No bot token is stored. Paste one from the application’s Bot tab.',
+      });
+      return { bot, checks };
+    }
+
+    try {
+      bot = await this.botIdentity();
+      checks.push({
+        id: 'token',
+        label: 'Bot token',
+        ok: true,
+        detail: `Discord answered as ${bot.username}.`,
+      });
+    } catch (error) {
+      checks.push({ id: 'token', label: 'Bot token', ok: false, detail: reason(error) });
+      // Nothing below can succeed without it, and each would fail the same way.
+      return { bot, checks };
+    }
+
+    const guildId = s.discordGuildId?.trim();
+    if (guildId) {
+      try {
+        const member = await this.call<{ nick?: string | null }>(
+          `/guilds/${guildId}/members/${bot.id}`,
+          { auth: `Bot ${botToken}` },
+        );
+        checks.push({
+          id: 'guild',
+          label: 'In your Discord server',
+          ok: true,
+          detail: member ? 'The bot is a member of the server.' : 'The bot is a member.',
+        });
+      } catch (error) {
+        checks.push({
+          id: 'guild',
+          label: 'In your Discord server',
+          ok: false,
+          detail: `${reason(error)} Invite the bot to the server, or check the server ID.`,
+        });
+      }
+    }
+
+    const channelId = s.discordChannelId?.trim();
+    if (!channelId) {
+      checks.push({
+        id: 'channel',
+        label: 'Announcement channel',
+        ok: false,
+        detail: 'No channel ID is set, so there is nowhere to post.',
+      });
+      return { bot, checks };
+    }
+
+    try {
+      const channel = await this.call<{ id: string; name?: string; type: number }>(
+        `/channels/${channelId}`,
+        { auth: `Bot ${botToken}` },
+      );
+      checks.push({
+        id: 'channel',
+        label: 'Announcement channel',
+        ok: true,
+        detail: channel.name ? `Found #${channel.name}.` : 'The channel is visible to the bot.',
+      });
+    } catch (error) {
+      checks.push({
+        id: 'channel',
+        label: 'Announcement channel',
+        ok: false,
+        detail: `${reason(error)} Check the channel ID, and that the bot can see that channel.`,
+      });
+      return { bot, checks };
+    }
+
+    // The only check that proves the whole path, so it is worth the message:
+    // View Channel without Send Messages passes every step above and still
+    // posts nothing.
+    try {
+      await this.send({
+        content: 'GameBlade is connected. This is a test message from your archive.',
+      });
+      checks.push({
+        id: 'post',
+        label: 'Posting',
+        ok: true,
+        detail: 'A test message was posted to the channel.',
+      });
+    } catch (error) {
+      checks.push({
+        id: 'post',
+        label: 'Posting',
+        ok: false,
+        detail: `${reason(error)} Give the bot Send Messages on that channel.`,
+      });
+    }
+
+    return { bot, checks };
   }
 
   /** Authenticates the REST-backed bot when the server starts. */
@@ -532,6 +720,40 @@ export class DiscordService {
     if (!this.hasBot) return null;
     return this.botIdentity();
   }
+}
+
+/** How long Discord asked us to wait, clamped to something a request can sit through. */
+function retryAfterMs(header: string | null): number {
+  const seconds = Number(header);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 1000;
+  return Math.min(seconds * 1000, 10_000);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * A status code in the operator's terms.
+ *
+ * The bare "Discord refused /channels/123 (403)" is accurate and useless: the
+ * three codes that actually come up here each mean one specific thing that is
+ * gone about differently.
+ */
+function explain(status: number, path: string): string {
+  if (status === 401) return 'Discord rejected the bot token — it is wrong, or it has been reset.';
+  if (status === 403) {
+    return 'Discord allowed the token but refused the action — the bot is missing a permission here.';
+  }
+  if (status === 404) {
+    return 'Discord has no such channel, server or member — check the ID, and that the bot can see it.';
+  }
+  return `Discord refused ${path} (${status}):`;
+}
+
+/** The message out of whatever `call` threw, for a check's detail line. */
+function reason(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : 'Discord refused the request.';
 }
 
 /** Keeps an embed description inside something a reader will actually read. */

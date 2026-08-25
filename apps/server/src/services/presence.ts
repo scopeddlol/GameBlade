@@ -23,6 +23,18 @@ export class PresenceService {
   private readonly states = new Map<string, PresenceState>();
   private readonly listeners = new Set<(userId: string, state: PresenceState) => void>();
 
+  /**
+   * Who has asked not to have the game they are playing published.
+   *
+   * In memory alongside the presence it hides, and for the same reason: it
+   * only means anything while a session is running, and it is set by whichever
+   * machine started that session. A player can then appear online from a
+   * machine they would rather stay quiet on without changing what their other
+   * machines do, which is exactly what the client's per-machine switch says on
+   * the tin — and, until this existed, the one thing it did not do.
+   */
+  private readonly quiet = new Set<string>();
+
   onChange(listener: (userId: string, state: PresenceState) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -70,6 +82,7 @@ export class PresenceService {
     }
 
     this.states.delete(userId);
+    this.quiet.delete(userId);
     this.emit(userId, {
       status: 'offline',
       gameId: null,
@@ -79,11 +92,26 @@ export class PresenceService {
     });
   }
 
+  /**
+   * Whether this player's game is published while they are playing.
+   *
+   * Set when a session starts and cleared when it ends, so it can never
+   * outlive the session that asked for it — a client that dies mid-game leaves
+   * the flag behind, and the sweep that takes them offline takes it too.
+   */
+  setSharing(userId: string, share: boolean): void {
+    if (share) this.quiet.delete(userId);
+    else this.quiet.add(userId);
+  }
+
   update(userId: string, status: PresenceStatus, gameId: string | null): void {
     const current = this.states.get(userId);
+    // Held back here rather than at each caller: the heartbeat re-asserts
+    // in-game every time it fires, so anywhere else this would last one beat.
+    const shown = this.quiet.has(userId) ? null : gameId;
     // `in-game` without a game is meaningless; treat it as plain online so a
     // buggy client cannot pin a friend to "playing nothing".
-    const resolved: PresenceStatus = status === 'in-game' && !gameId ? 'online' : status;
+    const resolved: PresenceStatus = status === 'in-game' && !shown ? 'online' : status;
 
     if (!PRESENCE_STATUS.includes(resolved)) return;
     if (resolved === 'offline') {
@@ -91,13 +119,13 @@ export class PresenceService {
       return;
     }
 
-    const unchanged = current && current.status === resolved && current.gameId === (gameId ?? null);
+    const unchanged = current && current.status === resolved && current.gameId === (shown ?? null);
     if (unchanged) {
       current.updatedAt = isoNow();
       return;
     }
 
-    this.set(userId, resolved, gameId ?? null, current?.connections ?? 1);
+    this.set(userId, resolved, shown ?? null, current?.connections ?? 1);
   }
 
   /** Marks stale entries offline so a dropped socket cannot pin someone online. */
@@ -107,6 +135,7 @@ export class PresenceService {
     for (const [userId, state] of this.states) {
       if (new Date(state.updatedAt).getTime() >= cutoff) continue;
       this.states.delete(userId);
+      this.quiet.delete(userId);
       dropped.push(userId);
       this.emit(userId, {
         status: 'offline',

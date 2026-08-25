@@ -91,7 +91,11 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:', 'blob:'],
+        // Discord serves linked players' avatars from its own CDN, and the
+        // account page, the friends list and the social tab all render one.
+        // Without this they are blocked by the policy and every linked player
+        // shows a broken image.
+        imgSrc: ["'self'", 'data:', 'blob:', 'https://cdn.discordapp.com'],
         mediaSrc: ["'self'"],
         connectSrc: ["'self'"],
         frameSrc: ["'self'", 'https://www.youtube.com'],

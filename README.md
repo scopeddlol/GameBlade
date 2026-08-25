@@ -207,6 +207,11 @@ redirect to where each page moved.
     anything. Opening one gives a full metadata editor: fields, artwork slots,
     screenshots, Steam achievement import, and the launch and save rules the
     desktop client needs to actually run and back up that game.
+  - **Achievements** — the same job for the whole catalog rather than one game
+    at a time. Pick as many games as you like and it works through them,
+    finding each on Steam, importing its published achievement list and writing
+    the unlock rules, reporting what happened to every one. Games Steam cannot
+    help with take a pasted list instead. See [Achievements](#achievements).
   - **Featured** — curates the carousel on the client's Home tab, in order,
     with a per-slot image override.
   - **Save paths** — where each game keeps its saves, matched against a public
@@ -446,9 +451,15 @@ on their account page, and re-linking — which happens on every Discord sign-in
 
 **The bot** needs a token, a channel and this server's public address. The
 address is for cover art: Discord fetches images itself, so a relative path
-would resolve against discord.com. **Test** proves the token works before you
-rely on it. It can post whatever you type, announce newly added games every
-fifteen minutes, and announce requests as they are granted. Turning
+would resolve against discord.com. Paste the bare token from the Bot tab; a
+token pasted as `Bot <token>` is accepted too. **Test** walks every step
+between that token and a message arriving — the token itself, whether the bot
+was ever invited to your server, whether it can see the channel you named, and
+whether it may post there — and reports each separately, because those are the
+things that actually go wrong and they all look identical from outside. A
+passing run leaves a test message in the channel. It can post whatever you
+type, announce newly added games every fifteen minutes, and announce requests
+as they are granted. Turning
 announcements on starts from that moment rather than posting everything already
 in the catalog, and only games whose metadata matched are announced — an
 unmatched entry is a folder name with no cover and no blurb.
@@ -607,6 +618,29 @@ app id. This reads Steam's _published_ achievement schema — no player data is
 requested and no Steam account is linked — which is what makes it usable for a
 DRM-free copy of a game that also ships there. Global unlock rates come along
 with it and set each achievement's point value.
+
+### In bulk
+
+One game at a time is right for a correction and hopeless as a way to cover a
+catalog of several hundred, so **Admin → Catalog → Achievements** does the same
+job across as many games as you select.
+
+It starts on the games that have none. Tick the ones you want — or all of them —
+and it works through the list, finding each on Steam, importing its published
+list and writing the unlock rules, a few games at a time so you can watch it go
+and stop it. Every game gets a line saying what happened, and the ones that
+could not be done automatically sort to the top: a title Steam places
+ambiguously, one it has never heard of, and one whose store entry has no
+achievements are all ordinary across a real catalog, and each is a note rather
+than a failed run. Games that already have achievements are left alone unless
+you say otherwise, so running it again only picks up what is new.
+
+For the games Steam cannot help with — a fan translation, an itch-only release,
+a version whose store entry predates its achievements — the same page takes a
+pasted list. One per line: the name, then optionally a description, a point
+value and a key, separated by tabs, commas or pipes, so a column copied out of
+a spreadsheet or a wiki table works as it is. A missing key is derived from the
+name and stays stable, so a corrected list can simply be pasted again.
 
 Because the client is the only thing that can observe progress, unlocks are
 self-reported and therefore not cheat-proof. The server keeps them idempotent

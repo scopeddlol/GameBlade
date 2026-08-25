@@ -39,7 +39,7 @@ export function AdminUsersPage() {
   if (usersQuery.isLoading) return <RowSkeleton rows={5} />;
 
   return (
-    <section className="gb-card mx-auto max-w-5xl p-5">
+    <section className="gb-card gb-page p-5">
       <h2 className="mb-4 text-sm font-semibold tracking-wide uppercase">Users</h2>
       <FormError message={error} />
       <div className="divide-ink-700/70 divide-y">

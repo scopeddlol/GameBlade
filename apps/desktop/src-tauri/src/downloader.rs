@@ -27,6 +27,38 @@ const FILES_IN_FLIGHT: usize = 4;
 const MAX_ATTEMPTS: u32 = 6;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(400);
 
+/// The two transfer preferences a download honours.
+///
+/// Both have lived in settings.json since the settings page was written and
+/// neither was ever read: the download ran at a fixed four files at a time and
+/// always verified. So the slider and the switch saved a value and changed
+/// nothing, which is worse than not offering them. They are passed in from the
+/// command rather than read here so the downloader keeps no opinion about
+/// where preferences live.
+#[derive(Debug, Clone, Copy)]
+pub struct TransferOptions {
+    /// How many files move at once. Clamped, because a settings file is a text
+    /// file somebody can edit and zero would simply hang.
+    pub files_in_flight: usize,
+    /// Check each finished file against the server's SHA-256 where it has one.
+    pub verify: bool,
+}
+
+impl Default for TransferOptions {
+    fn default() -> Self {
+        Self {
+            files_in_flight: FILES_IN_FLIGHT,
+            verify: true,
+        }
+    }
+}
+
+impl TransferOptions {
+    fn files_in_flight(self) -> usize {
+        self.files_in_flight.clamp(1, MAX_CONNECTIONS_PER_GAME)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadStatus {
@@ -260,6 +292,7 @@ impl DownloadManager {
         client: ApiClient,
         manifest: DownloadManifest,
         destination: PathBuf,
+        options: TransferOptions,
     ) -> AppResult<()> {
         let game_id = manifest.game_id.clone();
 
@@ -326,6 +359,7 @@ impl DownloadManager {
                 root,
                 state.clone(),
                 cancel.clone(),
+                options,
             )
             .await;
 
@@ -376,6 +410,7 @@ async fn run_download(
     root: PathBuf,
     state: Arc<Mutex<DownloadState>>,
     cancel: Arc<AtomicBool>,
+    options: TransferOptions,
 ) -> AppResult<()> {
     tokio::fs::create_dir_all(&root).await?;
 
@@ -459,11 +494,12 @@ async fn run_download(
                     downloaded,
                     cancel,
                     connections,
+                    options,
                 )
                 .await
             }
         })
-        .buffer_unordered(FILES_IN_FLIGHT);
+        .buffer_unordered(options.files_in_flight());
 
     while let Some(file_result) = files.next().await {
         match file_result {
@@ -524,6 +560,7 @@ fn archive_file_path(root: &Path, kind: &str, files: &[ManifestFile]) -> Option<
         .map(|rel| root.join(rel))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn download_file(
     client: &ApiClient,
     manifest: &DownloadManifest,
@@ -532,6 +569,7 @@ async fn download_file(
     downloaded: Arc<AtomicU64>,
     cancel: Arc<AtomicBool>,
     connections: Arc<Semaphore>,
+    options: TransferOptions,
 ) -> AppResult<()> {
     let relative = sanitise_relative_path(&file.path)?;
     let dest = root.join(&relative);
@@ -625,7 +663,10 @@ async fn download_file(
     // Everything landed, so the resume sidecar is no longer needed.
     let _ = tokio::fs::remove_file(&part_path).await;
 
-    if let Some(expected) = file.sha256.as_ref() {
+    // Hashing a 40 GB file costs real minutes on a slow disk, which is the
+    // whole reason this is a preference — and until now the preference did
+    // nothing and everyone paid it.
+    if let Some(expected) = file.sha256.as_ref().filter(|_| options.verify) {
         let actual = hash_file(&dest).await?;
         if !actual.eq_ignore_ascii_case(expected) {
             let _ = tokio::fs::remove_file(&dest).await;

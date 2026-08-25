@@ -21,7 +21,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ArtworkPicker } from '../../components/ArtworkPicker.js';
 import {
@@ -194,7 +194,7 @@ export function AdminCatalogPage() {
   const gaps = statsQuery.data?.gaps;
 
   return (
-    <div className="space-y-6">
+    <div className="gb-page">
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-ink-300 text-sm">
           {listQuery.data ? `${listQuery.data.total.toLocaleString()} games` : ''}
@@ -453,6 +453,33 @@ function MatchBadge({ status }: { status: GameSummary['matchStatus'] }) {
   return <Badge tone="warning">Unmatched</Badge>;
 }
 
+/**
+ * Refreshes the worklist behind the editor.
+ *
+ * The page is used as a triage queue — filter by "No launch exec", open one,
+ * fix it, next — and each editor used to invalidate only its own query. So the
+ * row you had just fixed stayed in a filtered list, still wearing the pill for
+ * the thing it no longer lacked, and the chip counts stayed wrong, until
+ * something else happened to make the list stale. Every mutation that can
+ * change whether a game answers a filter goes through this instead, so the row
+ * leaves the list on save.
+ */
+function useCatalogRefresh() {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (gameId?: string) =>
+      Promise.all([
+        // The list itself, and the server-wide gap counts behind the chips.
+        queryClient.invalidateQueries({ queryKey: ['admin', 'catalog'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin', 'stats'] }),
+        gameId
+          ? queryClient.invalidateQueries({ queryKey: ['admin', 'game', gameId] })
+          : Promise.resolve(),
+      ]),
+    [queryClient],
+  );
+}
+
 /* ------------------------------------------------------------------ editor */
 
 const EDITOR_TABS = [
@@ -545,7 +572,6 @@ function textToList(value: string): string[] {
 }
 
 function MetadataTab({ game }: { game: GameDetail }) {
-  const queryClient = useQueryClient();
   const [form, setForm] = useState({
     title: game.title,
     summary: game.summary ?? '',
@@ -561,10 +587,8 @@ function MetadataTab({ game }: { game: GameDetail }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [candidateQuery, setCandidateQuery] = useState('');
 
-  const invalidate = async () => {
-    await queryClient.invalidateQueries({ queryKey: ['admin', 'game', game.id] });
-    await queryClient.invalidateQueries({ queryKey: ['admin', 'catalog'] });
-  };
+  const refreshCatalog = useCatalogRefresh();
+  const invalidate = () => refreshCatalog(game.id);
 
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -782,17 +806,13 @@ const ART_SLOTS = [
 }>;
 
 function ArtworkTab({ game }: { game: GameDetail }) {
-  const queryClient = useQueryClient();
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState<ArtKind | null>(null);
   const [pickingScreenshots, setPickingScreenshots] = useState(false);
 
-  const invalidate = async () => {
-    await queryClient.invalidateQueries({ queryKey: ['admin', 'game', game.id] });
-    await queryClient.invalidateQueries({ queryKey: ['admin', 'catalog'] });
-    await queryClient.invalidateQueries({ queryKey: ['admin', 'stats'] });
-  };
+  const refreshCatalog = useCatalogRefresh();
+  const invalidate = () => refreshCatalog(game.id);
 
   const setMutation = useMutation({
     mutationFn: ({ kind, url }: { kind: ArtKind; url: string | null }) =>
@@ -989,6 +1009,7 @@ function ArtworkTab({ game }: { game: GameDetail }) {
 
 function AchievementsTab({ game }: { game: GameDetail }) {
   const queryClient = useQueryClient();
+  const refreshCatalog = useCatalogRefresh();
   const [steamAppId, setSteamAppId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -1008,6 +1029,7 @@ function AchievementsTab({ game }: { game: GameDetail }) {
       setNotice(`Imported ${result.imported} achievements.`);
       setError(null);
       await queryClient.invalidateQueries({ queryKey: ['admin', 'achievements', game.id] });
+      await refreshCatalog(game.id);
     },
     onError: (caught) =>
       setError(caught instanceof ApiRequestError ? caught.message : 'Import failed.'),
@@ -1026,6 +1048,7 @@ function AchievementsTab({ game }: { game: GameDetail }) {
         `Found Steam AppID ${result.steamAppId} and imported ${result.imported} achievements.`,
       );
       await queryClient.invalidateQueries({ queryKey: ['admin', 'achievements', game.id] });
+      await refreshCatalog(game.id);
     },
     onError: (caught) =>
       setError(caught instanceof ApiRequestError ? caught.message : 'Could not search Steam.'),
@@ -1048,8 +1071,11 @@ function AchievementsTab({ game }: { game: GameDetail }) {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/games/${game.id}/achievements/${id}`),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['admin', 'achievements', game.id] }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'achievements', game.id] });
+      // Deleting the last one puts the game back under "No achievements".
+      await refreshCatalog(game.id);
+    },
   });
 
   return (
@@ -1203,6 +1229,7 @@ function splitPathTemplate(template: string): { base: string; sub: string } {
  */
 function RulesTab({ gameId }: { gameId: string }) {
   const queryClient = useQueryClient();
+  const refreshCatalog = useCatalogRefresh();
   const [error, setError] = useState<string | null>(null);
 
   const rulesQuery = useQuery({
@@ -1243,7 +1270,13 @@ function RulesTab({ gameId }: { gameId: string }) {
 
   const pathTemplate = saveSub ? `${saveBase}\\${saveSub.replace(/^[\\/]+/, '')}` : saveBase;
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin', 'rules', gameId] });
+  // Both filters the worklist is most used with — "No launch exec" and "No
+  // cloud saving" — are answered by exactly what this form writes, so the list
+  // behind the editor is refreshed with it.
+  const invalidate = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['admin', 'rules', gameId] });
+    await refreshCatalog(gameId);
+  };
 
   const saveLaunch = useMutation({
     mutationFn: () =>

@@ -202,7 +202,11 @@ export function AdminLandingPage() {
   };
 
   return (
-    <div className="space-y-4">
+    // No `gb-page` here, deliberately: this is the one admin screen that is a
+    // split editor — a block list beside a live preview of the page it builds
+    // — and capping it would squeeze the preview into something that no longer
+    // resembles what a visitor sees.
+    <div className="space-y-6">
       {landingQuery.data?.isCustomised ? (
         <p>
           <Badge tone="info">Customised</Badge>
@@ -505,7 +509,11 @@ function BlockEditor({
               onChange={(event) => onChange({ headline: event.target.value })}
             />
           </Field>
-          <Field label="Subheadline" htmlFor={`s-${block.id}`} hint="Blank uses the tagline.">
+          <Field
+            label="Subheadline"
+            htmlFor={`s-${block.id}`}
+            hint="Blank uses the tagline from Settings → Server."
+          >
             <textarea
               id={`s-${block.id}`}
               className="gb-input min-h-20"

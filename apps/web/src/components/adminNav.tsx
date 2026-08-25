@@ -73,6 +73,11 @@ export const ADMIN_SECTIONS: AdminSection[] = [
         prefetch: [{ key: ['admin', 'stats'], path: '/admin/stats' }],
       },
       {
+        to: '/admin/catalog/achievements',
+        label: 'Achievements',
+        prefetch: [{ key: ['admin', 'stats'], path: '/admin/stats' }],
+      },
+      {
         to: '/admin/catalog/featured',
         label: 'Featured',
         prefetch: [{ key: ['admin', 'featured'], path: '/admin/featured' }],

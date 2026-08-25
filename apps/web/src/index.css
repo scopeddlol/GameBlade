@@ -172,6 +172,24 @@
     @apply bg-ink-850 border-ink-700/70 rounded-xl border;
   }
 
+  /*
+   * One shell for an admin page's content, in two widths.
+   *
+   * Every page had picked its own: 2xl here, 3xl there, 5xl on the next one,
+   * half of them centred and half left-aligned, and the vertical rhythm split
+   * between 4 and 6. Moving between two sub-tabs of the same section therefore
+   * shifted the column width *and* slid the whole page sideways, which reads
+   * as the panel being assembled from unrelated screens. Two widths is the
+   * real distinction: a form is a reading column and gets narrow, a table or a
+   * worklist wants the room.
+   */
+  .gb-page {
+    @apply mx-auto w-full max-w-5xl space-y-6;
+  }
+  .gb-page-narrow {
+    @apply mx-auto w-full max-w-3xl space-y-6;
+  }
+
   .gb-label {
     @apply text-ink-300 mb-1.5 block text-xs font-medium tracking-wide uppercase;
   }

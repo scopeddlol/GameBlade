@@ -9,6 +9,7 @@ import { PageLoader } from './components/ui.js';
 import { useSession } from './hooks/useSession.js';
 import { useApplyTheme } from './hooks/useTheme.js';
 import { api } from './lib/api.js';
+import { AdminAchievementsPage } from './pages/admin/AdminAchievementsPage.js';
 import { AdminCatalogPage } from './pages/admin/AdminCatalogPage.js';
 import { AdminAnalyticsPage } from './pages/admin/AdminAnalyticsPage.js';
 import { AdminLandingPage } from './pages/admin/AdminLandingPage.js';
@@ -119,6 +120,7 @@ export function App() {
         <Route element={<AdminSection />}>
           <Route path="catalog">
             <Route index element={<AdminCatalogPage />} />
+            <Route path="achievements" element={<AdminAchievementsPage />} />
             <Route path="featured" element={<AdminFeaturedPage />} />
             <Route path="save-paths" element={<AdminSavePathsPage />} />
             <Route path="libraries" element={<AdminLibrariesPage />} />

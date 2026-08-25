@@ -18,7 +18,12 @@ export async function playRoutes(app: FastifyInstance): Promise<void> {
   app.post('/play/sessions', async (request, reply) => {
     const context = requireUser(request);
     const input = startPlaySessionSchema.parse(request.body);
-    const session = playtime.start(context.user.id, input.gameId, context.device?.id ?? null);
+    const session = playtime.start(
+      context.user.id,
+      input.gameId,
+      context.device?.id ?? null,
+      input.shareActivity,
+    );
     return reply.code(201).send(session);
   });
 

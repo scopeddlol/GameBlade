@@ -126,7 +126,10 @@ export function AdminAnalyticsPage() {
   const logRows = compact ? 12 : 40;
 
   return (
-    <div className={compact ? 'space-y-3' : 'space-y-6'}>
+    // Compact is this page embedded as a panel on the Overview, where it has
+    // to fit whatever it is given; on its own it takes the same shell as every
+    // other admin page.
+    <div className={compact ? 'space-y-3' : 'gb-page'}>
       <div className="flex flex-wrap items-center gap-2">
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           {RANGES.map((range) => (

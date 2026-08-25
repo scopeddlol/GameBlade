@@ -54,7 +54,7 @@ export function AdminLibrariesPage() {
   const scanning = progress?.state === 'scanning' || progress?.state === 'matching';
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="gb-page">
       <section className="gb-card p-5">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-semibold tracking-wide uppercase">Scan</h2>

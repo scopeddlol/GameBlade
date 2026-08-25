@@ -19,8 +19,6 @@ import {
   EyeOff,
   FolderPlus,
   HardDrive,
-  LayoutGrid,
-  List,
   LogOut,
   MonitorSmartphone,
   Palette,
@@ -29,7 +27,7 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import {
   Artwork,
   Avatar,
@@ -52,6 +50,7 @@ export function SettingsTab() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState<ClientSettings | null>(null);
+  const [active, setActive] = useState<SettingsSectionId>(SETTINGS_SECTIONS[0].id);
 
   const settingsQuery = useQuery({
     queryKey: ['settings'],
@@ -93,194 +92,221 @@ export function SettingsTab() {
       {notice ? <p className="notice">{notice}</p> : null}
 
       <div className="settings-layout">
-        <SettingsNav />
+        <SettingsNav active={active} onSelect={setActive} />
 
-        <div className="settings-sections">
-          <ProfileSection onError={setError} />
+        {/* Keyed on the section, so React remounts the panel and the glow that
+            confirms the click plays every time rather than only on the first. */}
+        <div
+          key={active}
+          id={`panel-${active}`}
+          role="tabpanel"
+          aria-labelledby={`tab-${active}`}
+          className="settings-panel"
+          tabIndex={-1}
+        >
+          {active === 'profile' ? <ProfileSection onError={setError} /> : null}
 
-          <AppearanceSection draft={draft} onUpdate={update} />
+          {active === 'appearance' ? <AppearanceSection draft={draft} onUpdate={update} /> : null}
 
-          <section className="card" id="settings-storage">
-            <SectionHeader
-              title="Storage locations"
-              subtitle="Where games install to. Installing a game offers a choice whenever more than one is set up."
-            />
-            <StorageLocationsField draft={draft} onUpdate={update} />
-          </section>
-
-          <section className="card" id="settings-downloads">
-            <SectionHeader title="Downloads and installs" />
-
-            <label className="field">
-              <span>Simultaneous transfers</span>
-              <input
-                type="range"
-                min={1}
-                max={16}
-                value={draft.downloadConcurrency}
-                onChange={(e) => update({ downloadConcurrency: Number(e.target.value) })}
+          {active === 'storage' ? (
+            <section className="card">
+              <SectionHeader
+                title="Storage locations"
+                subtitle="Where games install to. Installing a game offers a choice whenever more than one is set up."
               />
-              <span className="muted small">
-                {draft.downloadConcurrency} at a time. More helps on a fast connection with many
-                small files, and hurts on a slow one.
-              </span>
-            </label>
+              <StorageLocationsField draft={draft} onUpdate={update} />
+            </section>
+          ) : null}
 
-            <Toggle
-              label="Verify downloads"
-              hint="Check each file against the server's checksum after downloading."
-              checked={draft.verifyDownloads}
-              onChange={(verifyDownloads) => update({ verifyDownloads })}
-            />
-          </section>
+          {active === 'downloads' ? (
+            <section className="card">
+              <SectionHeader title="Downloads and installs" />
 
-          <section className="card" id="settings-saves">
-            <SectionHeader title="Cloud saves" />
+              <label className="field">
+                <span>Simultaneous transfers</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={16}
+                  value={draft.downloadConcurrency}
+                  onChange={(e) => update({ downloadConcurrency: Number(e.target.value) })}
+                />
+                <span className="muted small">
+                  {draft.downloadConcurrency} at a time. More helps on a fast connection with many
+                  small files, and hurts on a slow one.
+                </span>
+              </label>
 
-            <Toggle
-              label="Sync saves automatically"
-              hint="Pull before launching and push after quitting."
-              checked={draft.syncSaves}
-              onChange={(syncSaves) => update({ syncSaves })}
-            />
+              <Toggle
+                label="Verify downloads"
+                hint="Check each file against the server's checksum after downloading."
+                checked={draft.verifyDownloads}
+                onChange={(verifyDownloads) => update({ verifyDownloads })}
+              />
+            </section>
+          ) : null}
 
-            <Toggle
-              label="Ask before overwriting"
-              hint="When both this machine and the cloud have changed, choose which copy to keep instead of picking the newer one."
-              checked={draft.promptOnSaveConflict}
-              onChange={(promptOnSaveConflict) => update({ promptOnSaveConflict })}
-            />
+          {active === 'saves' ? (
+            <section className="card">
+              <SectionHeader title="Cloud saves" />
 
-            <SaveUsage />
-          </section>
+              <Toggle
+                label="Sync saves automatically"
+                hint="Pull before launching and push after quitting."
+                checked={draft.syncSaves}
+                onChange={(syncSaves) => update({ syncSaves })}
+              />
 
-          <section className="card" id="settings-privacy">
-            <SectionHeader title="Privacy and presence" />
+              <Toggle
+                label="Ask before overwriting"
+                hint="When both this machine and the cloud have changed, choose which copy to keep instead of picking the newer one."
+                checked={draft.promptOnSaveConflict}
+                onChange={(promptOnSaveConflict) => update({ promptOnSaveConflict })}
+              />
 
-            <Toggle
-              label="Share what I'm playing"
-              hint="Turn this off to appear online without naming the game. Your profile's own privacy setting still applies on top."
-              checked={draft.shareActivity}
-              onChange={(shareActivity) => update({ shareActivity })}
-            />
+              <SaveUsage />
+            </section>
+          ) : null}
 
-            <Toggle
-              label="Minimize when a game starts"
-              checked={draft.minimizeOnLaunch}
-              onChange={(minimizeOnLaunch) => update({ minimizeOnLaunch })}
-            />
-          </section>
+          {active === 'privacy' ? (
+            <section className="card">
+              <SectionHeader title="Privacy and presence" />
 
-          <DevicesSection onError={setError} />
+              <Toggle
+                label="Share what I'm playing"
+                hint="Turn this off to appear online without naming the game. Your profile's own privacy setting still applies on top."
+                checked={draft.shareActivity}
+                onChange={(shareActivity) => update({ shareActivity })}
+              />
 
-          <MyReportsSection />
+              <Toggle
+                label="Minimize when a game starts"
+                checked={draft.minimizeOnLaunch}
+                onChange={(minimizeOnLaunch) => update({ minimizeOnLaunch })}
+              />
+            </section>
+          ) : null}
 
-          <section className="card" id="settings-account">
-            <SectionHeader title="Account" />
-            <p className="muted small">
-              Signed in as <strong>{session?.username}</strong>
-            </p>
-            <button type="button" className="btn btn-danger" onClick={() => void signOut()}>
-              <LogOut size={15} aria-hidden />
-              Sign out
-            </button>
-          </section>
+          {active === 'devices' ? <DevicesSection onError={setError} /> : null}
+
+          {active === 'reports' ? <MyReportsSection /> : null}
+
+          {active === 'account' ? (
+            <section className="card">
+              <SectionHeader title="Account" />
+              <p className="muted small">
+                Signed in as <strong>{session?.username}</strong>
+              </p>
+              <button type="button" className="btn btn-danger" onClick={() => void signOut()}>
+                <LogOut size={15} aria-hidden />
+                Sign out
+              </button>
+            </section>
+          ) : null}
         </div>
       </div>
     </div>
   );
 }
 
-/** The sections, in the order they are laid out, for the jump list. */
+/** The sections, in the order they are offered. */
 const SETTINGS_SECTIONS = [
-  { id: 'settings-profile', label: 'Profile', Icon: UserRound },
-  { id: 'settings-appearance', label: 'Appearance', Icon: Palette },
-  { id: 'settings-storage', label: 'Storage', Icon: HardDrive },
-  { id: 'settings-downloads', label: 'Downloads', Icon: Download },
-  { id: 'settings-saves', label: 'Cloud saves', Icon: CloudUpload },
-  { id: 'settings-privacy', label: 'Privacy', Icon: EyeOff },
-  { id: 'settings-devices', label: 'Devices', Icon: MonitorSmartphone },
-  { id: 'settings-reports', label: 'Your reports', Icon: Bug },
-  { id: 'settings-account', label: 'Account', Icon: LogOut },
+  { id: 'profile', label: 'Profile', Icon: UserRound },
+  { id: 'appearance', label: 'Appearance', Icon: Palette },
+  { id: 'storage', label: 'Storage', Icon: HardDrive },
+  { id: 'downloads', label: 'Downloads', Icon: Download },
+  { id: 'saves', label: 'Cloud saves', Icon: CloudUpload },
+  { id: 'privacy', label: 'Privacy', Icon: EyeOff },
+  { id: 'devices', label: 'Devices', Icon: MonitorSmartphone },
+  { id: 'reports', label: 'Your reports', Icon: Bug },
+  { id: 'account', label: 'Account', Icon: LogOut },
 ] as const;
 
-/** Noted once so the bottom clamp does not index past the end of the list. */
-const LAST_SECTION: string = SETTINGS_SECTIONS[SETTINGS_SECTIONS.length - 1]?.id ?? '';
+type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id'];
 
 /**
- * Jump list down the side of the settings page.
+ * Which part of settings you are looking at.
  *
- * The page is several screens tall whatever is done to it — there are simply
- * that many preferences — so the fix for "I cannot find the one I want" is a
- * way to go straight to it, not more scrolling. It tracks what is on screen so
- * the list also answers "where am I".
+ * This was a jump list over one very long page: every section rendered at
+ * once, laid out in two columns, with the highlight worked out from scroll
+ * position. Two columns meant the order down the page was not the order in the
+ * list, so the highlight tracked something nobody could see a reason for;
+ * clicking scrolled a card to somewhere in the middle of the screen and the
+ * spy immediately disagreed about where that had left you; and nine entries
+ * two pixels apart made a mis-click as likely as a hit.
+ *
+ * So it is a real tab strip now. One section is on screen, the tab that opened
+ * it stays lit, and there is nothing left for scrolling to argue with. The
+ * strip is a `tablist`, so arrow keys move along it and Home/End jump to the
+ * ends — which is how a keyboard expects tabs to behave, and is the part that
+ * gets left out when a nav is only ever clicked.
  */
-function SettingsNav() {
-  const [active, setActive] = useState<string>(SETTINGS_SECTIONS[0].id);
-
-  useEffect(() => {
-    // Whichever section's top has most recently passed the reading line near
-    // the top of the page. Computed from scroll position rather than observed
-    // intersections: an observer reports whatever the layout happened to be
-    // when it first ran, which with artwork still loading is the wrong answer
-    // and stays wrong until the next scroll.
-    const LINE = 120;
-
-    // The tab body scrolls, not the window. Looked up directly rather than
-    // walked up from a section: the first one is still loading when this runs,
-    // so starting from it would bind the listener to the window, which never
-    // scrolls, and the highlight would never move again.
-    const scroller: HTMLElement | Window = document.querySelector<HTMLElement>('.scroll') ?? window;
-
-    const recompute = () => {
-      // The last sections can never reach the reading line — there is not
-      // enough page below them to scroll — so at the bottom the final one is
-      // what the reader is looking at, whatever the geometry says.
-      const box = scroller instanceof Window ? document.documentElement : scroller;
-      if (box.scrollTop + box.clientHeight >= box.scrollHeight - 4) {
-        setActive(LAST_SECTION);
-        return;
-      }
-
-      let current: string = SETTINGS_SECTIONS[0].id;
-      for (const entry of SETTINGS_SECTIONS) {
-        const node = document.getElementById(entry.id);
-        if (node && node.getBoundingClientRect().top <= LINE) current = entry.id;
-      }
-      setActive(current);
+function SettingsNav({
+  active,
+  onSelect,
+}: {
+  active: SettingsSectionId;
+  onSelect: (id: SettingsSectionId) => void;
+}) {
+  const move = (event: KeyboardEvent<HTMLDivElement>) => {
+    const keys: Record<string, number> = {
+      ArrowDown: 1,
+      ArrowRight: 1,
+      ArrowUp: -1,
+      ArrowLeft: -1,
     };
+    const step = keys[event.key];
 
-    recompute();
-    scroller.addEventListener('scroll', recompute, { passive: true });
-    window.addEventListener('resize', recompute);
-    return () => {
-      scroller.removeEventListener('scroll', recompute);
-      window.removeEventListener('resize', recompute);
-    };
-  }, []);
+    let next: SettingsSectionId | undefined;
+    if (step !== undefined) {
+      const at = SETTINGS_SECTIONS.findIndex((entry) => entry.id === active);
+      // Wraps, so holding a key never dead-ends at either edge.
+      next =
+        SETTINGS_SECTIONS[(at + step + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length]?.id;
+    } else if (event.key === 'Home') {
+      next = SETTINGS_SECTIONS[0].id;
+    } else if (event.key === 'End') {
+      next = SETTINGS_SECTIONS[SETTINGS_SECTIONS.length - 1]?.id;
+    }
+
+    if (!next) return;
+    event.preventDefault();
+    onSelect(next);
+    // The strip only ever holds one focusable tab, so the focus has to be
+    // moved by hand for the next arrow press to land somewhere.
+    document.getElementById(`tab-${next}`)?.focus();
+  };
 
   return (
-    <nav className="settings-nav" aria-label="Settings sections">
-      <ul>
-        {SETTINGS_SECTIONS.map((entry) => (
-          <li key={entry.id}>
-            <button
-              type="button"
-              className={clsx('settings-nav-item', active === entry.id && 'active')}
-              aria-current={active === entry.id ? 'true' : undefined}
-              onClick={() =>
-                document
-                  .getElementById(entry.id)
-                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-              }
-            >
-              <entry.Icon size={15} aria-hidden />
-              {entry.label}
-            </button>
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <div
+      className="settings-nav"
+      role="tablist"
+      aria-orientation="vertical"
+      aria-label="Settings sections"
+      onKeyDown={move}
+    >
+      {SETTINGS_SECTIONS.map((entry) => {
+        const selected = active === entry.id;
+        return (
+          <button
+            key={entry.id}
+            id={`tab-${entry.id}`}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-controls={`panel-${entry.id}`}
+            // Only the selected tab is in the tab order; the arrow keys reach
+            // the rest. Nine stops on the way past a sidebar is not navigation.
+            tabIndex={selected ? 0 : -1}
+            className={clsx('settings-nav-item', selected && 'active')}
+            onClick={() => onSelect(entry.id)}
+          >
+            <entry.Icon size={15} aria-hidden />
+            {entry.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -309,7 +335,7 @@ function AppearanceSection({
   const following = !draft.themePreset;
 
   return (
-    <section className="card settings-wide" id="settings-appearance">
+    <section className="card">
       <SectionHeader
         title="Appearance"
         subtitle="Themes apply to this machine only. Nothing here changes what anyone else sees."
@@ -397,28 +423,12 @@ function AppearanceSection({
         </label>
       )}
 
-      <div className="field">
-        <span>Library layout</span>
-        <div className="segmented" role="group" aria-label="Library layout">
-          {(
-            [
-              { id: 'grid', label: 'Grid', Icon: LayoutGrid },
-              { id: 'list', label: 'List', Icon: List },
-            ] as const
-          ).map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              className={clsx('segment', draft.libraryView === option.id && 'active')}
-              aria-pressed={draft.libraryView === option.id}
-              onClick={() => onUpdate({ libraryView: option.id })}
-            >
-              <option.Icon size={14} aria-hidden />
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Library layout is not offered here. The Library tab's own switcher
+          already sets it, above the grid it changes, and it offers all three
+          layouts where this copy only ever knew two — so picking one here
+          silently threw away a "detailed" choice made in the place the setting
+          is actually visible. Two controls for one preference, one of them
+          lossy, is worse than one. */}
 
       <Toggle
         label="Use logo artwork for game titles"
@@ -600,7 +610,7 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
   const profile = profileQuery.data;
 
   return (
-    <section className="card settings-wide" id="settings-profile">
+    <section className="card">
       <SectionHeader
         title="Profile"
         subtitle="Shown to friends and anyone who opens your profile from a post or the member list."
@@ -736,7 +746,7 @@ function DevicesSection({ onError }: { onError: (message: string) => void }) {
   });
 
   return (
-    <section className="card" id="settings-devices">
+    <section className="card">
       <SectionHeader
         title="Signed-in devices"
         subtitle="Revoking a device signs it out immediately."
@@ -789,7 +799,7 @@ function MyReportsSection() {
   const reports = reportsQuery.data ?? [];
 
   return (
-    <section className="card" id="settings-reports">
+    <section className="card">
       <SectionHeader
         title="Your reports"
         subtitle="Problems you have reported, and what happened to them."

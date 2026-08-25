@@ -101,7 +101,7 @@ export function AdminSettingsPage() {
   if (settingsQuery.isLoading) return <SectionSkeleton rows={4} />;
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="gb-page-narrow">
       <FormError message={error} />
       <Notice message={notice} />
 
@@ -127,7 +127,10 @@ export function AdminSettingsPage() {
           <Field
             label="Tagline"
             htmlFor="tagline"
-            hint="Shown under the headline on the landing page."
+            // It reads as a setting that does nothing because most of the time
+            // it is overridden: the landing page's hero block has a
+            // Subheadline field of its own, and anything typed there wins.
+            hint="The line under the headline on the landing page, used whenever the hero block's own Subheadline is left blank. Appearance → Landing page sets that."
           >
             <input
               id="tagline"

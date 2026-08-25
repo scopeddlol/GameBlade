@@ -87,7 +87,7 @@ export function AdminFeaturedPage() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="gb-page">
       <p className="text-ink-300 text-sm">
         These appear in the carousel on the Home tab of the desktop client, in this order.
       </p>
