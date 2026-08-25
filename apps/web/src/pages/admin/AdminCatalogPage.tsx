@@ -1022,7 +1022,9 @@ function AchievementsTab({ game }: { game: GameDetail }) {
     onSuccess: async (result) => {
       setError(null);
       setSteamAppId(String(result.steamAppId));
-      setNotice(`Found Steam AppID ${result.steamAppId} and imported ${result.imported} achievements.`);
+      setNotice(
+        `Found Steam AppID ${result.steamAppId} and imported ${result.imported} achievements.`,
+      );
       await queryClient.invalidateQueries({ queryKey: ['admin', 'achievements', game.id] });
     },
     onError: (caught) =>
@@ -1089,7 +1091,11 @@ function AchievementsTab({ game }: { game: GameDetail }) {
             disabled={autoImportMutation.isPending || importMutation.isPending}
             onClick={() => autoImportMutation.mutate()}
           >
-            {autoImportMutation.isPending ? <Spinner className="h-4 w-4" /> : <Search className="h-4 w-4" />}
+            {autoImportMutation.isPending ? (
+              <Spinner className="h-4 w-4" />
+            ) : (
+              <Search className="h-4 w-4" />
+            )}
             Find & import
           </button>
         </div>

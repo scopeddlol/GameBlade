@@ -3,16 +3,19 @@
 ## Project Briefing
 
 GameBlade is a self-hosted platform for preserving free-to-play and DRM-free games. It consists of:
+
 - **Server**: A Docker server that holds the game archive, serves the API, stores saves and profiles
 - **Desktop Client**: A Windows desktop application built with Tauri + React that provides the player experience
 
 ### Technology Stack
+
 - **Frontend**: React 19, Vite, TypeScript
 - **Desktop Framework**: Tauri 2 (Rust-based)
 - **Package Manager**: pnpm with workspace configuration
 - **Build Targets**: MSI and NSIS installers for Windows
 
 ### Project Structure
+
 ```
 apps/
   desktop/          # Tauri desktop client
@@ -59,6 +62,7 @@ packages/
 ### Build Configuration Details
 
 **Tauri Configuration** (`src-tauri/tauri.conf.json`):
+
 - Product Name: GameBlade
 - Version: 0.4.4
 - Identifier: io.gameblade.desktop
@@ -66,6 +70,7 @@ packages/
 - NSIS install mode: currentUser
 
 **Rust Profile** (release):
+
 - Optimization level: s (size)
 - LTO: enabled
 - Codegen units: 1
@@ -182,16 +187,19 @@ Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete
 ### Technical Details
 
 **Auto-Update Configuration**:
+
 - Plugin: `tauri-plugin-updater` v2.10.1
 - Update endpoint: GitHub releases
 - Signature verification: Enabled with public key
 - Dialog: Built-in Tauri update UI
 
 **Dependencies Added**:
+
 - `@tauri-apps/plugin-updater` (npm)
 - `tauri-plugin-updater` (Cargo)
 
 **Files Modified**:
+
 - `apps/desktop/package.json` - version 0.4.5 → 0.4.6
 - `apps/desktop/src-tauri/tauri.conf.json` - version 0.4.5 → 0.4.6
 - `apps/desktop/src-tauri/Cargo.toml` - version 0.4.5 → 0.4.6
@@ -293,17 +301,20 @@ Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete
 ### Technical Details
 
 **Auto-Update Configuration**:
+
 - Plugin: `tauri-plugin-updater` v2.10.1
 - Update endpoint: GitHub releases
 - Signature verification: Enabled with public key
 - Dialog: Built-in Tauri update UI
 
 **License Agreement**:
+
 - File: `apps/desktop/LICENSE.txt`
 - Content: Custom EULA for GameBlade
 - Note: NSIS license configuration requires custom template for full integration
 
 **Dependencies Added**:
+
 - `@tauri-apps/plugin-updater` (npm)
 - `tauri-plugin-updater` (Cargo)
 
@@ -323,6 +334,7 @@ Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete
 ### Build Configuration Details
 
 **Tauri Configuration** (`src-tauri/tauri.conf.json`):
+
 - Product Name: GameBlade
 - Version: 0.4.5
 - Identifier: io.gameblade.desktop
@@ -330,6 +342,7 @@ Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete
 - NSIS install mode: currentUser
 
 **Rust Profile** (release):
+
 - Optimization level: s (size)
 - LTO: enabled
 - Codegen units: 1
@@ -348,6 +361,7 @@ Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete
 ## Planned Steps Ahead
 
 ### Immediate Next Steps
+
 1. **Test Installers**
    - Verify NSIS installer installs correctly on a clean Windows machine
    - Verify MSI installer installs correctly
@@ -359,6 +373,7 @@ Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete
    - Bump client version in settings if this is a new release
 
 ### Future Enhancements
+
 1. **Build Automation**
    - Set up CI/CD pipeline for automated builds
    - Configure GitHub Actions for release automation
@@ -374,6 +389,7 @@ Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete
    - Add license agreement screen
 
 ### Maintenance Tasks
+
 - Regular dependency updates (pnpm update, cargo update)
 - Monitor Tauri framework updates
 - Test installer compatibility with new Windows versions
@@ -384,6 +400,7 @@ Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete
 ## Version History
 
 ### v0.4.5 (Current)
+
 - Built installers: MSI and NSIS
 - Platform: Windows x64
 - Build date: August 24, 2026
@@ -392,6 +409,7 @@ Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete
 - Source: Pulled from GitHub tag v0.4.5
 
 ### v0.4.4
+
 - Built installers: MSI and NSIS
 - Platform: Windows x64
 - Build date: August 23, 2026
@@ -403,6 +421,7 @@ Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete
 ## Build Commands Reference
 
 ### Development
+
 ```bash
 cd apps/desktop
 pnpm dev              # Start development server
@@ -411,12 +430,14 @@ pnpm typecheck        # Type check TypeScript
 ```
 
 ### Production Build
+
 ```bash
 cd apps/desktop
 pnpm build            # Build complete app with installers
 ```
 
 ### Tauri Commands
+
 ```bash
 pnpm tauri build      # Build with Tauri CLI
 pnpm tauri dev        # Development mode with Tauri
@@ -427,16 +448,19 @@ pnpm tauri dev        # Development mode with Tauri
 ## Troubleshooting
 
 ### Build Issues
+
 - **Rust toolchain missing**: Install Rust via rustup
 - **Node modules missing**: Run `pnpm install` from root
 - **Frontend build fails**: Check TypeScript errors in `apps/desktop/src/`
 
 ### Installer Issues
+
 - **Antivirus blocking**: Add exception for installer
 - **Permissions**: NSIS installer uses currentUser mode (no admin required)
 - **Path issues**: Ensure install path does not contain special characters
 
 ### Runtime Issues
+
 - **Server connection**: Verify server URL in client settings
 - **WebView2 missing**: Install Microsoft Edge WebView2 runtime
 - **Firewall**: Allow client to access server ports

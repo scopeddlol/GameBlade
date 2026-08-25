@@ -379,7 +379,10 @@ export function matchCatalog(
 function baseTitleKey(title: string): string {
   return matchKey(
     title
-      .replace(/\s*[-–—:]?\s*(?:game of the year|goty|complete|definitive|deluxe|gold|ultimate|enhanced|remastered|director'?s cut|collector'?s)\s*(?:edition)?$/i, '')
+      .replace(
+        /\s*[-–—:]?\s*(?:game of the year|goty|complete|definitive|deluxe|gold|ultimate|enhanced|remastered|director'?s cut|collector'?s)\s*(?:edition)?$/i,
+        '',
+      )
       .replace(/\s*\([^)]*\)\s*$/, ''),
   );
 }
