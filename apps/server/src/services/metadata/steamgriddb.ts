@@ -1,4 +1,4 @@
-import { HttpError, RateLimiter, withRetry } from '../../lib/ratelimit.js';
+import { HttpError, REQUEST_TIMEOUT_MS, RateLimiter, withRetry } from '../../lib/ratelimit.js';
 
 const API_URL = 'https://www.steamgriddb.com/api/v2';
 
@@ -46,6 +46,7 @@ export class SteamGridDbClient {
             Authorization: `Bearer ${this.apiKey}`,
             Accept: 'application/json',
           },
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
 
         // A game with no artwork of a given kind is a normal, non-exceptional result.

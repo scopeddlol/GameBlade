@@ -75,6 +75,20 @@ export class RateLimiter {
   private timer: NodeJS.Timeout | null = null;
 }
 
+/**
+ * How long an outbound provider call may take before it is abandoned.
+ *
+ * `fetch` has no total deadline of its own, so a connection that opens and then
+ * goes quiet occupies its slot until the runtime's own long default gives up.
+ * During a scan that is indistinguishable from a hang: the run sits on one
+ * title with nothing in the log. A request that has not completed in this long
+ * is not going to.
+ */
+export const REQUEST_TIMEOUT_MS = 20_000;
+
+/** The same, for artwork — a whole image body rather than a page of JSON. */
+export const DOWNLOAD_TIMEOUT_MS = 60_000;
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -120,6 +134,11 @@ export class HttpError extends Error {
 function isRetryable(error: unknown): boolean {
   if (error instanceof HttpError) {
     return error.status === 429 || error.status >= 500;
+  }
+  // An abandoned request is worth one more go: the usual cause is a provider
+  // being briefly slow rather than the request being unanswerable.
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+    return true;
   }
   // Network-level failures (DNS, reset, timeout) are worth another try.
   return error instanceof TypeError || (error as { code?: string })?.code !== undefined;

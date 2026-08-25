@@ -1,4 +1,4 @@
-import { HttpError, RateLimiter, withRetry } from '../../lib/ratelimit.js';
+import { HttpError, REQUEST_TIMEOUT_MS, RateLimiter, withRetry } from '../../lib/ratelimit.js';
 
 const TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
 const API_URL = 'https://api.igdb.com/v4';
@@ -110,7 +110,10 @@ export class IgdbClient {
       grant_type: 'client_credentials',
     });
 
-    const response = await fetch(`${TOKEN_URL}?${params.toString()}`, { method: 'POST' });
+    const response = await fetch(`${TOKEN_URL}?${params.toString()}`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (!response.ok) {
       throw new HttpError(
         response.status,
@@ -139,6 +142,7 @@ export class IgdbClient {
             Accept: 'application/json',
           },
           body: apicalypse,
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
 
         if (response.status === 401) {
