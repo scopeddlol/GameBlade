@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../config.js';
-import { createDb, type Db } from '../db/index.js';
+import { createDb, type Db, type DbHandle } from '../db/index.js';
 import { SettingsService } from './settings.js';
 
 /**
@@ -22,6 +22,7 @@ import { SettingsService } from './settings.js';
 describe('SettingsService', () => {
   let dataDir: string;
   let db: Db;
+  let sqlite: DbHandle['sqlite'];
 
   beforeEach(async () => {
     dataDir = await mkdtemp(path.join(tmpdir(), 'gameblade-settings-test-'));
@@ -30,10 +31,11 @@ describe('SettingsService', () => {
       DATA_DIR: dataDir,
       LOG_LEVEL: 'silent',
     } as NodeJS.ProcessEnv);
-    ({ db } = createDb(config.databasePath));
+    ({ db, sqlite } = createDb(config.databasePath));
   });
 
   afterEach(async () => {
+    sqlite.close();
     await rm(dataDir, { recursive: true, force: true });
   });
 
