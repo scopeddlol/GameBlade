@@ -42,7 +42,13 @@
     "longDescription": "Desktop client for your GameBlade library: browse and install games, track playtime and achievements, sync cloud saves, and see what friends are playing.",
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer-assets/nsis-header.bmp",
+        "sidebarImage": "installer-assets/nsis-sidebar.bmp",
+        "startMenuFolder": "GameBlade",
+        "languages": ["English"],
+        "compression": "lzma"
       },
       "webviewInstallMode": {
         "type": "embedBootstrapper"
