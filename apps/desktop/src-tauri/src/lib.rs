@@ -1,6 +1,6 @@
 mod api;
 mod credentials;
-mod downloader;
+mod download;
 mod error;
 mod install;
 mod launcher;
@@ -10,7 +10,7 @@ mod settings;
 
 use api::{ApiClient, UserInfo};
 use credentials::StoredSession;
-use downloader::{DownloadManager, DownloadState};
+use download::{DownloadManager, DownloadState};
 use error::{AppError, AppResult};
 use install::{InstallCandidate, InstallManager, InstalledGame};
 use launcher::{LaunchRequest, Launcher, RunningGame};
@@ -38,7 +38,10 @@ pub const SERVER_URL: &str = match option_env!("GAMEBLADE_SERVER_URL") {
 /// Everything the commands need. The session is behind a lock because signing
 /// in and out mutates it while downloads may still be reading it.
 struct AppState {
-    session: RwLock<Option<StoredSession>>,
+    /// Shared with the download queue's client provider, so a queued game
+    /// always activates with whatever session is current, not whichever one
+    /// existed when Install was clicked.
+    session: Arc<RwLock<Option<StoredSession>>>,
     settings: RwLock<Settings>,
     app_data: PathBuf,
     downloads: Arc<DownloadManager>,
@@ -103,6 +106,9 @@ async fn sign_in(
     credentials::save(&stored)?;
     state.realtime.start(app, stored.server_url.clone(), token);
     *state.session.write().await = Some(stored);
+
+    // Anything the queue was holding for a signed-in session can go now.
+    state.downloads.wake().await;
     Ok(user)
 }
 
@@ -119,18 +125,21 @@ async fn sign_out(state: State<'_, AppState>) -> AppResult<()> {
 async fn verify_session(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<UserInfo> {
     let client = state.client().await?;
     match client.session().await {
-        Ok(user) => {
-            // A restored session has no socket yet, so opening it here is what
-            // makes presence work after a restart rather than only after a login.
-            if !state.realtime.is_running() {
-                if let Some(session) = state.session.read().await.as_ref() {
-                    state
-                        .realtime
-                        .start(app, session.server_url.clone(), session.token.clone());
+            Ok(user) => {
+                // A restored session has no socket yet, so opening it here is what
+                // makes presence work after a restart rather than only after a login.
+                if !state.realtime.is_running() {
+                    if let Some(session) = state.session.read().await.as_ref() {
+                        state
+                            .realtime
+                            .start(app, session.server_url.clone(), session.token.clone());
+                    }
                 }
+                // Same for the download queue: a restored session means an
+                // interrupted transfer from the last run can pick up now.
+                state.downloads.wake().await;
+                Ok(user)
             }
-            Ok(user)
-        }
         Err(err) => {
             // The token is gone or revoked, so drop it rather than retrying forever.
             if matches!(err, AppError::Server(_)) {
@@ -235,18 +244,22 @@ async fn run_client_installer(
     state: State<'_, AppState>,
 ) -> AppResult<String> {
     let client = state.client().await?;
-    let bytes = client.get_bytes("/client/download").await?;
-    if bytes.is_empty() {
-        return Err(AppError::Other(
-            "The server has no client installer published.".to_string(),
-        ));
-    }
 
     // Named per download so two cannot collide, and left in the OS temp
     // directory so an abandoned update does not linger in app data.
     let name = format!("GameBlade-Setup-{}.exe", chrono::Utc::now().timestamp());
     let target = std::env::temp_dir().join(name);
-    std::fs::write(&target, &bytes)?;
+
+    // Streamed to disk rather than buffered: installers now exceed what fits
+    // comfortably in memory, and the old in-memory path silently returned
+    // nothing past its cap and reported "no installer published".
+    client.download_file("/client/download", &target).await?;
+    if tokio::fs::metadata(&target).await.map(|m| m.len()).unwrap_or(0) == 0 {
+        let _ = tokio::fs::remove_file(&target).await;
+        return Err(AppError::Other(
+            "The server has no client installer published.".to_string(),
+        ));
+    }
 
     use tauri_plugin_opener::OpenerExt;
     app.opener()
@@ -304,6 +317,15 @@ async fn update_settings(state: State<'_, AppState>, patch: Settings) -> AppResu
     let sanitised = patch.sanitised();
     settings::save(&state.app_data, &sanitised)?;
     *state.settings.write().await = sanitised.clone();
+
+    // Transfer preferences reach the queue immediately rather than being read
+    // once at startup — historically these two saved a value and changed
+    // nothing, which is worse than not offering them.
+    state.downloads.set_transfer_options(download::TransferOptions {
+        connections: sanitised.download_concurrency,
+        verify: sanitised.verify_downloads,
+    });
+
     Ok(sanitised)
 }
 
@@ -311,11 +333,17 @@ async fn update_settings(state: State<'_, AppState>, patch: Settings) -> AppResu
 
 #[tauri::command]
 async fn start_download(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     game_id: String,
     destination: Option<String>,
 ) -> AppResult<()> {
+    // A stopped entry for this game resumes in place, without the network:
+    // the manifest, destination and progress it already had are all it needs.
+    // This is what makes Resume work on a connection that currently does not.
+    if state.downloads.resume_stopped(&game_id).await {
+        return Ok(());
+    }
+
     let client = state.client().await?;
     let manifest = client.manifest(&game_id).await?;
 
@@ -326,21 +354,7 @@ async fn start_download(
         None => state.install_dir().await,
     };
 
-    // The two transfer preferences the settings page has always offered and
-    // nothing ever read.
-    let options = {
-        let settings = state.settings.read().await;
-        downloader::TransferOptions {
-            files_in_flight: settings.download_concurrency,
-            verify: settings.verify_downloads,
-        }
-    };
-
-    state
-        .downloads
-        .clone()
-        .start(app, client, manifest, target, options)
-        .await
+    state.downloads.enqueue(&manifest, target).await
 }
 
 #[tauri::command]
@@ -1043,12 +1057,38 @@ pub fn run() {
             });
             let loaded = settings::load(&app_data);
 
+            // One session holder shared by the commands and the download
+            // queue: a queued game activates with whatever credentials are
+            // current when it reaches the front of the line.
+            let session = Arc::new(RwLock::new(restored));
+            let provider_session = session.clone();
+            let downloads = DownloadManager::new(
+                &app_data,
+                Arc::new(move || {
+                    let session = provider_session.clone();
+                    Box::pin(async move {
+                        let guard = session.read().await;
+                        match guard.as_ref() {
+                            Some(stored) => {
+                                ApiClient::new(&stored.server_url, Some(stored.token.clone()))
+                            }
+                            None => Err(AppError::NotSignedIn),
+                        }
+                    })
+                }),
+            );
+            downloads.set_transfer_options(download::TransferOptions {
+                connections: loaded.download_concurrency,
+                verify: loaded.verify_downloads,
+            });
+            downloads.start_scheduler(app.handle().clone());
+
             app.manage(AppState {
-                session: RwLock::new(restored),
+                session,
                 settings: RwLock::new(loaded),
                 installs: Arc::new(InstallManager::load(&app_data)),
                 app_data,
-                downloads: Arc::new(DownloadManager::default()),
+                downloads,
                 launcher: Arc::new(Launcher::default()),
                 realtime: RealtimeClient::default(),
             });

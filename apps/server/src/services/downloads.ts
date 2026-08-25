@@ -86,7 +86,10 @@ export class DownloadTokenService {
     }
 
     if (claims.expiresAt * 1000 <= Date.now()) {
-      throw ApiError.forbidden('This download link has expired. Refresh the page and try again.');
+      // A code of its own, not plain `forbidden`: the desktop client refreshes
+      // the token and retries when it sees this one, and must not treat an
+      // ordinary authorisation failure as something retrying can fix.
+      throw new ApiError(403, 'token_expired', 'This download link has expired.');
     }
     return claims;
   }
