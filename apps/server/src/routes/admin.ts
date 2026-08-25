@@ -16,6 +16,7 @@ import {
   featuredSchema,
   MAX_INSTALLER_BYTES,
   importAchievementsSchema,
+  autoImportAchievementsSchema,
   providerSettingsSchema,
   purgeMissingSchema,
   reorderClientButtonsSchema,
@@ -740,6 +741,13 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return achievements.importFromSteam(id, input.steamAppId, input.replace);
   });
 
+  /** Finds the Steam AppID from the catalog title, then imports its achievement schema. */
+  app.post('/admin/games/:id/achievements/auto-import', async (request) => {
+    const { id } = request.params as { id: string };
+    const input = autoImportAchievementsSchema.parse(request.body ?? {});
+    return achievements.autoImportFromSteam(id, input.replace);
+  });
+
   // ---- Bug reports ----
 
   app.get('/admin/bugs', async (request) => {
@@ -903,7 +911,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     if (!wasOn && input.announceNewGames) {
       settings.update({ discordLastAnnouncedAt: new Date().toISOString() });
     }
-    return { ok: true };
+    // A token is write-only in settings, so validate a replacement now instead
+    // of waiting for the next scheduled announcement to expose a bad token.
+    const bot = input.botToken ? await discord.startBot() : null;
+    return { ok: true, bot };
   });
 
   /** Clearing a secret needs to be possible without a way to read it back. */

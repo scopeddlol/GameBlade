@@ -19,6 +19,10 @@ const MULTI_SEGMENT_THRESHOLD: u64 = 32 * 1024 * 1024;
 /// Per-file connection count when segmenting. Four is enough to saturate a
 /// tunnelled link without looking like abuse to the server.
 const SEGMENTS_PER_FILE: u64 = 4;
+/// Total HTTP streams per game. This is shared by files, rather than allowing
+/// each small file to serially consume the whole download window.
+const MAX_CONNECTIONS_PER_GAME: usize = 16;
+const FILES_IN_FLIGHT: usize = 4;
 
 const MAX_ATTEMPTS: u32 = 6;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(400);
@@ -381,6 +385,7 @@ async fn run_download(
     }
 
     let downloaded = Arc::new(AtomicU64::new(0));
+    let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS_PER_GAME));
 
     // Drive the progress event from one place so the UI gets a steady rate
     // reading rather than a spike per chunk.
@@ -429,33 +434,48 @@ async fn run_download(
 
     let mut completed = 0usize;
     let mut result = Ok(());
+    // Own each manifest entry in the stream. `tauri::async_runtime::spawn`
+    // requires a `'static` future, so borrowing `manifest.files` here would
+    // make a folder download's worker lifetime depend on this stack frame.
+    let mut files = futures_util::stream::iter(manifest.files.clone())
+        .map(|file| {
+            let client = client.clone();
+            let manifest = manifest.clone();
+            let root = root.clone();
+            let downloaded = downloaded.clone();
+            let cancel = cancel.clone();
+            let connections = connections.clone();
+            let state = state.clone();
+            async move {
+                if cancel.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                state.lock().await.current_file = Some(file.path.clone());
+                download_file(
+                    &client,
+                    &manifest,
+                    &file,
+                    &root,
+                    downloaded,
+                    cancel,
+                    connections,
+                )
+                .await
+            }
+        })
+        .buffer_unordered(FILES_IN_FLIGHT);
 
-    for file in &manifest.files {
-        if cancel.load(Ordering::SeqCst) {
-            break;
-        }
-
-        {
-            let mut guard = state.lock().await;
-            guard.current_file = Some(file.path.clone());
-        }
-
-        match download_file(
-            &client,
-            &manifest,
-            file,
-            &root,
-            downloaded.clone(),
-            cancel.clone(),
-        )
-        .await
-        {
+    while let Some(file_result) = files.next().await {
+        match file_result {
             Ok(()) => {
                 completed += 1;
-                let mut guard = state.lock().await;
-                guard.files_completed = completed;
+                state.lock().await.files_completed = completed;
             }
             Err(err) => {
+                // Stop sibling file streams before returning an error. Without
+                // this they could keep consuming bandwidth after the queue has
+                // already reported a failed download.
+                cancel.store(true, Ordering::SeqCst);
                 result = Err(err);
                 break;
             }
@@ -511,6 +531,7 @@ async fn download_file(
     root: &Path,
     downloaded: Arc<AtomicU64>,
     cancel: Arc<AtomicBool>,
+    connections: Arc<Semaphore>,
 ) -> AppResult<()> {
     let relative = sanitise_relative_path(&file.path)?;
     let dest = root.join(&relative);
@@ -557,7 +578,6 @@ async fn download_file(
     drop(handle);
 
     let part = Arc::new(Mutex::new(part));
-    let semaphore = Arc::new(Semaphore::new(SEGMENTS_PER_FILE as usize));
     let mut tasks = Vec::new();
 
     let segment_count = { part.lock().await.segments.len() };
@@ -568,7 +588,7 @@ async fn download_file(
             continue;
         }
 
-        let permit = semaphore.clone().acquire_owned().await.map_err(|err| {
+        let permit = connections.clone().acquire_owned().await.map_err(|err| {
             AppError::Other(format!("Could not schedule a download segment: {err}"))
         })?;
 

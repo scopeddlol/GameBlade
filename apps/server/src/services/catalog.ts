@@ -208,6 +208,7 @@ export class CatalogService {
     const conditions: SQL[] = [];
 
     if (!query.includeMissing) conditions.push(isNull(games.missingAt));
+    if (query.missingFilesOnly) conditions.push(sql`${games.missingAt} IS NOT NULL`);
 
     if (query.search) {
       const term = `%${query.search.replace(/[%_]/g, '')}%`;

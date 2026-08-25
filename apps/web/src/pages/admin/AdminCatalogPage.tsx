@@ -137,6 +137,7 @@ export function AdminCatalogPage() {
 
   const matchStatus = params.get('matchStatus') ?? '';
   const missing = params.get('missing') ?? '';
+  const missingFilesOnly = params.get('missingFiles') === 'true';
 
   /** Every filter here is a URL parameter, so a triage view is a shareable link. */
   const setParam = (key: string, value: string) =>
@@ -175,6 +176,7 @@ export function AdminCatalogPage() {
           matchStatus: matchStatus || undefined,
           missing: missing || undefined,
           includeMissing: true,
+          missingFilesOnly,
           sort: 'title',
           limit: 100,
         })}`,
@@ -235,6 +237,15 @@ export function AdminCatalogPage() {
             <option value="skipped">Skipped</option>
           </select>
         </Field>
+
+        <label className="flex items-center gap-2 pb-2 text-sm">
+          <input
+            type="checkbox"
+            checked={missingFilesOnly}
+            onChange={(e) => setParam('missingFiles', e.target.checked ? 'true' : '')}
+          />
+          Missing game files
+        </label>
 
         <Field
           label="Missing"
@@ -1002,6 +1013,22 @@ function AchievementsTab({ game }: { game: GameDetail }) {
       setError(caught instanceof ApiRequestError ? caught.message : 'Import failed.'),
   });
 
+  const autoImportMutation = useMutation({
+    mutationFn: () =>
+      api.post<{ steamAppId: number; imported: number }>(
+        `/admin/games/${game.id}/achievements/auto-import`,
+        { replace: false },
+      ),
+    onSuccess: async (result) => {
+      setError(null);
+      setSteamAppId(String(result.steamAppId));
+      setNotice(`Found Steam AppID ${result.steamAppId} and imported ${result.imported} achievements.`);
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'achievements', game.id] });
+    },
+    onError: (caught) =>
+      setError(caught instanceof ApiRequestError ? caught.message : 'Could not search Steam.'),
+  });
+
   const generateMutation = useMutation({
     mutationFn: () =>
       api.post<{ generated: number; achievements: number; stores: string[] }>(
@@ -1055,6 +1082,15 @@ function AchievementsTab({ game }: { game: GameDetail }) {
               <Trophy className="h-4 w-4" />
             )}
             Import
+          </button>
+          <button
+            type="button"
+            className="gb-btn-ghost shrink-0"
+            disabled={autoImportMutation.isPending || importMutation.isPending}
+            onClick={() => autoImportMutation.mutate()}
+          >
+            {autoImportMutation.isPending ? <Spinner className="h-4 w-4" /> : <Search className="h-4 w-4" />}
+            Find & import
           </button>
         </div>
       </section>

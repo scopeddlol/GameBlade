@@ -83,6 +83,14 @@ packages/
 
 ## Build Session - August 24, 2026
 
+## Version 0.5.0 - August 24, 2026
+
+- Added automatic Steam AppID discovery and achievement import from each game's admin page.
+- Added a Catalog/Games filter for records whose source game files are missing.
+- Improved save-manifest matching for unambiguous edition-title variants.
+- Made folder-game downloads use a shared 16-connection stream across concurrent files.
+- Validate and start the Discord REST bot integration at server startup and when its token changes.
+
 ### Task: Pull Latest from GitHub and Build v0.4.5
 
 **Objective**: Pull the latest changes from the official GitHub repository and build the Windows installer for version 0.4.5.

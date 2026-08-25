@@ -117,6 +117,8 @@ export const gameQuerySchema = z.object({
   /** Narrows to one of the caller's own groups. */
   collectionId: z.string().trim().max(64).optional(),
   includeMissing: z.coerce.boolean().default(false),
+  /** Only entries whose source files disappeared since the last library scan. */
+  missingFilesOnly: z.coerce.boolean().default(false),
   sort: z
     .enum(['title', 'added', 'released', 'size', 'rating', 'played', 'playtime'])
     .default('title'),
@@ -303,6 +305,12 @@ export const importAchievementsSchema = z.object({
   replace: z.boolean().default(false),
 });
 export type ImportAchievementsInput = z.infer<typeof importAchievementsSchema>;
+
+/** Whether an automatic Steam import replaces previously imported Steam entries. */
+export const autoImportAchievementsSchema = z.object({
+  replace: z.boolean().default(false),
+});
+export type AutoImportAchievementsInput = z.infer<typeof autoImportAchievementsSchema>;
 
 /* ---------------------------------------------------------------- cloud saves */
 
