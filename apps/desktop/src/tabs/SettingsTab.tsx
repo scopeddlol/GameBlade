@@ -132,8 +132,8 @@ export function SettingsTab() {
                   onChange={(e) => update({ downloadConcurrency: Number(e.target.value) })}
                 />
                 <span className="muted small">
-                  {draft.downloadConcurrency} connections at a time. More helps on a fast
-                  connection with many small files, and hurts on a slow one.
+                  {draft.downloadConcurrency} connections at a time. More helps on a fast connection
+                  with many small files, and hurts on a slow one.
                 </span>
               </label>
 

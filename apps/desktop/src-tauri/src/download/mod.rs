@@ -188,8 +188,12 @@ async fn purge_download(plan: &CleanupPlan) {
         let dest = plan.root.join(relative);
         // The sidecar first: on its own it is worthless, and leaving one
         // behind would make a later download think it can resume into a file
-        // that is no longer there.
-        let _ = tokio::fs::remove_file(part_path_for(&dest)).await;
+        // that is no longer there. Its half-written twin goes too — a crash
+        // during a journal save can leave one, and a purge is meant to leave
+        // nothing at all.
+        let sidecar = part_path_for(&dest);
+        let _ = tokio::fs::remove_file(sidecar.with_extension("gbpart.tmp")).await;
+        let _ = tokio::fs::remove_file(&sidecar).await;
         let _ = tokio::fs::remove_file(&dest).await;
 
         let mut parent = dest.parent().map(Path::to_path_buf);

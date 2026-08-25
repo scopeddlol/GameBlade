@@ -67,6 +67,45 @@ pub(crate) enum Outcome {
     Fatal(AppError),
 }
 
+/// Takes bytes back off the progress counter without ever wrapping.
+///
+/// The adds and subtractions are balanced by construction, but this is shared
+/// mutable state read by the UI: an underflow here would show a download as
+/// sixteen exabytes complete, which is a worse bug than the one it is
+/// guarding against.
+fn uncredit(counter: &AtomicU64, bytes: u64) {
+    if bytes == 0 {
+        return;
+    }
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        Some(current.saturating_sub(bytes))
+    });
+}
+
+/// Whether a response to a ranged request is really that range.
+///
+/// A 206 is. A 200 is only when the range asked for the whole file anyway —
+/// otherwise the range was not honoured and the body is the entire file, which
+/// written at this chunk's offset would scribble over everything after it.
+///
+/// The case that makes this matter is a fresh download: no chunk has an ETag
+/// yet, so `If-Range` cannot catch it, and every task in the first wave would
+/// write a full copy of the file at its own offset and mark it done.
+fn range_was_honoured(status: reqwest::StatusCode, whole_file: bool) -> bool {
+    status != reqwest::StatusCode::OK || whole_file
+}
+
+/// How many of an arriving buffer's bytes belong to this chunk.
+///
+/// The guard above turns away the ways a server ends up over-sending; this is
+/// what makes writing past the chunk — over the *next* chunk's bytes, which
+/// may already be done and journalled — impossible rather than merely
+/// unlikely.
+fn writable_len(buffer: usize, expected: u64, received: u64) -> usize {
+    let room = expected.saturating_sub(received);
+    (buffer as u64).min(room) as usize
+}
+
 fn cancelled(flag: &AtomicBool) -> bool {
     flag.load(Ordering::SeqCst)
 }
@@ -215,9 +254,21 @@ async fn load_journal(path: &Path, size: u64) -> ChunkJournal {
     ChunkJournal::fresh(size)
 }
 
+/// Writes the journal so a crash cannot destroy it.
+///
+/// Write-then-rename, like the queue file. A plain write truncates first, so a
+/// power cut between the truncate and the write leaves an empty sidecar —
+/// which `load_journal` correctly refuses, and which costs the whole file.
+/// Re-fetching 40 GB because the lights went out is exactly the outcome
+/// chunked resume exists to prevent, so the one extra syscall is worth it.
+///
+/// Every caller holds the journal mutex, so two saves can never race for the
+/// same temporary path.
 async fn save_journal(path: &Path, journal: &ChunkJournal) -> AppResult<()> {
     let encoded = serde_json::to_vec(journal)?;
-    tokio::fs::write(path, encoded).await?;
+    let temp = path.with_extension("gbpart.tmp");
+    tokio::fs::write(&temp, &encoded).await?;
+    tokio::fs::rename(&temp, path).await?;
     Ok(())
 }
 
@@ -440,16 +491,21 @@ async fn download_file(
         }
     }
 
-    // Bytes this file has had counted toward progress so far, so a restart
-    // can take them back off before beginning again.
-    let mut credited: u64 = 0;
     let mut restarts = 0u32;
 
     loop {
+        // Where the shared counter stood before this attempt touched it.
+        //
+        // A restart has to put the counter back exactly, and adding up what
+        // this attempt contributed by hand does not survive contact with the
+        // chunk tasks — they credit bytes as they stream. Reading the counter
+        // is exact by construction. It is only this file's to reason about:
+        // files are downloaded one at a time, and every chunk task is joined
+        // before `fetch_all_chunks` returns.
+        let before = downloaded.load(Ordering::Relaxed);
+
         let journal = load_journal(&journal_path, file.size_bytes).await;
-        let recovered = journal.done_bytes();
-        downloaded.fetch_add(recovered, Ordering::Relaxed);
-        credited += recovered;
+        downloaded.fetch_add(journal.done_bytes(), Ordering::Relaxed);
 
         // truncate(false) is load-bearing on a resume: the bytes already on
         // disk are exactly what the journal accounts for, and discarding them
@@ -498,8 +554,12 @@ async fn download_file(
                 if restarts > 1 {
                     return FileOutcome::from(Stop::Changed);
                 }
-                downloaded.fetch_sub(credited, Ordering::Relaxed);
-                credited = 0;
+                // None of this attempt's bytes survive, so none of them may
+                // stay on the progress counter.
+                uncredit(
+                    downloaded,
+                    downloaded.load(Ordering::Relaxed).saturating_sub(before),
+                );
                 let _ = tokio::fs::remove_file(&journal_path).await;
                 let _ = tokio::fs::remove_file(&dest).await;
             }
@@ -571,6 +631,17 @@ async fn fetch_all_chunks(
     let journal_shared = Arc::new(Mutex::new(journal));
     let wave_size = connections.max(1).saturating_mul(2);
 
+    // Raised when one chunk in a wave gives up, so its siblings stop too.
+    //
+    // Dropping a `JoinHandle` detaches the task rather than cancelling it, so
+    // returning from the middle of a wave used to leave the rest of it running
+    // — still fetching, still writing into the file this function's caller may
+    // be about to delete and start over. On a `Changed` restart that is a
+    // stale write landing on top of a freshly downloaded chunk that the new
+    // journal has already marked done: a corrupt file that only a checksum
+    // would catch, and checksums are optional.
+    let abandon = Arc::new(AtomicBool::new(false));
+
     loop {
         if cancelled(cancel) {
             return Err(Stop::Stopped);
@@ -612,22 +683,47 @@ async fn fetch_all_chunks(
                     *index,
                     start,
                     end,
+                    file.size_bytes,
                     downloaded.clone(),
                     cancel.clone(),
+                    abandon.clone(),
                     permit,
                 )));
             }
 
-            for task in tasks {
-                match task.await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(stop)) => return Err(stop),
-                    Err(err) => {
-                        return Err(Stop::Fatal(AppError::Other(format!(
-                            "Download task failed: {err}"
-                        ))))
-                    }
+            // Joined as they finish rather than in the order they were
+            // spawned, and every one of them is joined even after a failure.
+            //
+            // Both halves matter. Waiting for all of them is what guarantees
+            // nothing is still writing to the file when this returns — a
+            // dropped `JoinHandle` detaches its task, it does not cancel it.
+            // And taking them out of order is what stops a fatal error being
+            // held up behind a sibling: transient failures retry indefinitely
+            // by design, so a chunk waiting out a server outage would
+            // otherwise keep the wave — and the flag that tells it to stop —
+            // pinned until the outage ended.
+            let mut running: futures_util::stream::FuturesUnordered<_> =
+                tasks.into_iter().collect();
+            let mut failure: Option<Stop> = None;
+
+            while let Some(result) = running.next().await {
+                let stop = match result {
+                    Ok(Ok(())) => continue,
+                    Ok(Err(stop)) => stop,
+                    Err(err) => Stop::Fatal(AppError::Other(format!(
+                        "Download task failed: {err}"
+                    ))),
+                };
+                // The first failure is the one reported; everything after it
+                // is a sibling noticing the flag.
+                if failure.is_none() {
+                    abandon.store(true, Ordering::Relaxed);
+                    failure = Some(stop);
                 }
+            }
+
+            if let Some(stop) = failure {
+                return Err(stop);
             }
         }
     }
@@ -650,17 +746,29 @@ async fn download_chunk(
     index: u64,
     start: u64,
     end: u64,
+    total_size: u64,
     downloaded: Arc<AtomicU64>,
     cancel: Arc<AtomicBool>,
+    abandon: Arc<AtomicBool>,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<(), Stop> {
     let expected = end - start + 1;
+    // A 200 is a legitimate answer to a range that happens to cover the whole
+    // file; for anything narrower it means the range was ignored.
+    let whole_file = start == 0 && end + 1 == total_size;
     let mut attempt = 0u32;
 
+    // Bytes this attempt has already added to the shared progress counter.
+    // Declared out here so a failed attempt can take them back: the same range
+    // is about to be fetched again, and counting a range twice is how a
+    // progress bar sails past 100% on a flaky connection.
+    let mut received: u64;
+
     loop {
-        if cancelled(&cancel) {
+        if cancelled(&cancel) || abandon.load(Ordering::Relaxed) {
             return Err(Stop::Stopped);
         }
+        received = 0;
 
         // Fresh token, refreshed proactively near expiry so it never lapses
         // underneath an in-flight request.
@@ -731,9 +839,17 @@ async fn download_chunk(
                 };
             }
 
-            // 200 to a ranged request means `If-Range` did not match: these
-            // are different bytes than the ones already half-written.
-            if status == reqwest::StatusCode::OK && etag.is_some() {
+            // 200 to a ranged request means the range was not honoured.
+            //
+            // With an ETag that is `If-Range` saying these are different bytes
+            // than the ones already half-written. Without one it means the
+            // range was ignored outright — a proxy that strips the header, say
+            // — and the body is the *whole file*. That case matters more than
+            // it looks: on a fresh download no chunk has an ETag yet, so every
+            // task in the first wave would happily write a full copy of the
+            // file at its own offset and mark it done. Checking the status
+            // rather than the ETag catches both.
+            if !range_was_honoured(status, whole_file) {
                 return Ok(Attempt::Changed);
             }
 
@@ -765,9 +881,8 @@ async fn download_chunk(
             }
 
             let mut stream = response.bytes_stream();
-            let mut received: u64 = 0;
             while let Some(chunk) = stream.next().await {
-                if cancelled(&cancel) {
+                if cancelled(&cancel) || abandon.load(Ordering::Relaxed) {
                     return Err(Stop::Stopped);
                 }
                 let chunk = match chunk {
@@ -778,13 +893,19 @@ async fn download_chunk(
                     Err(_) => break,
                 };
 
-                if target.write_all(&chunk).await.is_err() {
+                let writable = writable_len(chunk.len(), expected, received);
+                if writable == 0 {
+                    break;
+                }
+                let slice = &chunk[..writable];
+
+                if target.write_all(slice).await.is_err() {
                     return Err(Stop::Fatal(AppError::Other(
                         "Could not write to the download location".to_string(),
                     )));
                 }
-                received += chunk.len() as u64;
-                downloaded.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                received += slice.len() as u64;
+                downloaded.fetch_add(slice.len() as u64, Ordering::Relaxed);
             }
             let _ = target.flush().await;
 
@@ -806,9 +927,22 @@ async fn download_chunk(
                     .await
                     .map_err(Stop::Fatal);
             }
-            Ok(Attempt::Transient) => attempt += 1,
-            Ok(Attempt::Changed) => return Err(Stop::Changed),
-            Err(stop) => return Err(stop),
+            // Everything below leaves this chunk unfinished, so the bytes it
+            // streamed are about to be fetched again — by the retry just
+            // below, or by a later run reading the journal, which never
+            // recorded them. Either way they must come back off the counter.
+            Ok(Attempt::Transient) => {
+                uncredit(&downloaded, received);
+                attempt += 1;
+            }
+            Ok(Attempt::Changed) => {
+                uncredit(&downloaded, received);
+                return Err(Stop::Changed);
+            }
+            Err(stop) => {
+                uncredit(&downloaded, received);
+                return Err(stop);
+            }
         }
 
         tokio::time::sleep(backoff_delay(attempt)).await;
@@ -837,6 +971,90 @@ mod tests {
 
     fn journal(size: u64) -> ChunkJournal {
         ChunkJournal::fresh(size)
+    }
+
+    /* ------------------------------------------------------- progress */
+
+    /// Bytes credited to the progress counter and then taken back.
+    ///
+    /// The retry path streams part of a chunk, fails, and fetches the same
+    /// range again. Without the rollback each attempt left its bytes behind
+    /// and a download over a flaky connection reported well past 100% —
+    /// which is precisely the connection this engine set out to survive.
+    #[test]
+    fn taking_bytes_back_off_the_counter_never_wraps() {
+        let counter = AtomicU64::new(100);
+
+        uncredit(&counter, 40);
+        assert_eq!(counter.load(Ordering::Relaxed), 60);
+
+        // Nothing streamed, nothing to undo.
+        uncredit(&counter, 0);
+        assert_eq!(counter.load(Ordering::Relaxed), 60);
+
+        // An underflow here would render as sixteen exabytes downloaded,
+        // which is a worse bug than the one the rollback fixes.
+        uncredit(&counter, 500);
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+    }
+
+    /* ----------------------------------------------------------- range */
+
+    #[test]
+    fn a_range_answered_with_the_whole_file_is_not_that_range() {
+        use reqwest::StatusCode;
+
+        // The ordinary answer to a ranged request.
+        assert!(range_was_honoured(StatusCode::PARTIAL_CONTENT, false));
+
+        // A one-chunk file: the range covered everything, so 200 is honest.
+        assert!(range_was_honoured(StatusCode::OK, true));
+
+        // The one that used to slip through. On a fresh download no chunk has
+        // an ETag, so `If-Range` cannot catch a proxy that strips Range — and
+        // every task in the first wave would write a whole copy of the file at
+        // its own offset and mark the chunk done.
+        assert!(!range_was_honoured(StatusCode::OK, false));
+    }
+
+    #[test]
+    fn a_chunk_never_writes_past_its_own_window() {
+        // Room for all of it.
+        assert_eq!(writable_len(1024, 8192, 0), 1024);
+        // Room for some of it: the rest belongs to the next chunk, which may
+        // already be downloaded and journalled.
+        assert_eq!(writable_len(1024, 8192, 7680), 512);
+        // No room at all — an over-sending server gets nothing.
+        assert_eq!(writable_len(1024, 8192, 8192), 0);
+        // And nothing can talk it into a negative window.
+        assert_eq!(writable_len(1024, 8192, 9000), 0);
+    }
+
+    /* --------------------------------------------------------- journal */
+
+    /// A journal save must never be able to destroy the journal.
+    ///
+    /// A plain write truncates first, so a crash between the truncate and the
+    /// write leaves an empty sidecar — refused on load, costing the whole
+    /// file. Re-fetching 40 GB because the lights went out is the outcome
+    /// chunked resume exists to prevent.
+    #[tokio::test]
+    async fn a_journal_is_replaced_atomically_and_leaves_no_litter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("game.dat.gbpart");
+
+        let mut first = ChunkJournal::fresh(CHUNK_BYTES * 4);
+        first.mark_done(0);
+        save_journal(&path, &first).await.unwrap();
+
+        let mut second = ChunkJournal::fresh(CHUNK_BYTES * 4);
+        second.mark_done(0);
+        second.mark_done(1);
+        save_journal(&path, &second).await.unwrap();
+
+        assert_eq!(load_journal(&path, CHUNK_BYTES * 4).await.done, vec![0, 1]);
+        // The temporary is renamed over the target, not left beside it.
+        assert!(!path.with_extension("gbpart.tmp").exists());
     }
 
     #[test]
