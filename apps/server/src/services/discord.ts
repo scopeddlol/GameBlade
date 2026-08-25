@@ -68,6 +68,23 @@ export interface DiscordNeighbour {
   avatarUrl: string | null;
 }
 
+/** A file on its way to Discord as a real attachment. */
+export interface DiscordUpload {
+  fileName: string;
+  contentType: string;
+  bytes: Uint8Array;
+}
+
+/** One channel in the operator's guild, as the panel's pickers want it. */
+export interface DiscordChannel {
+  id: string;
+  name: string;
+  /** Discord's own channel type: 0 text, 4 category, 5 announcement, 15 forum. */
+  type: number;
+  parentId: string | null;
+  position: number;
+}
+
 interface TokenResponse {
   access_token: string;
   refresh_token?: string;
@@ -189,9 +206,13 @@ export class DiscordService {
           // request with no User-Agent with a Cloudflare block page rather
           // than an API error — which reads as "the token is wrong".
           'User-Agent': USER_AGENT,
-          // Only when there is something to describe. A GET carrying a JSON
-          // content-type is malformed, and Cloudflare is entitled to say so.
-          ...(rest.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+          // Only for a body this actually serialised itself. A GET carrying a
+          // JSON content-type is malformed and Cloudflare is entitled to say
+          // so — and a FormData body must be left alone entirely, because
+          // fetch generates the multipart content-type with the boundary in
+          // it. Setting this over the top of that produces a request Discord
+          // cannot parse and reports as a generic 400.
+          ...(typeof rest.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
         },
       });
 
@@ -473,6 +494,11 @@ export class DiscordService {
 
   /* ------------------------------------------------------------------ bot */
 
+  /** The token, for the parts of the bot that live in their own service. */
+  get credentials(): string | null {
+    return this.botToken;
+  }
+
   /** Posts a plain message to the announcement channel. */
   async post(content: string, channelId?: string): Promise<void> {
     await this.send({ content }, channelId);
@@ -483,18 +509,109 @@ export class DiscordService {
     await this.send({ embeds: [embed] }, channelId);
   }
 
-  private async send(payload: Record<string, unknown>, channelId?: string): Promise<void> {
+  /**
+   * Posts a message with whatever a caller has built — embeds, components, an
+   * attached file — rather than one of the two shapes above.
+   *
+   * Returns the created message, because the ticket panel needs its id in
+   * order to be replaced rather than duplicated the next time it is published.
+   */
+  async postMessage(
+    payload: Record<string, unknown>,
+    options: { channelId?: string; file?: DiscordUpload } = {},
+  ): Promise<{ id: string; channel_id: string }> {
+    return this.send(payload, options.channelId, options.file);
+  }
+
+  private async send(
+    payload: Record<string, unknown>,
+    channelId?: string,
+    file?: DiscordUpload,
+  ): Promise<{ id: string; channel_id: string }> {
     const botToken = this.botToken;
     const target = (channelId ?? this.settings.get().discordChannelId)?.trim();
 
     if (!botToken) throw ApiError.badRequest('No Discord bot token is configured');
     if (!target) throw ApiError.badRequest('No Discord channel is configured');
 
-    await this.call(`/channels/${target}/messages`, {
+    if (!file) {
+      return this.call<{ id: string; channel_id: string }>(`/channels/${target}/messages`, {
+        method: 'POST',
+        auth: `Bot ${botToken}`,
+        body: JSON.stringify(payload),
+      });
+    }
+
+    return this.call<{ id: string; channel_id: string }>(`/channels/${target}/messages`, {
       method: 'POST',
       auth: `Bot ${botToken}`,
-      body: JSON.stringify(payload),
+      body: multipart(payload, [file]),
     });
+  }
+
+  /* --------------------------------------------------------------- guild */
+
+  /**
+   * The channels the bot can see, for the pickers in the panel.
+   *
+   * Typing a snowflake copied out of Discord's right-click menu works and is
+   * miserable: there is no feedback until something fails to post, and a
+   * mistyped digit reads as a permissions problem. Categories come back too,
+   * because the ticket settings need to pick one of those instead.
+   */
+  async listChannels(): Promise<DiscordChannel[]> {
+    const botToken = this.botToken;
+    const guildId = this.settings.get().discordGuildId?.trim();
+    if (!botToken) throw ApiError.badRequest('No Discord bot token is configured');
+    if (!guildId) throw ApiError.badRequest('Set the server (guild) ID first');
+
+    const channels = await this.call<
+      Array<{
+        id: string;
+        name?: string;
+        type: number;
+        parent_id?: string | null;
+        position?: number;
+      }>
+    >(`/guilds/${guildId}/channels`, { auth: `Bot ${botToken}` });
+
+    return (
+      channels
+        .map((channel) => ({
+          id: channel.id,
+          name: channel.name ?? channel.id,
+          type: channel.type,
+          parentId: channel.parent_id ?? null,
+          position: channel.position ?? 0,
+        }))
+        // Discord returns them in creation order, which is not the order anybody
+        // sees them in.
+        .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name))
+    );
+  }
+
+  /** The guild's roles, so a staff role can be picked rather than typed. */
+  async listRoles(): Promise<Array<{ id: string; name: string }>> {
+    const botToken = this.botToken;
+    const guildId = this.settings.get().discordGuildId?.trim();
+    if (!botToken) throw ApiError.badRequest('No Discord bot token is configured');
+    if (!guildId) throw ApiError.badRequest('Set the server (guild) ID first');
+
+    const roles = await this.call<Array<{ id: string; name: string; position?: number }>>(
+      `/guilds/${guildId}/roles`,
+      { auth: `Bot ${botToken}` },
+    );
+    return roles
+      .filter((role) => role.name !== '@everyone')
+      .sort((a, b) => (b.position ?? 0) - (a.position ?? 0))
+      .map((role) => ({ id: role.id, name: role.name }));
+  }
+
+  /** Any authenticated bot call, for the ticket and interaction services. */
+  async botCall<T>(path: string, init: Omit<RequestInit, 'headers'> = {}): Promise<T> {
+    const botToken = this.botToken;
+    if (!botToken) throw ApiError.badRequest('No Discord bot token is configured');
+    return this.call<T>(path, { ...init, auth: `Bot ${botToken}` });
   }
 
   /**
@@ -754,6 +871,38 @@ function explain(status: number, path: string): string {
 /** The message out of whatever `call` threw, for a check's detail line. */
 function reason(error: unknown): string {
   return error instanceof Error && error.message ? error.message : 'Discord refused the request.';
+}
+
+/**
+ * A message with a file attached, in the shape Discord's API wants.
+ *
+ * Built by hand rather than with FormData because the JSON part has to arrive
+ * as a field literally named `payload_json` alongside `files[n]` parts, and
+ * because the attachment's `id` in that JSON is an index into the parts rather
+ * than a snowflake — a detail that is easy to get wrong and produces a message
+ * with the file silently missing rather than an error.
+ */
+function multipart(payload: Record<string, unknown>, files: DiscordUpload[]): FormData {
+  const form = new FormData();
+
+  form.append(
+    'payload_json',
+    JSON.stringify({
+      ...payload,
+      attachments: files.map((file, index) => ({ id: index, filename: file.fileName })),
+    }),
+  );
+
+  files.forEach((file, index) => {
+    // Copied into a fresh buffer: a Uint8Array that is a view onto a larger
+    // pooled buffer — which is what a file read hands back — would otherwise
+    // send whatever else happened to be in that pool.
+    const bytes = new Uint8Array(file.bytes.byteLength);
+    bytes.set(file.bytes);
+    form.append(`files[${index}]`, new Blob([bytes], { type: file.contentType }), file.fileName);
+  });
+
+  return form;
 }
 
 /** Keeps an embed description inside something a reader will actually read. */

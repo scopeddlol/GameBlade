@@ -73,6 +73,9 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
 
   app.addHook('onClose', async () => {
     context.realtime.stop();
+    // Closed cleanly rather than left to time out, so the bot goes offline in
+    // Discord the moment the server does instead of lingering as a ghost.
+    context.discordBot.shutdown();
     // Closing the handle checkpoints the WAL and releases the file. Windows
     // refuses to unlink a database that is still open, which made every test
     // that deletes its temp data directory fail there.

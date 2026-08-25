@@ -12,7 +12,7 @@ import { newId } from './lib/ids.js';
  * library or resets an account an administrator has since changed.
  */
 export async function bootstrap(app: FastifyInstance): Promise<void> {
-  const { config, auth, profiles, discord } = app.gameblade;
+  const { config, auth, profiles, discord, discordBot } = app.gameblade;
 
   await seedLibraries(app);
 
@@ -24,6 +24,12 @@ export async function bootstrap(app: FastifyInstance): Promise<void> {
   } catch (error) {
     app.log.error({ err: error }, 'Discord bot failed to start; check its token and permissions');
   }
+
+  // The gateway connection is separate and only comes up if the operator left
+  // it switched on. Not awaited: connecting, identifying and registering
+  // commands is several round trips to Discord, and none of them is a reason
+  // for this server to be slow to accept its first request.
+  discordBot.restore();
 
   if (config.bootstrapAdmin) {
     const existing = auth.findByUsername(config.bootstrapAdmin.username);

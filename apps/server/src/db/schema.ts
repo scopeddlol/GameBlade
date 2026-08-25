@@ -923,6 +923,45 @@ export const discordLinks = sqliteTable(
   (t) => [uniqueIndex('discord_links_discord_id_idx').on(t.discordId)],
 );
 
+/**
+ * One support ticket, as a channel in the operator's Discord.
+ *
+ * The row exists so a ticket outlives its channel. Closing deletes the
+ * channel — which is what makes a ticket system usable rather than a server
+ * that accumulates hundreds of dead channels — and without a record of who
+ * asked for what and when, closing would also destroy the only history the
+ * operator has.
+ *
+ * `user_id` is nullable and separate from `opener_discord_id`: anyone in the
+ * Discord can open a ticket, whether or not they have linked a GameBlade
+ * account, and a linked account may later be deleted.
+ */
+export const discordTickets = sqliteTable(
+  'discord_tickets',
+  {
+    id: text('id').primaryKey(),
+    /** Human-facing sequence, the number in `ticket-0007`. */
+    number: integer('number').notNull(),
+    guildId: text('guild_id').notNull(),
+    /** Null once the channel has been deleted on close. */
+    channelId: text('channel_id'),
+    openerDiscordId: text('opener_discord_id').notNull(),
+    openerName: text('opener_name').notNull(),
+    userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+    subject: text('subject').notNull(),
+    status: text('status', { enum: ['open', 'closed'] })
+      .notNull()
+      .default('open'),
+    openedAt: text('opened_at').notNull().default(now),
+    closedAt: text('closed_at'),
+    closedBy: text('closed_by'),
+  },
+  (t) => [
+    index('discord_tickets_status_idx').on(t.status, t.openedAt),
+    uniqueIndex('discord_tickets_number_idx').on(t.number),
+  ],
+);
+
 /** A bug report, with the diagnostics the client gathered alongside it. */
 export const bugReports = sqliteTable(
   'bug_reports',

@@ -314,3 +314,60 @@ export const BUG_SEVERITY_LABELS: Record<(typeof BUG_SEVERITY)[number], string> 
   annoying: 'It works but it is painful',
   cosmetic: 'It looks wrong',
 };
+
+/* ------------------------------------------------------------------ Discord */
+
+/**
+ * What the bot says it is doing, as Discord's own activity types.
+ *
+ * The numbers are Discord's and cannot be renamed: they are what goes on the
+ * wire in a presence update. Type 4 is the odd one — a custom status puts its
+ * text in `state` rather than `name`, which the gateway handles rather than
+ * making the operator care.
+ */
+export const DISCORD_ACTIVITY_TYPES = [0, 1, 2, 3, 4, 5] as const;
+export type DiscordActivityType = (typeof DISCORD_ACTIVITY_TYPES)[number];
+
+export const DISCORD_ACTIVITY_LABELS: Record<DiscordActivityType, string> = {
+  0: 'Playing',
+  1: 'Streaming',
+  2: 'Listening to',
+  3: 'Watching',
+  4: 'Custom',
+  5: 'Competing in',
+};
+
+/** The four presences Discord will show for a bot. */
+export const DISCORD_PRESENCE_STATUS = ['online', 'idle', 'dnd', 'invisible'] as const;
+export type DiscordPresenceStatus = (typeof DISCORD_PRESENCE_STATUS)[number];
+
+export const DISCORD_PRESENCE_LABELS: Record<DiscordPresenceStatus, string> = {
+  online: 'Online',
+  idle: 'Idle',
+  dnd: 'Do not disturb',
+  invisible: 'Invisible',
+};
+
+/** Where a running bot is in its connection lifecycle. */
+export const DISCORD_BOT_STATES = [
+  'stopped',
+  'connecting',
+  'ready',
+  'reconnecting',
+  'failed',
+] as const;
+export type DiscordBotState = (typeof DISCORD_BOT_STATES)[number];
+
+/** Whether a ticket is still being worked. */
+export const DISCORD_TICKET_STATUS = ['open', 'closed'] as const;
+export type DiscordTicketStatus = (typeof DISCORD_TICKET_STATUS)[number];
+
+/**
+ * The largest attachment the panel will send to Discord.
+ *
+ * Discord's own ceiling for an unboosted server is 25 MB, but an announcement
+ * image has no business being anywhere near that, and the cap is what stops a
+ * mis-picked video sitting in the request body for a minute before Discord
+ * refuses it.
+ */
+export const MAX_DISCORD_ATTACHMENT_BYTES = 8 * 1024 * 1024;

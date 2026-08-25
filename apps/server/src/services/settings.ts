@@ -72,6 +72,38 @@ export interface RuntimeSettings {
    * server with ten thousand existing games announcing all of them at once.
    */
   discordLastAnnouncedAt: string | null;
+
+  /* ------------------------------------------------------------- the bot */
+
+  /**
+   * Whether the gateway connection is wanted.
+   *
+   * Persisted rather than held in memory so the bot comes back by itself after
+   * a restart. An operator who turned it on does not expect to have to turn it
+   * on again every deploy — and a bot that is quietly offline looks exactly
+   * like a bot that is broken.
+   */
+  discordBotEnabled: boolean;
+  /** online / idle / dnd / invisible, as Discord names them. */
+  discordPresenceStatus: string;
+  /** Discord's own activity type number: 0 Playing … 5 Competing in. */
+  discordActivityType: number;
+  /** The text beside it. Blank means no activity at all, just a presence. */
+  discordActivityName: string | null;
+
+  /* --------------------------------------------------------------- tickets */
+
+  discordTicketsEnabled: boolean;
+  /** Where the panel with the button lives. */
+  discordSupportChannelId: string | null;
+  /** Optional category the per-ticket channels are created under. */
+  discordTicketCategoryId: string | null;
+  /** Optional role granted access to every ticket channel. */
+  discordStaffRoleId: string | null;
+  discordTicketPanelTitle: string | null;
+  discordTicketPanelMessage: string | null;
+  /** Counter behind the ticket-0001 names, so numbers never repeat. */
+  discordTicketCounter: number;
 }
 
 const DEFAULT_TAGLINE = 'A private home for free-to-play and DRM-free games worth keeping.';
@@ -145,6 +177,17 @@ export class SettingsService {
       discordAnnounceRequests: asBoolean('discordAnnounceRequests', true),
       discordRequireGuild: asBoolean('discordRequireGuild', true),
       discordLastAnnouncedAt: asString('discordLastAnnouncedAt', null),
+      discordBotEnabled: asBoolean('discordBotEnabled', false),
+      discordPresenceStatus: asString('discordPresenceStatus', 'online') ?? 'online',
+      discordActivityType: asNumber('discordActivityType', 0),
+      discordActivityName: asString('discordActivityName', null),
+      discordTicketsEnabled: asBoolean('discordTicketsEnabled', false),
+      discordSupportChannelId: asString('discordSupportChannelId', null),
+      discordTicketCategoryId: asString('discordTicketCategoryId', null),
+      discordStaffRoleId: asString('discordStaffRoleId', null),
+      discordTicketPanelTitle: asString('discordTicketPanelTitle', null),
+      discordTicketPanelMessage: asString('discordTicketPanelMessage', null),
+      discordTicketCounter: asNumber('discordTicketCounter', 0),
     };
     return this.cache;
   }
