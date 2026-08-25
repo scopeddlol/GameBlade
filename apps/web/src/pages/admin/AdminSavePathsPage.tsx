@@ -123,7 +123,7 @@ export function AdminSavePathsPage() {
   const status = statusQuery.data;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="gb-page">
       <p className="text-ink-300 text-sm">
         Where each game keeps its saves, matched against a public database of save locations rather
         than found by playing every title. Nothing is written until you tick it.

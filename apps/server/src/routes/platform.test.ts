@@ -237,6 +237,63 @@ describe('platform routes', () => {
     expect((ended.json() as { seconds: number }).seconds).toBeLessThan(10);
   });
 
+  /**
+   * "Share what I'm playing", from the machine that is playing.
+   *
+   * The switch has always been in the client's settings and the server was
+   * never told about it, so it saved a value and everyone's friends saw the
+   * game regardless. Held for the whole session on purpose: the heartbeat
+   * re-asserts in-game every time it fires, so anything shorter lasts one beat.
+   */
+  it('keeps the game private when the machine playing it asked to be quiet', async () => {
+    const userId = app.gameblade.auth.findByUsername('archivist')!.id;
+    const presence = app.gameblade.presence;
+
+    const started = await app.inject({
+      method: 'POST',
+      url: '/api/play/sessions',
+      headers: auth(admin),
+      payload: { gameId, shareActivity: false },
+    });
+    expect(started.statusCode).toBe(201);
+
+    // Online, but not naming the game.
+    expect(presence.get(userId)).toMatchObject({ status: 'online', gameId: null });
+
+    const sessionId = (started.json() as { id: string }).id;
+    await app.inject({
+      method: 'POST',
+      url: `/api/play/sessions/${sessionId}/heartbeat`,
+      headers: auth(admin),
+      payload: { seconds: 1 },
+    });
+    expect(presence.get(userId).gameId).toBeNull();
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/play/sessions/${sessionId}/end`,
+      headers: auth(admin),
+      payload: { seconds: 1 },
+    });
+
+    // The next session speaks for itself rather than inheriting the last one's
+    // silence, so the default has to be back in force here.
+    const next = await app.inject({
+      method: 'POST',
+      url: '/api/play/sessions',
+      headers: auth(admin),
+      payload: { gameId },
+    });
+    expect(presence.get(userId)).toMatchObject({ status: 'in-game', gameId });
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/play/sessions/${(next.json() as { id: string }).id}/end`,
+      headers: auth(admin),
+      payload: { seconds: 1 },
+    });
+  });
+
   it('unlocks an achievement exactly once', async () => {
     const define = await app.inject({
       method: 'PUT',

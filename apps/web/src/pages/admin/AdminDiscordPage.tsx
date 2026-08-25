@@ -1,8 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, MessageSquare, Send, TestTube2, Trash2 } from 'lucide-react';
+import {
+  Check,
+  CircleAlert,
+  CircleCheck,
+  MessageSquare,
+  Send,
+  TestTube2,
+  Trash2,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Badge, Field, FormError, Notice, SectionSkeleton, Spinner } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
+
+/** One step between a stored token and a message actually arriving. */
+interface DiscordCheck {
+  id: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+}
 
 interface DiscordConfig {
   clientId: string | null;
@@ -31,6 +47,7 @@ export function AdminDiscordPage() {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [checks, setChecks] = useState<DiscordCheck[] | null>(null);
 
   const [form, setForm] = useState({
     clientId: '',
@@ -88,13 +105,25 @@ export function AdminDiscordPage() {
     onError: fail,
   });
 
+  /**
+   * Runs every step, and keeps the ones that failed on screen.
+   *
+   * A single "it worked / it did not" line is what made this unfixable: the
+   * three things that actually go wrong — never invited, wrong channel, no
+   * Send Messages — all look identical from outside. The list stays until the
+   * next run so the operator can work down it.
+   */
   const test = useMutation({
-    mutationFn: () => api.post<{ bot: { username: string } }>('/admin/discord/test'),
+    mutationFn: () => api.post<{ ok: boolean; checks: DiscordCheck[] }>('/admin/discord/test'),
     onSuccess: (result) => {
       setError(null);
-      setNotice(`The bot answered as ${result.bot.username}.`);
+      setChecks(result.checks);
+      setNotice(result.ok ? 'Everything works — a test message was posted to the channel.' : null);
     },
-    onError: fail,
+    onError: (caught) => {
+      setChecks(null);
+      fail(caught);
+    },
   });
 
   const announce = useMutation({
@@ -123,7 +152,7 @@ export function AdminDiscordPage() {
   if (configQuery.isLoading || !config) return <SectionSkeleton rows={3} />;
 
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="gb-page-narrow">
       <FormError message={error} />
       <Notice message={notice} />
 
@@ -260,6 +289,24 @@ export function AdminDiscordPage() {
           <strong>Send Messages</strong> permission, and <strong>Create Instant Invite</strong> if
           you want it to add people who link.
         </p>
+
+        {checks ? (
+          <ul className="divide-ink-700/70 bg-ink-800/50 divide-y rounded-lg">
+            {checks.map((check) => (
+              <li key={check.id} className="flex items-start gap-2 px-3 py-2">
+                {check.ok ? (
+                  <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" aria-hidden />
+                ) : (
+                  <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" aria-hidden />
+                )}
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium">{check.label}</span>
+                  <span className="text-ink-400 block text-xs leading-relaxed">{check.detail}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
 
         <Field
           label="Bot token"

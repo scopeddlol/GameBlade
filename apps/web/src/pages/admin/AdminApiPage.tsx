@@ -78,7 +78,7 @@ export function AdminApiPage() {
     );
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="gb-page-narrow">
       <p className="text-ink-300 text-sm">
         Keys authenticate the external API at <code className="font-mono">/api/v1</code> — for
         provisioning accounts from another system, or reading stats. They are not accounts: a key

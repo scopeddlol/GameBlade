@@ -103,7 +103,7 @@ export function AdminRequestsPage() {
     });
 
   return (
-    <div className="space-y-5">
+    <div className="gb-page">
       <p className="text-ink-300 text-sm">
         What players have asked for. Deciding one tells every client.
       </p>

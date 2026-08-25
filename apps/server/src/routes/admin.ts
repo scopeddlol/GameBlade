@@ -1,5 +1,7 @@
 import {
   achievementDefinitionSchema,
+  bulkAchievementDefinitionsSchema,
+  bulkImportAchievementsSchema,
   announcementSchema,
   bugQuerySchema,
   bugTriageSchema,
@@ -748,6 +750,44 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return achievements.autoImportFromSteam(id, input.replace);
   });
 
+  /**
+   * Many definitions written to one game at once, from a pasted list.
+   *
+   * The single-definition PUT above is right for a correction and hopeless for
+   * a game that ships two hundred achievements Steam has never heard of — a
+   * fan translation, something itch-only, a title whose Steam entry predates
+   * its achievements. Parsing the paste is the client's job; this takes the
+   * rows it produced.
+   */
+  app.post('/admin/games/:id/achievements/bulk', async (request) => {
+    const { id } = request.params as { id: string };
+    const input = bulkAchievementDefinitionsSchema.parse(request.body);
+    return achievements.bulkUpsertDefinitions(id, input.achievements, input.replace);
+  });
+
+  /**
+   * One slice of a bulk import across the catalog.
+   *
+   * Deliberately not "import everything" in a single request. Each game is two
+   * or three round trips to Steam, so a whole-catalog request would hold a
+   * connection open for minutes, report nothing until it ended, and lose the
+   * lot if anything dropped. The client walks the list in small batches
+   * instead, which is also what gives it a progress bar and a Stop button.
+   *
+   * Nothing here throws for one game's sake: a title Steam cannot place, or
+   * places ambiguously, or has no achievements for, is ordinary across a real
+   * catalog and is reported per row.
+   */
+  app.post('/admin/achievements/bulk-import', async (request) => {
+    const input = bulkImportAchievementsSchema.parse(request.body);
+    const results = await achievements.bulkImportFromSteam(input.gameIds, {
+      replace: input.replace,
+      generateRules: input.generateRules,
+      skipExisting: input.skipExisting,
+    });
+    return { results };
+  });
+
   // ---- Bug reports ----
 
   app.get('/admin/bugs', async (request) => {
@@ -927,14 +967,17 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * Proves the bot token works before an operator relies on it.
+   * Walks every step between a stored token and a message arriving.
    *
-   * A token that is merely stored tells you nothing; the first sign of a wrong
-   * one would otherwise be an announcement that never arrived.
+   * A token that is merely stored tells you nothing, and neither does one that
+   * merely authenticates: the usual reasons nothing is posted are a bot that
+   * was never invited, a channel ID from the wrong place, and a missing Send
+   * Messages permission. Each is reported separately, so the answer names the
+   * step to fix instead of saying it did not work.
    */
   app.post('/admin/discord/test', async () => {
-    const identity = await discord.botIdentity();
-    return { ok: true, bot: identity };
+    const result = await discord.diagnose();
+    return { ok: result.checks.every((check) => check.ok), ...result };
   });
 
   /** Posts whatever the operator typed, to the configured channel. */

@@ -109,7 +109,7 @@ export function AdminClientPage() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="gb-page-narrow">
       <p className="text-ink-300 text-sm">
         Add your own links to the desktop client — a Discord invite, a wiki, a support page. They
         open in the player&rsquo;s browser.

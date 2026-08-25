@@ -52,7 +52,7 @@ export function AdminBugsPage() {
   const reports = bugsQuery.data ?? [];
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="gb-page">
       <p className="text-ink-300 text-sm">
         What your players have run into. Whatever you set here, and anything you write back, reaches
         them as a notification.

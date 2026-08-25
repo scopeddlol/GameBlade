@@ -86,6 +86,77 @@ packages/
 
 ---
 
+## Build Session - August 25, 2026
+
+## Version 0.5.1 - August 25, 2026
+
+### Discord
+
+- Send people to Discord's consent screen rather than to the REST API. The
+  authorize URL was built from the API base, so every attempt to link or sign
+  in landed on `/api/v10/oauth2/authorize` — a path that answers no GET. No
+  consent screen meant no code, no link, and nothing for the bot to act on.
+- Allow `cdn.discordapp.com` in the content security policy, so a linked
+  player's avatar renders instead of being blocked.
+- Accept a bot token pasted as `Bot <token>`, and trim whitespace around every
+  Discord credential.
+- Identify the application to Discord on every request. A request with no
+  User-Agent is answered with a Cloudflare block page, which arrives as a 403
+  full of HTML and reads exactly like a rejected token.
+- Retry once when Discord rate-limits, honouring its own `Retry-After`.
+- Render Discord's own failures as the result page rather than as a JSON error
+  body, and report a status code in the operator's terms.
+- **Test** now walks every step between a stored token and a message arriving —
+  the token, whether the bot was invited, whether it can see the channel,
+  whether it may post — and reports each separately.
+- Log a failure to add someone to the server instead of swallowing it.
+
+### Achievements
+
+- **New: Admin → Catalog → Achievements.** Bulk-import from Steam across as
+  many games as you select, a few at a time, with live progress, a stop button
+  and a per-game report; unlock rules are written alongside. Plus a paste box
+  for the games Steam cannot help with, taking tab-, comma- or pipe-separated
+  lines.
+- Moved unlock-rule generation onto the achievement service, so the bulk
+  importer and the per-game button write rules through the same path.
+
+### Admin panel
+
+- The Catalog worklist and its gap counts now refresh the moment an edit lands.
+  Filtering by "No launch exec", fixing one and watching it sit there wearing
+  the pill for the thing it no longer lacked was the single most annoying thing
+  about triaging a catalog.
+- One page shell for every admin screen. Widths ran from `2xl` to `5xl`, half
+  the pages centred and half not, so moving between two sub-tabs of one section
+  shifted the column and slid the page sideways.
+- Say where the tagline actually appears, and what overrides it.
+
+### Desktop client
+
+- Settings is a real tab strip. One section on screen, the tab that opened it
+  stays lit, the card glows briefly to confirm the click, and arrow keys move
+  along the strip. It was a scroll-spy jump list over a two-column page, so the
+  highlight tracked an order nobody could see and nine entries sat two pixels
+  apart.
+- Every suggestion card on the Requests tab is one size. The shelves pinned
+  theirs to 168px while the search grid let its tracks stretch, and the blurb's
+  two-line clamp was written against a class the markup never used, so a wordy
+  summary grew its card without limit.
+- **Simultaneous transfers** and **Verify downloads** now do something. Both had
+  been saved to settings.json since the page was written and never read: every
+  download ran four files at a time and always hashed.
+- **Sync saves automatically**, **Ask before overwriting**, **Minimize when a
+  game starts** and **Share what I'm playing** likewise. The last one is held
+  for the session's lifetime server-side, because the heartbeat re-asserts
+  what is being played every time it fires.
+- Removed the Library layout control from Settings. The Library tab's own
+  switcher sets it, above the grid it changes, and offers all three layouts
+  where this copy knew two — so using it silently discarded a "detailed"
+  choice.
+
+---
+
 ## Build Session - August 24, 2026
 
 ## Version 0.5.0 - August 24, 2026

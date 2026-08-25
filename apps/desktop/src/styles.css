@@ -34,6 +34,13 @@
   --radius-md: 12px;
   --radius-lg: 16px;
   --sidebar: 208px;
+  /* One width for every suggestion card on the Requests tab, wherever it is
+     laid out. The shelves and the search results used to size their cards
+     differently — the strip pinned each to 168px, while the grid's `1fr`
+     tracks let them grow to whatever the window allowed — so the same cover
+     was one size on a shelf and another in the results below it, and a wide
+     window made the difference enormous. Both measure from here now. */
+  --discover-card: 168px;
 
   /* Elevation, as three steps. Shadows are what separate a panel that floats
      above the page from one painted onto it, and mixing ad-hoc values is how
@@ -1970,10 +1977,6 @@ textarea::placeholder {
 
 /* ---------------------------------------------------------------- settings */
 
-.settings {
-  max-width: 680px;
-}
-
 .card {
   background: var(--ink-850);
   border: 1px solid var(--ink-700);
@@ -3207,88 +3210,127 @@ textarea::placeholder {
  * up once there is room for two, and a jump list down the side means a
  * preference is one click away rather than a scroll away.
  */
+/* Wide enough for the tab strip beside a comfortable reading column, and no
+   wider: one section at a time does not need the whole window, and a form
+   field stretched across 1200px is unreadable. */
 .settings {
-  max-width: 1240px;
+  max-width: 1000px;
 }
 .settings-layout {
   display: grid;
-  grid-template-columns: 188px minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 28px;
   align-items: start;
 }
+
+/* A tab strip, not a jump list: one section is on screen at a time, so the
+   selected tab is the only thing saying where you are and it must never be in
+   doubt. */
 .settings-nav {
   position: sticky;
   /* Clear of the drag region at the top of the window. */
   top: 8px;
-}
-.settings-nav ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  /* Nine entries two pixels apart is what made this hard to hit. */
+  gap: 6px;
 }
 .settings-nav-item {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 8px;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--ink-300);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
   transition:
-    background 120ms ease,
-    color 120ms ease;
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
 }
 .settings-nav-item:hover {
   background: var(--ink-850);
   color: var(--ink-100);
 }
-.settings-nav-item.active {
+.settings-nav-item svg {
+  flex-shrink: 0;
+  color: var(--ink-400);
+  transition: color var(--dur-fast) var(--ease);
+}
+/* The selected tab carries the accent, so which section is open reads at a
+   glance rather than being one shade of grey away from its neighbours. */
+.settings-nav-item[aria-selected='true'] {
   background: var(--ink-800);
+  border-color: color-mix(in srgb, var(--blade-500) 40%, transparent);
   color: var(--ink-100);
   font-weight: 600;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--blade-500) 14%, transparent);
+}
+.settings-nav-item[aria-selected='true'] svg {
+  color: var(--blade-400);
 }
 
-.settings-sections {
-  display: grid;
-  /* Two columns once a card can still be read at that width, one before. */
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+/* The panel the selected tab opens. Cards inside it stack: one section's worth
+   of settings reads straight down, and the two columns this page used to have
+   were exactly what stopped its order matching the list beside it. */
+.settings-panel {
+  display: flex;
+  flex-direction: column;
   gap: 16px;
-  align-items: start;
-}
-/* Profile and Appearance carry a banner and a theme grid; neither reads well
-   in half a row, so they take the whole one. */
-.settings-wide {
-  grid-column: 1 / -1;
+  min-width: 0;
+  /* Focused by the strip when a section is opened from the keyboard; a ring
+     around the whole panel says nothing the lit tab has not already said. */
+  outline: none;
 }
 
-/* Below this the jump list costs more width than it earns, so the page goes
-   back to a single column with the sections stacked. */
-@media (max-width: 1080px) {
+/*
+ * A short glow on the card that has just been opened.
+ *
+ * Swapping the content and nothing else leaves the eye hunting for what
+ * changed. One pass of the accent round the card answers that and then gets
+ * out of the way — the panel is remounted on every selection, so it plays each
+ * time rather than only the first.
+ */
+.settings-panel > .card {
+  animation: settings-glow 620ms var(--ease);
+}
+@keyframes settings-glow {
+  from {
+    border-color: color-mix(in srgb, var(--blade-500) 55%, var(--ink-700));
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--blade-500) 30%, transparent),
+      0 0 22px color-mix(in srgb, var(--blade-500) 22%, transparent);
+  }
+  to {
+    border-color: var(--ink-700);
+    box-shadow: var(--shadow-sm);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-panel > .card {
+    animation: none;
+  }
+}
+
+/* Below this the strip costs more width than it earns, so it lies across the
+   top of the page and the section opens underneath it. */
+@media (max-width: 900px) {
   .settings-layout {
     grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
   }
   .settings-nav {
     position: static;
-  }
-  .settings-nav ul {
     flex-direction: row;
     flex-wrap: wrap;
   }
   .settings-nav-item {
     width: auto;
-  }
-}
-@media (max-width: 760px) {
-  .settings-sections {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -3507,15 +3549,20 @@ textarea::placeholder {
   scroll-snap-align: start;
 }
 /* Search results have no queue under them competing for the height, so they
-   wrap instead of scrolling — every match is visible at once. */
+   wrap instead of scrolling — every match is visible at once. Fixed tracks
+   rather than `1fr`: a stretching track is what made a cover's size depend on
+   how many happened to fit across, which is the one thing a wall of posters
+   must not do. */
 .discover-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, var(--discover-card));
+  justify-content: start;
   gap: 12px;
 }
 
 .discover-card {
-  flex: 0 0 168px;
+  flex: 0 0 var(--discover-card);
+  width: var(--discover-card);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -3528,17 +3575,17 @@ textarea::placeholder {
     transform 140ms ease,
     box-shadow 140ms ease;
 }
-.discover-grid .discover-card {
-  flex: initial;
-}
 .discover-card:hover {
   border-color: var(--ink-700);
   transform: translateY(-2px);
   box-shadow: 0 8px 20px rgb(0 0 0 / 0.28);
 }
 
+/* Whatever the provider sent — a 300×450 poster, a 1000×1500 one, or nothing
+   at all — the box it lands in is the card's width and only that. */
 .discover-cover-wrap {
   position: relative;
+  width: 100%;
 }
 /* Every cover the same shape, whatever the provider sent.
    `height` is set explicitly rather than left to `.artwork`'s `height: 100%`:
@@ -3595,7 +3642,10 @@ textarea::placeholder {
 .discover-body p {
   margin: 0;
 }
-/* Two lines, so a long blurb cannot make one card taller than the row. */
+/* Two lines, so a long blurb cannot make one card taller than the row. This
+   rule existed and matched nothing: the card asked for `.shelf-blurb`, which
+   has no rule anywhere, so a wordy summary grew its card without limit and a
+   row of cards ended up a row of different heights. */
 .discover-blurb {
   display: -webkit-box;
   -webkit-line-clamp: 2;

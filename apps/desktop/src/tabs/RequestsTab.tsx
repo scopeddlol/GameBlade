@@ -334,7 +334,7 @@ function SuggestionCard({
         </p>
         {suggestion.releaseYear ? <p className="muted small">{suggestion.releaseYear}</p> : null}
         {suggestion.summary ? (
-          <p className="muted small shelf-blurb">{suggestion.summary}</p>
+          <p className="muted small discover-blurb">{suggestion.summary}</p>
         ) : null}
       </div>
 

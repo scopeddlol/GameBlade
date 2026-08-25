@@ -49,7 +49,7 @@ export function AdminInvitesPage() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="gb-page">
       <section className="gb-card p-5">
         <h2 className="mb-4 text-sm font-semibold tracking-wide uppercase">Create an invite</h2>
         <form

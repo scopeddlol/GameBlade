@@ -113,20 +113,43 @@ export async function discordRoutes(app: FastifyInstance): Promise<void> {
       return finished(reply, false, 'That sign-in attempt has expired. Try again.');
     }
 
-    const tokens = await discord.exchangeCode(code, redirectUri(request));
-    const identity = await discord.identify(tokens.access_token);
+    /**
+     * Everything from here talks to Discord, and this route answers a
+     * *browser*. An unhandled throw hands the visitor Fastify's JSON error
+     * body — which, on the one screen where somebody is waiting to be told
+     * whether it worked, reads as the server breaking. Every failure below is
+     * caught and rendered as the same result page as every other outcome.
+     */
+    let tokens: Awaited<ReturnType<typeof discord.exchangeCode>>;
+    let identity: Awaited<ReturnType<typeof discord.identify>>;
+    let inGuild = false;
 
-    /* -------------------------------------------------- guild membership */
+    try {
+      tokens = await discord.exchangeCode(code, redirectUri(request));
+      identity = await discord.identify(tokens.access_token);
+
+      /* ------------------------------------------------ guild membership */
+
+      inGuild = await discord.isInGuild(tokens.access_token);
+
+      // Being told to go and join a Discord is a step people do not take,
+      // which is the whole reason the join scope is requested.
+      if (!inGuild) {
+        const added = await discord.addToGuild(identity.id, tokens.access_token);
+        if (added) inGuild = true;
+      }
+    } catch (caught) {
+      request.log.warn({ err: caught }, 'the Discord round trip failed');
+      return finished(
+        reply,
+        false,
+        caught instanceof Error && caught.message
+          ? caught.message
+          : 'Discord did not answer. Try again in a moment.',
+      );
+    }
 
     const { discordRequireGuild, discordInviteUrl } = settings.get();
-    let inGuild = await discord.isInGuild(tokens.access_token);
-
-    // Being told to go and join a Discord is a step people do not take, which
-    // is the whole reason the join scope is requested.
-    if (!inGuild) {
-      const added = await discord.addToGuild(identity.id, tokens.access_token);
-      if (added) inGuild = true;
-    }
 
     if (!inGuild && discordRequireGuild) {
       return finished(

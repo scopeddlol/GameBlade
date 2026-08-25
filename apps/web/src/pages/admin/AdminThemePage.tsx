@@ -79,7 +79,7 @@ export function AdminThemePage() {
   if (preset === null) return <SectionSkeleton rows={3} />;
 
   return (
-    <div className="max-w-4xl space-y-4">
+    <div className="gb-page">
       <FormError message={error} />
       <Notice message={notice} />
 

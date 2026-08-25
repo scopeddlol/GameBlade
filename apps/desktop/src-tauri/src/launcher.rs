@@ -33,6 +33,11 @@ pub struct LaunchRequest {
     pub executable: PathBuf,
     pub args: Option<String>,
     pub working_dir: Option<PathBuf>,
+    /// Whether this machine publishes what is being played, from its own
+    /// settings. Sent with the session because the server holds it for the
+    /// session's lifetime — the heartbeat would otherwise re-publish the game
+    /// a few seconds after any one-off override.
+    pub share_activity: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,7 +90,13 @@ impl Launcher {
 
         let game_id = request.game_id;
         let session: SessionResponse = client
-            .post_json("/play/sessions", &serde_json::json!({ "gameId": game_id }))
+            .post_json(
+                "/play/sessions",
+                &serde_json::json!({
+                    "gameId": game_id,
+                    "shareActivity": request.share_activity,
+                }),
+            )
             .await
             .and_then(|value| serde_json::from_value(value).map_err(AppError::from))?;
 

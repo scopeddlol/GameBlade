@@ -1,8 +1,6 @@
 import {
   achievementRulesSchema,
   reportUnlocksSchema,
-  resolveStoreTemplate,
-  usableStores,
   artworkSearchSchema,
   editGameSchema,
   gameQuerySchema,
@@ -197,72 +195,14 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
   app.post('/games/:id/achievement-rules/generate', async (request) => {
     requireAdmin(request);
     const { id } = request.params as { id: string };
-    const { sources: wanted, replace = true } = (request.body ?? {}) as {
+    const { sources, replace = true } = (request.body ?? {}) as {
       sources?: string[];
       replace?: boolean;
     };
 
-    const game = db
-      .select({ id: games.id, steamAppId: games.steamAppId })
-      .from(games)
-      .where(eq(games.id, id))
-      .get();
-    if (!game) throw ApiError.notFound('Game not found');
-
-    const keys = db
-      .select({ key: achievementDefinitions.key })
-      .from(achievementDefinitions)
-      .where(eq(achievementDefinitions.gameId, id))
-      .all()
-      .map((row) => row.key);
-
-    if (keys.length === 0) {
-      throw ApiError.badRequest(
-        "Import this game's achievements first — there is nothing to write rules for.",
-      );
-    }
-
-    const stores = usableStores(game.steamAppId ?? null).filter(
-      (store) => !wanted || wanted.includes(store.id),
-    );
-    if (stores.length === 0) {
-      throw ApiError.badRequest(
-        game.steamAppId
-          ? 'None of the selected layouts are usable for this game.'
-          : "Set this game's Steam app id first: every emulator layout but the portable one stores saves under it.",
-      );
-    }
-
-    db.transaction((tx) => {
-      // Replacing by default: generating twice should not double every rule.
-      if (replace) {
-        tx.delete(gameAchievementRules).where(eq(gameAchievementRules.gameId, id)).run();
-      }
-      for (const store of stores) {
-        const template = resolveStoreTemplate(store, game.steamAppId ?? null);
-        for (const key of keys) {
-          tx.insert(gameAchievementRules)
-            .values({
-              id: newId('achr'),
-              gameId: id,
-              achievementKey: key,
-              sourceTemplate: template,
-              format: store.format,
-              selector: store.selector(key),
-              comparator: store.comparator,
-              value: null,
-              createdAt: isoNow(),
-            })
-            .run();
-        }
-      }
-    });
-
-    return {
-      generated: stores.length * keys.length,
-      achievements: keys.length,
-      stores: stores.map((store) => store.id),
-    };
+    // The work itself lives on the service, so the bulk importer writes rules
+    // through exactly the same path this button does.
+    return achievements.generateRules(id, { sources, replace });
   });
 
   app.post('/games/:id/favorite', async (request) => {
