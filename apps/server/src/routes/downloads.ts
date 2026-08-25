@@ -307,6 +307,23 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
+   * A fresh signed token for a game the caller can already authenticate for.
+   *
+   * Manifest tokens expire after six hours, which a paused-over-the-weekend or
+   * very slow transfer can outlive. Rather than refetching the whole manifest
+   * and re-deriving what is already on disk, the downloader exchanges its
+   * device token for a new download token here and keeps streaming.
+   */
+  app.post('/download/:gameId/token', async (request) => {
+    if (!request.auth) throw ApiError.unauthorized();
+    const { gameId } = request.params as { gameId: string };
+    const game = db.select({ id: games.id }).from(games).where(eq(games.id, gameId)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    return downloadTokens.issue({ userId: request.auth.user.id, gameId });
+  });
+
+  /**
    * Package a folder game into a ZIP on the fly.
    *
    * Entries are stored, never deflated: game data is already compressed, so

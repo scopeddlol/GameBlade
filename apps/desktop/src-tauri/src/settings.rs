@@ -39,8 +39,9 @@ pub struct Settings {
     #[serde(alias = "minimiseOnLaunch")]
     pub minimize_on_launch: bool,
 
-    /// Simultaneous file transfers. More helps on a fast link with many small
-    /// files and hurts on a slow one, so it is exposed rather than guessed.
+    /// Parallel connections one download may use. More helps on a fast link
+    /// with many small files and hurts on a slow one, so it is exposed rather
+    /// than guessed.
     pub download_concurrency: usize,
 
     /// Verify each downloaded file against the server's SHA-256 when it has one.

@@ -123,7 +123,7 @@ export function SettingsTab() {
               <SectionHeader title="Downloads and installs" />
 
               <label className="field">
-                <span>Simultaneous transfers</span>
+                <span>Download connections</span>
                 <input
                   type="range"
                   min={1}
@@ -132,8 +132,8 @@ export function SettingsTab() {
                   onChange={(e) => update({ downloadConcurrency: Number(e.target.value) })}
                 />
                 <span className="muted small">
-                  {draft.downloadConcurrency} at a time. More helps on a fast connection with many
-                  small files, and hurts on a slow one.
+                  {draft.downloadConcurrency} connections at a time. More helps on a fast connection
+                  with many small files, and hurts on a slow one.
                 </span>
               </label>
 

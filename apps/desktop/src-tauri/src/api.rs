@@ -34,6 +34,30 @@ pub struct DownloadManifest {
     pub total_bytes: u64,
     pub files: Vec<ManifestFile>,
     pub token: String,
+    /// When the signed token stops working. Absent from older servers; the
+    /// downloader then falls back to refreshing reactively on a 403 alone.
+    #[serde(rename = "expiresAt", default)]
+    pub expires_at: Option<String>,
+}
+
+/// What `POST /download/:gameId/token` hands back.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssuedDownloadToken {
+    pub token: String,
+    #[serde(rename = "expiresAt")]
+    pub expires_at: String,
+}
+
+/// The machine-readable half of a server error.
+///
+/// Download failures are classified by this code rather than by message text:
+/// `quota_exceeded` becomes a paused transfer, `token_expired` becomes a
+/// refresh-and-retry, and everything else stays an ordinary failure.
+#[derive(Debug, Clone)]
+pub struct ApiFailure {
+    pub status: u16,
+    pub code: Option<String>,
+    pub message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,30 +148,6 @@ impl ApiClient {
         let request = self.authorised(self.http.get(self.endpoint(path)))?;
         let response = check_status(request.send().await?).await?;
         Ok(response.json().await?)
-    }
-
-    /// Raw bytes for one path, used to fill the artwork cache.
-    ///
-    /// Capped: the endpoint only ever serves artwork, and a body larger than
-    /// this is a misconfiguration rather than a cover, which should not be
-    /// pulled entirely into memory before it is noticed.
-    pub async fn get_bytes(&self, path: &str) -> AppResult<Vec<u8>> {
-        const MAX_ARTWORK_BYTES: usize = 24 * 1024 * 1024;
-
-        let request = self.authorised(self.http.get(self.endpoint(path)))?;
-        let response = check_status(request.send().await?).await?;
-
-        if let Some(length) = response.content_length() {
-            if length as usize > MAX_ARTWORK_BYTES {
-                return Ok(Vec::new());
-            }
-        }
-
-        let bytes = response.bytes().await?;
-        if bytes.len() > MAX_ARTWORK_BYTES {
-            return Ok(Vec::new());
-        }
-        Ok(bytes.to_vec())
     }
 
     pub async fn post_json(
@@ -272,6 +272,56 @@ impl ApiClient {
         )?;
         let response = check_status(request.send().await?).await?;
         Ok(response.json().await?)
+    }
+
+    /// A fresh signed download token for a game.
+    ///
+    /// Long transfers outlive the manifest token's six hours; refreshing is
+    /// what lets them keep streaming instead of failing at hour six.
+    pub async fn download_token(&self, game_id: &str) -> AppResult<IssuedDownloadToken> {
+        let request = self.authorised(
+            self.http
+                .post(self.endpoint(&format!("/download/{game_id}/token"))),
+        )?;
+        let response = check_status(request.send().await?).await?;
+        Ok(response.json().await?)
+    }
+
+    /// Reads a non-2xx response into its structured parts without turning it
+    /// into an `AppError` yet — the downloader classifies before it decides.
+    pub async fn classify_failure(response: reqwest::Response) -> ApiFailure {
+        let status = response.status().as_u16();
+        let body = response.text().await.unwrap_or_default();
+
+        #[derive(Deserialize)]
+        struct Envelope {
+            error: Body,
+        }
+        #[derive(Deserialize)]
+        struct Body {
+            code: Option<String>,
+            #[serde(default)]
+            message: Option<String>,
+        }
+
+        let parsed = serde_json::from_str::<Envelope>(&body).ok();
+        let message = parsed
+            .as_ref()
+            .and_then(|e| e.error.message.clone())
+            .unwrap_or_else(|| match status {
+                401 => "Not signed in".to_string(),
+                403 => "You do not have access to that".to_string(),
+                404 => "Not found".to_string(),
+                410 => "No longer available on the server".to_string(),
+                _ => format!("Server returned {status}"),
+            });
+        let code = parsed.and_then(|e| e.error.code);
+
+        ApiFailure {
+            status,
+            code,
+            message,
+        }
     }
 }
 
