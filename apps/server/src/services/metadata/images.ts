@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../../db/index.js';
 import { images } from '../../db/schema.js';
 import { newId } from '../../lib/ids.js';
-import { HttpError, withRetry } from '../../lib/ratelimit.js';
+import { DOWNLOAD_TIMEOUT_MS, HttpError, withRetry } from '../../lib/ratelimit.js';
 
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
@@ -73,7 +73,10 @@ export class ImageCache {
   }
 
   private async download(url: string, kind: ImageKind): Promise<string> {
-    const response = await fetch(url, { headers: { Accept: 'image/*' } });
+    const response = await fetch(url, {
+      headers: { Accept: 'image/*' },
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    });
     if (!response.ok || !response.body) {
       throw new HttpError(response.status, `image download failed (${response.status})`);
     }

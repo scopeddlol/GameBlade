@@ -131,7 +131,10 @@ export class ScannerService {
     }
 
     if (options.fetchMetadata !== false) {
-      await this.matchPending();
+      // The internal loop, not the guarded wrapper: `matchPending` returns the
+      // in-flight run when one exists, which here is this very scan — awaiting
+      // it would be awaiting ourselves.
+      await this.runMatchPending();
     }
 
     this.progress = {
@@ -144,9 +147,15 @@ export class ScannerService {
 
   private async scanLibrary(library: Library, force: boolean): Promise<void> {
     this.logger.info({ library: library.name, path: library.path }, 'scanning library');
+    const startedAt = Date.now();
 
     let discovered: DiscoveredGame[];
     try {
+      // Walking a large share turns up no count until it finishes, and the
+      // progress readout would otherwise sit on the previous library's final
+      // tally throughout — indistinguishable from a stall. Naming the library
+      // being read says which of the two is happening.
+      this.progress = { ...this.progress, currentItem: `Reading ${library.name}…` };
       discovered = await this.discover(library.path);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -158,6 +167,11 @@ export class ScannerService {
         .run();
       return;
     }
+
+    this.logger.info(
+      { library: library.name, entries: discovered.length, ms: Date.now() - startedAt },
+      'finished reading library',
+    );
 
     this.progress = { ...this.progress, total: this.progress.total + discovered.length };
 
@@ -401,13 +415,70 @@ export class ScannerService {
   }
 
   /**
+   * Run enrichment on its own, outside a scan.
+   *
+   * Goes through the same guard as `scan`, so the two cannot interleave and
+   * trample each other's progress, and — the part that matters — returns the
+   * progress to `idle` when it finishes. The bare loop below does not: it
+   * leaves the state on `matching`, which is correct mid-scan because `runScan`
+   * closes it out afterwards, but left this stuck at its final count forever
+   * when the admin panel's "fetch metadata" button called it directly. The UI
+   * reads `matching` as a run in flight, so the count sat there and every scan
+   * button stayed disabled until the server was restarted.
+   */
+  matchPending(limit = 500): Promise<void> {
+    if (this.running) return this.running;
+
+    this.progress = {
+      ...this.progress,
+      state: 'matching',
+      processed: 0,
+      total: 0,
+      currentItem: null,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      error: null,
+      added: 0,
+      updated: 0,
+      removed: 0,
+    };
+
+    this.running = this.runMatchPending(limit)
+      .then(() => {
+        this.progress = {
+          ...this.progress,
+          state: 'idle',
+          currentItem: null,
+          finishedAt: new Date().toISOString(),
+        };
+      })
+      .catch((error: unknown) => {
+        this.logger.error({ err: error }, 'metadata enrichment failed');
+        this.progress = {
+          ...this.progress,
+          state: 'error',
+          error: error instanceof Error ? error.message : String(error),
+          finishedAt: new Date().toISOString(),
+        };
+      })
+      .finally(() => {
+        this.running = null;
+      });
+
+    return this.running;
+  }
+
+  /**
    * Fill in metadata and artwork for every game still missing either.
    *
    * A game with no cover is picked up even once it has been matched, because
    * artwork comes from a different provider that may have been configured
    * later — or that was unreachable when the game was first scanned.
+   *
+   * Leaves the progress state on `matching`; whoever started the run decides
+   * what it becomes next.
    */
-  async matchPending(limit = 500): Promise<void> {
+  private async runMatchPending(limit = 500): Promise<void> {
     if (!this.metadata.hasIgdb && !this.metadata.hasSteamGridDb) {
       this.logger.info({}, 'no metadata providers configured — skipping enrichment');
       return;
@@ -426,6 +497,8 @@ export class ScannerService {
       .all();
 
     if (pending.length === 0) return;
+
+    this.logger.info({ pending: pending.length }, 'enriching games from metadata providers');
 
     this.progress = {
       ...this.progress,
