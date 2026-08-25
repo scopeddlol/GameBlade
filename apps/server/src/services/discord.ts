@@ -526,6 +526,12 @@ export class DiscordService {
       auth: `Bot ${discordBotToken}`,
     });
   }
+
+  /** Authenticates the REST-backed bot when the server starts. */
+  async startBot(): Promise<{ id: string; username: string } | null> {
+    if (!this.hasBot) return null;
+    return this.botIdentity();
+  }
 }
 
 /** Keeps an embed description inside something a reader will actually read. */

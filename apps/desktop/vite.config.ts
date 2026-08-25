@@ -10,6 +10,10 @@ export default defineConfig({
   server: {
     port: 5174,
     strictPort: true,
+    watch: {
+      // Ignore Rust build directories to prevent EBUSY errors on Windows
+      ignored: ['**/target/**', '**/dist/**'],
+    },
   },
   build: {
     outDir: 'dist',

@@ -349,9 +349,21 @@ export function matchCatalog(
     if (key && !byKey.has(key)) byKey.set(key, entry);
   }
 
+  // A library name often retains an edition marker that the manifest does
+  // not ("Game - GOTY Edition"). Permit that only when it identifies one
+  // manifest entry; a short title such as "Halo" must never guess at a sequel.
+  const byBaseKey = new Map<string, ManifestEntry[]>();
+  for (const entry of entries) {
+    const key = baseTitleKey(entry.title);
+    if (!key) continue;
+    byBaseKey.set(key, [...(byBaseKey.get(key) ?? []), entry]);
+  }
+
   const suggestions: SaveRuleSuggestion[] = [];
   for (const game of games) {
-    const entry = byKey.get(matchKey(game.title));
+    const exact = byKey.get(matchKey(game.title));
+    const variants = byBaseKey.get(baseTitleKey(game.title)) ?? [];
+    const entry = exact ?? (variants.length === 1 ? variants[0] : undefined);
     if (!entry) continue;
     suggestions.push({
       gameId: game.id,
@@ -362,4 +374,15 @@ export function matchCatalog(
     });
   }
   return suggestions;
+}
+
+function baseTitleKey(title: string): string {
+  return matchKey(
+    title
+      .replace(
+        /\s*[-–—:]?\s*(?:game of the year|goty|complete|definitive|deluxe|gold|ultimate|enhanced|remastered|director'?s cut|collector'?s)\s*(?:edition)?$/i,
+        '',
+      )
+      .replace(/\s*\([^)]*\)\s*$/, ''),
+  );
 }

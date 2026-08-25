@@ -12,9 +12,18 @@ import { newId } from './lib/ids.js';
  * library or resets an account an administrator has since changed.
  */
 export async function bootstrap(app: FastifyInstance): Promise<void> {
-  const { config, auth, profiles } = app.gameblade;
+  const { config, auth, profiles, discord } = app.gameblade;
 
   await seedLibraries(app);
+
+  // Announcements use Discord's HTTP API, so authenticating the configured
+  // bot here is its real startup and catches an invalid token immediately.
+  try {
+    const bot = await discord.startBot();
+    if (bot) app.log.info({ username: bot.username, id: bot.id }, 'Discord bot started');
+  } catch (error) {
+    app.log.error({ err: error }, 'Discord bot failed to start; check its token and permissions');
+  }
 
   if (config.bootstrapAdmin) {
     const existing = auth.findByUsername(config.bootstrapAdmin.username);

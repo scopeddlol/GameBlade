@@ -3,16 +3,19 @@
 ## Project Briefing
 
 GameBlade is a self-hosted platform for preserving free-to-play and DRM-free games. It consists of:
+
 - **Server**: A Docker server that holds the game archive, serves the API, stores saves and profiles
 - **Desktop Client**: A Windows desktop application built with Tauri + React that provides the player experience
 
 ### Technology Stack
+
 - **Frontend**: React 19, Vite, TypeScript
 - **Desktop Framework**: Tauri 2 (Rust-based)
 - **Package Manager**: pnpm with workspace configuration
 - **Build Targets**: MSI and NSIS installers for Windows
 
 ### Project Structure
+
 ```
 apps/
   desktop/          # Tauri desktop client
@@ -59,6 +62,7 @@ packages/
 ### Build Configuration Details
 
 **Tauri Configuration** (`src-tauri/tauri.conf.json`):
+
 - Product Name: GameBlade
 - Version: 0.4.4
 - Identifier: io.gameblade.desktop
@@ -66,6 +70,7 @@ packages/
 - NSIS install mode: currentUser
 
 **Rust Profile** (release):
+
 - Optimization level: s (size)
 - LTO: enabled
 - Codegen units: 1
@@ -82,6 +87,14 @@ packages/
 ---
 
 ## Build Session - August 24, 2026
+
+## Version 0.5.0 - August 24, 2026
+
+- Added automatic Steam AppID discovery and achievement import from each game's admin page.
+- Added a Catalog/Games filter for records whose source game files are missing.
+- Improved save-manifest matching for unambiguous edition-title variants.
+- Made folder-game downloads use a shared 16-connection stream across concurrent files.
+- Validate and start the Discord REST bot integration at server startup and when its token changes.
 
 ### Task: Pull Latest from GitHub and Build v0.4.5
 
@@ -122,6 +135,87 @@ packages/
      - Format: Nullsoft Scriptable Install System
    - **Executable**: `gameblade-desktop.exe`
      - Location: `apps/desktop/src-tauri/target/release/`
+
+---
+
+## Version 0.4.6 - August 24, 2026
+
+### Summary
+
+Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete fix release that addresses all identified problems.
+
+### Issues Fixed in v0.4.5
+
+1. **Desktop App TypeScript Compilation Errors**
+   - The shared package types were updated in v0.4.5 to include new properties (`discordUsername`, `popularHere`, `acclaimed`, `surprise`)
+   - The desktop app failed to compile because it wasn't picking up the updated type definitions
+   - Files affected: `ProfileDrawer.tsx`, `HomeTab.tsx`
+
+2. **Web Panel Domain Inaccessibility**
+   - Server logs showed the application was running correctly
+   - However, navigating to the domain returned nothing
+   - Root cause: The web app (`apps/web`) was not built, so the server had no static files to serve
+
+3. **Windows Dev Server EBUSY Error**
+   - Vite dev server crashed with `EBUSY` error when watching Rust build directories
+   - Fixed by adding watch exclusions for `target/` and `dist/` directories in vite.config.ts
+
+### Actions Taken for v0.4.6
+
+1. **Rebuilt All Packages**
+   - Rebuilt shared package to ensure updated types are available
+   - Built web application to fix server domain accessibility
+   - Desktop app now compiles successfully with new type definitions
+
+2. **Added Installer Customizations**
+   - Added `tauri-plugin-updater` for automatic updates
+   - Configured updater to check GitHub releases for updates
+   - Created `LICENSE.txt` with GameBlade EULA
+   - Updated `tauri.conf.json` with updater plugin configuration
+
+3. **Fixed Dev Server**
+   - Added watch exclusions to vite.config.ts to prevent EBUSY errors
+   - Dev server now runs without crashing on Windows
+
+### Build Artifacts (v0.4.6)
+
+- **MSI Installer**: `GameBlade_0.4.6_x64_en-US.msi` (3.7 MB)
+- **NSIS Installer**: `GameBlade_0.4.6_x64-setup.exe` (2.7 MB)
+- **Web App**: Built successfully in `apps/web/dist/`
+- **Shared Package**: Type definitions updated and compiled
+
+### Technical Details
+
+**Auto-Update Configuration**:
+
+- Plugin: `tauri-plugin-updater` v2.10.1
+- Update endpoint: GitHub releases
+- Signature verification: Enabled with public key
+- Dialog: Built-in Tauri update UI
+
+**Dependencies Added**:
+
+- `@tauri-apps/plugin-updater` (npm)
+- `tauri-plugin-updater` (Cargo)
+
+**Files Modified**:
+
+- `apps/desktop/package.json` - version 0.4.5 → 0.4.6
+- `apps/desktop/src-tauri/tauri.conf.json` - version 0.4.5 → 0.4.6
+- `apps/desktop/src-tauri/Cargo.toml` - version 0.4.5 → 0.4.6
+- `packages/shared/package.json` - version 0.4.5 → 0.4.6
+- `apps/web/package.json` - version 0.4.5 → 0.4.6
+- `apps/desktop/vite.config.ts` - added watch exclusions
+- `apps/desktop/LICENSE.txt` - created EULA
+- `apps/desktop/src-tauri/src/lib.rs` - added updater plugin
+
+### Notes
+
+- v0.4.5 is deprecated and should not be used
+- v0.4.6 is the stable release with all fixes applied
+- The auto-update mechanism will check GitHub releases for new versions
+- Users will see an in-app dialog when updates are available
+- Public key is a placeholder and should be replaced with a real key for production
 
 ---
 
@@ -207,17 +301,20 @@ packages/
 ### Technical Details
 
 **Auto-Update Configuration**:
+
 - Plugin: `tauri-plugin-updater` v2.10.1
 - Update endpoint: GitHub releases
 - Signature verification: Enabled with public key
 - Dialog: Built-in Tauri update UI
 
 **License Agreement**:
+
 - File: `apps/desktop/LICENSE.txt`
 - Content: Custom EULA for GameBlade
 - Note: NSIS license configuration requires custom template for full integration
 
 **Dependencies Added**:
+
 - `@tauri-apps/plugin-updater` (npm)
 - `tauri-plugin-updater` (Cargo)
 
@@ -237,6 +334,7 @@ packages/
 ### Build Configuration Details
 
 **Tauri Configuration** (`src-tauri/tauri.conf.json`):
+
 - Product Name: GameBlade
 - Version: 0.4.5
 - Identifier: io.gameblade.desktop
@@ -244,6 +342,7 @@ packages/
 - NSIS install mode: currentUser
 
 **Rust Profile** (release):
+
 - Optimization level: s (size)
 - LTO: enabled
 - Codegen units: 1
@@ -262,6 +361,7 @@ packages/
 ## Planned Steps Ahead
 
 ### Immediate Next Steps
+
 1. **Test Installers**
    - Verify NSIS installer installs correctly on a clean Windows machine
    - Verify MSI installer installs correctly
@@ -273,6 +373,7 @@ packages/
    - Bump client version in settings if this is a new release
 
 ### Future Enhancements
+
 1. **Build Automation**
    - Set up CI/CD pipeline for automated builds
    - Configure GitHub Actions for release automation
@@ -288,6 +389,7 @@ packages/
    - Add license agreement screen
 
 ### Maintenance Tasks
+
 - Regular dependency updates (pnpm update, cargo update)
 - Monitor Tauri framework updates
 - Test installer compatibility with new Windows versions
@@ -298,6 +400,7 @@ packages/
 ## Version History
 
 ### v0.4.5 (Current)
+
 - Built installers: MSI and NSIS
 - Platform: Windows x64
 - Build date: August 24, 2026
@@ -306,6 +409,7 @@ packages/
 - Source: Pulled from GitHub tag v0.4.5
 
 ### v0.4.4
+
 - Built installers: MSI and NSIS
 - Platform: Windows x64
 - Build date: August 23, 2026
@@ -317,6 +421,7 @@ packages/
 ## Build Commands Reference
 
 ### Development
+
 ```bash
 cd apps/desktop
 pnpm dev              # Start development server
@@ -325,12 +430,14 @@ pnpm typecheck        # Type check TypeScript
 ```
 
 ### Production Build
+
 ```bash
 cd apps/desktop
 pnpm build            # Build complete app with installers
 ```
 
 ### Tauri Commands
+
 ```bash
 pnpm tauri build      # Build with Tauri CLI
 pnpm tauri dev        # Development mode with Tauri
@@ -341,16 +448,19 @@ pnpm tauri dev        # Development mode with Tauri
 ## Troubleshooting
 
 ### Build Issues
+
 - **Rust toolchain missing**: Install Rust via rustup
 - **Node modules missing**: Run `pnpm install` from root
 - **Frontend build fails**: Check TypeScript errors in `apps/desktop/src/`
 
 ### Installer Issues
+
 - **Antivirus blocking**: Add exception for installer
 - **Permissions**: NSIS installer uses currentUser mode (no admin required)
 - **Path issues**: Ensure install path does not contain special characters
 
 ### Runtime Issues
+
 - **Server connection**: Verify server URL in client settings
 - **WebView2 missing**: Install Microsoft Edge WebView2 runtime
 - **Firewall**: Allow client to access server ports

@@ -37,6 +37,11 @@ interface SteamGlobalPercentages {
 }
 
 const STEAM_API = 'https://api.steampowered.com';
+const STEAM_STORE_SEARCH = 'https://store.steampowered.com/api/storesearch/';
+
+interface SteamStoreSearchResponse {
+  items?: Array<{ id?: number; name?: string }>;
+}
 
 export class AchievementService {
   constructor(
@@ -386,6 +391,40 @@ export class AchievementService {
     return { imported, skipped };
   }
 
+  /** Finds the unambiguous Steam catalogue entry that best matches this game's title. */
+  async findSteamAppId(gameId: string): Promise<{ steamAppId: number; title: string }> {
+    const game = this.db
+      .select({ title: games.title })
+      .from(games)
+      .where(eq(games.id, gameId))
+      .get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    const response = await this.fetchJson<SteamStoreSearchResponse>(
+      `${STEAM_STORE_SEARCH}?term=${encodeURIComponent(game.title)}&l=english&cc=us`,
+    );
+    const candidates = (response.items ?? []).filter(
+      (item): item is { id: number; name: string } =>
+        Number.isInteger(item.id) && Boolean(item.name),
+    );
+    const titleKey = steamTitleKey(game.title);
+    const exact = candidates.find((item) => steamTitleKey(item.name) === titleKey);
+    const result = exact ?? candidates[0];
+    if (!result) throw ApiError.notFound(`Steam could not find a game named "${game.title}"`);
+    if (!exact && candidates.length > 1) {
+      throw ApiError.badRequest(
+        `Steam found several games for "${game.title}". Enter its AppID manually.`,
+      );
+    }
+    return { steamAppId: result.id, title: result.name };
+  }
+
+  async autoImportFromSteam(gameId: string, replace: boolean) {
+    const match = await this.findSteamAppId(gameId);
+    const imported = await this.importFromSteam(gameId, match.steamAppId, replace);
+    return { ...match, ...imported };
+  }
+
   private async fetchGlobalPercentages(steamAppId: number): Promise<Map<string, number>> {
     try {
       const data = await this.fetchJson<SteamGlobalPercentages>(
@@ -440,6 +479,13 @@ export class AchievementService {
       progress,
     };
   }
+}
+
+function steamTitleKey(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]/g, '');
 }
 
 function pointsForRarity(percent: number | undefined): number {
