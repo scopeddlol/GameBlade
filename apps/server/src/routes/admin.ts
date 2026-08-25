@@ -1164,6 +1164,22 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         },
       );
     }
+
+    // Discord has its own copy now, and this one is referenced by nothing —
+    // no post, no profile — so leaving it would grow the media store by an
+    // image per announcement for ever, against the admin's own quota.
+    // Deliberately after the post and deliberately not fatal: an announcement
+    // that went out and then failed to tidy up is a housekeeping problem, not
+    // a failed announcement.
+    if (input.imageMediaId) {
+      const context = requireAdmin(request);
+      await media
+        .delete(context.user.id, input.imageMediaId)
+        .catch((error: unknown) =>
+          app.log.warn({ err: error }, 'could not clean up a posted Discord attachment'),
+        );
+    }
+
     return { ok: true };
   });
 
