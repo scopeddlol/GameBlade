@@ -153,12 +153,22 @@ export const games = sqliteTable(
     scannedAt: text('scanned_at'),
     /** Set when the files vanish; kept so metadata survives a temporary unmount. */
     missingAt: text('missing_at'),
+    /**
+     * Set the moment a provider writes metadata onto this game.
+     *
+     * Enrichment is a first-time job, not something every scan redoes. Once
+     * this is stamped the automatic pass leaves the row alone, so a title
+     * corrected by hand — or artwork chosen deliberately — survives the next
+     * scan. Clearing it puts the game back in the queue.
+     */
+    metadataLockedAt: text('metadata_locked_at'),
   },
   (t) => [
     uniqueIndex('games_library_relpath_idx').on(t.libraryId, t.relPath),
     index('games_sort_title_idx').on(t.sortTitle),
     index('games_match_status_idx').on(t.matchStatus),
     index('games_missing_idx').on(t.missingAt),
+    index('games_metadata_lock_idx').on(t.metadataLockedAt),
   ],
 );
 

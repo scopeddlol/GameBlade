@@ -309,6 +309,64 @@ describe('rankSaves', () => {
  * down is that a fresh index costs nothing: without this, an hourly check would
  * pull 17 MB from upstream twenty-four times a day.
  */
+/**
+ * The completeness check on a download.
+ *
+ * `fetch` asks for gzip without being told to, so upstream's `content-length`
+ * describes the compressed bytes while the stream handed back is decoded. A
+ * check that compares the two rejects every healthy refresh — which is what a
+ * literal reading of the header did here.
+ */
+describe('refresh', () => {
+  const yaml = (games: number): string =>
+    Array.from(
+      { length: games },
+      (_, i) =>
+        `"Game ${i}":\n  files:\n    "<winAppData>/Game${i}":\n      tags:\n        - save\n`,
+    ).join('');
+
+  const respond = (body: string, headers: Record<string, string>): Response =>
+    new Response(body, { status: 200, headers });
+
+  it('accepts a gzip-encoded body whose content-length is the compressed size', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'gb-manifest-'));
+    const body = yaml(15_000);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      // What upstream actually sends: the decoded stream, and a length that
+      // describes the bytes on the wire rather than the bytes that arrive.
+      respond(body, {
+        'content-encoding': 'gzip',
+        'content-length': String(Math.floor(body.length / 7)),
+      }),
+    );
+
+    try {
+      const service = new SaveManifestService(dir);
+      await expect(service.refresh()).resolves.toMatchObject({ games: 15_000 });
+    } finally {
+      fetchSpy.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still catches a truncated unencoded download', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'gb-manifest-'));
+    const body = yaml(15_000);
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      // No encoding, so the header is a promise about what should arrive.
+      .mockResolvedValue(respond(body, { 'content-length': String(body.length * 2) }));
+
+    try {
+      const service = new SaveManifestService(dir);
+      await expect(service.refresh()).rejects.toThrow(/stopped early/);
+    } finally {
+      fetchSpy.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('refreshIfStale', () => {
   it('does nothing while the cached index is current', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'gb-manifest-'));

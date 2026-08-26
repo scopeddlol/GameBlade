@@ -378,9 +378,16 @@ export class SaveManifestService {
     // early, and the parser would read it happily and index whichever games
     // came alphabetically first. Comparing against the length upstream promised
     // is what tells the two apart.
+    //
+    // Only when the body arrived unencoded, though. `fetch` asks for gzip and
+    // hands back the *decoded* stream, while `content-length` still describes
+    // the compressed bytes — upstream sends 2 MB and 17 MB lands on disk, which
+    // is not a truncated download but did read as one. A truncated gzip stream
+    // fails to inflate, so that case is caught by the pipeline above instead.
+    const encoded = (response.headers.get('content-encoding') ?? '').trim().length > 0;
     const expected = Number(response.headers.get('content-length'));
     const written = (await stat(download)).size;
-    if (Number.isFinite(expected) && expected > 0 && written !== expected) {
+    if (!encoded && Number.isFinite(expected) && expected > 0 && written !== expected) {
       throw new Error(
         `The save manifest download stopped early (${written} of ${expected} bytes). The existing index was kept.`,
       );

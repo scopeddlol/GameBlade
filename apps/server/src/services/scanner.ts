@@ -1,6 +1,12 @@
 import { readdir, realpath, stat } from 'node:fs/promises';
+import { setImmediate as yieldToLoop } from 'node:timers/promises';
 import path from 'node:path';
-import { ARCHIVE_EXTENSIONS, IGNORED_ENTRIES, type ScanProgress } from '@gameblade/shared';
+import {
+  ARCHIVE_EXTENSIONS,
+  IGNORED_ENTRIES,
+  type ScanLogEntry,
+  type ScanProgress,
+} from '@gameblade/shared';
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { gameFiles, games, libraries, type Game, type Library } from '../db/schema.js';
@@ -10,6 +16,38 @@ import { parseTitle, toSearchTitle, toSortTitle } from '../lib/titles.js';
 import type { Logger, MetadataService } from './metadata/service.js';
 
 const IGNORED = new Set<string>(IGNORED_ENTRIES);
+
+/** How many activity lines the admin panel is offered. */
+const SCAN_LOG_LINES = 200;
+
+/**
+ * How many entries are reconciled before the run hands the event loop back.
+ *
+ * SQLite here is synchronous, so a library's worth of inserts is one long
+ * uninterrupted block of work: for a big archive the server stops answering
+ * anything at all until it ends, which from the admin panel is indistinguishable
+ * from the whole thing having fallen over. Pausing between batches costs the
+ * scan very little and keeps the API responsive throughout.
+ */
+const YIELD_EVERY = 25;
+
+const IDLE_PROGRESS: ScanProgress = {
+  libraryId: null,
+  state: 'idle',
+  phase: null,
+  library: null,
+  processed: 0,
+  total: 0,
+  currentItem: null,
+  startedAt: null,
+  finishedAt: null,
+  error: null,
+  added: 0,
+  updated: 0,
+  removed: 0,
+  log: [],
+  skipped: 0,
+};
 
 interface DiscoveredFile {
   relPath: string;
@@ -46,21 +84,20 @@ function isIgnored(name: string): boolean {
  * entry of its own.
  */
 export class ScannerService {
-  private progress: ScanProgress = {
-    libraryId: null,
-    state: 'idle',
-    processed: 0,
-    total: 0,
-    currentItem: null,
-    startedAt: null,
-    finishedAt: null,
-    error: null,
-    added: 0,
-    updated: 0,
-    removed: 0,
-  };
+  private progress: ScanProgress = { ...IDLE_PROGRESS };
 
   private running: Promise<void> | null = null;
+
+  /**
+   * Set when the operator asks to move past whatever is in front of the run.
+   *
+   * Cleared by the item that consumes it. The controller is what makes the ask
+   * take effect immediately: a provider request that has already gone out is
+   * aborted rather than waited on, which is the difference between "skip" and
+   * "skip once this finishes in twenty seconds".
+   */
+  private skipRequested = false;
+  private currentItem: AbortController | null = null;
 
   constructor(
     private readonly db: Db,
@@ -69,11 +106,45 @@ export class ScannerService {
   ) {}
 
   getProgress(): ScanProgress {
-    return { ...this.progress };
+    return { ...this.progress, log: [...this.progress.log] };
   }
 
   get isRunning(): boolean {
     return this.running !== null;
+  }
+
+  /**
+   * Move past whatever the run is working on now.
+   *
+   * Returns false when there is nothing to skip, so the caller can say so
+   * rather than reporting a skip that did not happen.
+   */
+  skipCurrent(): boolean {
+    if (!this.running) return false;
+    this.skipRequested = true;
+    // Stops an in-flight provider request rather than letting the skip wait on
+    // it. Aborting a controller nothing is listening to is harmless.
+    this.currentItem?.abort();
+    this.note('warn', `Skipping ${this.progress.currentItem ?? 'the current item'}`);
+    return true;
+  }
+
+  /** Records a line for the admin panel, keeping only the recent ones. */
+  private note(level: ScanLogEntry['level'], message: string): void {
+    const log = [...this.progress.log, { at: new Date().toISOString(), level, message }].slice(
+      -SCAN_LOG_LINES,
+    );
+    this.progress = { ...this.progress, log };
+    if (level === 'warn') this.logger.warn({}, message);
+    else this.logger.info({}, message);
+  }
+
+  /** Consumes a pending skip request, if there is one. */
+  private takeSkip(): boolean {
+    if (!this.skipRequested) return false;
+    this.skipRequested = false;
+    this.progress = { ...this.progress, skipped: this.progress.skipped + 1 };
+    return true;
   }
 
   /**
@@ -111,19 +182,18 @@ export class ScannerService {
       ? this.db.select().from(libraries).where(eq(libraries.id, options.libraryId)).all()
       : this.db.select().from(libraries).where(eq(libraries.enabled, true)).all();
 
+    this.skipRequested = false;
     this.progress = {
+      ...IDLE_PROGRESS,
       libraryId: options.libraryId ?? null,
       state: 'scanning',
-      processed: 0,
-      total: 0,
-      currentItem: null,
+      phase: 'reading',
       startedAt: new Date().toISOString(),
-      finishedAt: null,
-      error: null,
-      added: 0,
-      updated: 0,
-      removed: 0,
     };
+    this.note(
+      'info',
+      `Scan started over ${targets.length} librar${targets.length === 1 ? 'y' : 'ies'}`,
+    );
 
     for (const library of targets) {
       if (!library.enabled && !options.libraryId) continue;
@@ -137,9 +207,16 @@ export class ScannerService {
       await this.runMatchPending();
     }
 
+    this.note(
+      'info',
+      `Scan finished — ${this.progress.added} added, ${this.progress.updated} updated, ` +
+        `${this.progress.removed} missing, ${this.progress.skipped} skipped`,
+    );
     this.progress = {
       ...this.progress,
       state: 'idle',
+      phase: null,
+      library: null,
       currentItem: null,
       finishedAt: new Date().toISOString(),
     };
@@ -155,7 +232,13 @@ export class ScannerService {
       // progress readout would otherwise sit on the previous library's final
       // tally throughout — indistinguishable from a stall. Naming the library
       // being read says which of the two is happening.
-      this.progress = { ...this.progress, currentItem: `Reading ${library.name}…` };
+      this.progress = {
+        ...this.progress,
+        phase: 'reading',
+        library: library.name,
+        currentItem: `Reading ${library.name}…`,
+      };
+      this.note('info', `Reading ${library.name} (${library.path})`);
       discovered = await this.discover(library.path);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -168,12 +251,16 @@ export class ScannerService {
       return;
     }
 
-    this.logger.info(
-      { library: library.name, entries: discovered.length, ms: Date.now() - startedAt },
-      'finished reading library',
+    this.note(
+      'info',
+      `Read ${library.name}: ${discovered.length} entries in ${Math.round((Date.now() - startedAt) / 1000)}s`,
     );
 
-    this.progress = { ...this.progress, total: this.progress.total + discovered.length };
+    this.progress = {
+      ...this.progress,
+      phase: 'indexing',
+      total: this.progress.total + discovered.length,
+    };
 
     const existing = new Map(
       this.db
@@ -186,6 +273,7 @@ export class ScannerService {
 
     const seen = new Set<string>();
 
+    let sinceYield = 0;
     for (const item of discovered) {
       seen.add(item.relPath);
       this.progress = {
@@ -193,6 +281,20 @@ export class ScannerService {
         processed: this.progress.processed + 1,
         currentItem: item.rawName,
       };
+
+      // SQLite is synchronous here, so without this the whole library is one
+      // unbroken block of work and the server answers nothing until it ends.
+      if (++sinceYield >= YIELD_EVERY) {
+        sinceYield = 0;
+        await yieldToLoop();
+      }
+
+      // Marking it seen above and skipping here is deliberate: a skipped entry
+      // keeps whatever row it already has rather than being flagged missing.
+      if (this.takeSkip()) {
+        this.note('warn', `Skipped ${item.rawName}`);
+        continue;
+      }
 
       const current = existing.get(item.relPath);
       if (current) {
@@ -269,6 +371,7 @@ export class ScannerService {
           .run();
       }
       this.progress = { ...this.progress, removed: this.progress.removed + vanished.length };
+      this.note('info', `${vanished.length} entries in ${library.name} are no longer on disk`);
     }
 
     this.db
@@ -429,18 +532,12 @@ export class ScannerService {
   matchPending(limit = 500): Promise<void> {
     if (this.running) return this.running;
 
+    this.skipRequested = false;
     this.progress = {
-      ...this.progress,
+      ...IDLE_PROGRESS,
       state: 'matching',
-      processed: 0,
-      total: 0,
-      currentItem: null,
+      phase: 'matching',
       startedAt: new Date().toISOString(),
-      finishedAt: null,
-      error: null,
-      added: 0,
-      updated: 0,
-      removed: 0,
     };
 
     this.running = this.runMatchPending(limit)
@@ -448,6 +545,7 @@ export class ScannerService {
         this.progress = {
           ...this.progress,
           state: 'idle',
+          phase: null,
           currentItem: null,
           finishedAt: new Date().toISOString(),
         };
@@ -490,19 +588,28 @@ export class ScannerService {
       .where(
         and(
           isNull(games.missingAt),
+          // Enrichment is a first-time job. Once a provider has written to a
+          // row it is left alone, so a title corrected by hand or artwork
+          // chosen deliberately is not undone by the next scan.
+          isNull(games.metadataLockedAt),
           or(eq(games.matchStatus, 'unmatched'), isNull(games.coverImageId)),
         ),
       )
       .limit(limit)
       .all();
 
-    if (pending.length === 0) return;
+    if (pending.length === 0) {
+      this.note('info', 'No games are waiting on metadata');
+      return;
+    }
 
-    this.logger.info({ pending: pending.length }, 'enriching games from metadata providers');
+    this.note('info', `Fetching metadata for ${pending.length} games`);
 
     this.progress = {
       ...this.progress,
       state: 'matching',
+      phase: 'matching',
+      currentItem: null,
       processed: 0,
       total: pending.length,
     };
@@ -513,11 +620,32 @@ export class ScannerService {
         processed: this.progress.processed + 1,
         currentItem: game.title,
       };
-      try {
-        await this.metadata.enrich(game);
-      } catch (error) {
-        this.logger.warn({ err: error, title: game.title }, 'metadata enrichment failed');
+
+      // A skip asked for while the previous title was in flight applies here.
+      if (this.takeSkip()) {
+        this.note('warn', `Skipped metadata for ${game.title}`);
+        continue;
       }
+
+      const controller = new AbortController();
+      this.currentItem = controller;
+      try {
+        await this.metadata.enrich(game, controller.signal);
+      } catch (error) {
+        // An abort here is the operator pressing skip, not a failure.
+        if (this.takeSkip()) {
+          this.note('warn', `Skipped metadata for ${game.title}`);
+        } else {
+          const message = error instanceof Error ? error.message : String(error);
+          this.note('warn', `Could not fetch metadata for ${game.title}: ${message}`);
+        }
+      } finally {
+        this.currentItem = null;
+      }
+
+      // Providers are awaited above, so the loop already yields; this only
+      // matters for a run where every game is skipped outright.
+      await yieldToLoop();
     }
   }
 

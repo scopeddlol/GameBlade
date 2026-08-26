@@ -337,6 +337,22 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/admin/scan/progress', async () => scanner.getProgress());
 
+  /**
+   * Move the running scan past whatever it is stuck on.
+   *
+   * A single unreadable folder or a provider that will not answer used to mean
+   * waiting the run out or restarting the server. 409 rather than a silent
+   * success when nothing is running, so the panel can say why nothing happened.
+   */
+  app.post('/admin/scan/skip', async (_request, reply) => {
+    if (!scanner.skipCurrent()) {
+      return reply.code(409).send({
+        error: { code: 'no_scan_running', message: 'No scan is running' },
+      });
+    }
+    return { skipped: true };
+  });
+
   // ---- Removing catalog entries ----
 
   /**

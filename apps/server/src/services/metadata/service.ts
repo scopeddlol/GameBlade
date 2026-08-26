@@ -336,17 +336,17 @@ export class MetadataService {
    * which is exactly what happened. Each provider now contributes whatever it
    * can on its own.
    */
-  async enrich(game: Game): Promise<void> {
+  async enrich(game: Game, signal?: AbortSignal): Promise<void> {
     // Only an unmatched entry is a candidate for automatic identification:
     // 'manual' is hand-curated and 'skipped' was excluded on purpose.
     if (game.matchStatus === 'unmatched' && this.hasIgdb) {
       // A successful match already pulls artwork using the provider's own
       // title, which is more accurate than the name parsed off disk.
-      if (await this.autoMatch(game)) return;
+      if (await this.autoMatch(game, signal)) return;
     }
 
     if (!game.coverImageId) {
-      await this.fetchArtwork(game.id, game.searchTitle);
+      await this.fetchArtwork(game.id, game.searchTitle, signal);
     }
   }
 
@@ -354,13 +354,13 @@ export class MetadataService {
    * Look up a game by its parsed title and apply the result when the match is
    * unambiguous. Games that stay unmatched surface in the admin UI for a manual fix.
    */
-  async autoMatch(game: Game): Promise<boolean> {
+  async autoMatch(game: Game, signal?: AbortSignal): Promise<boolean> {
     const igdb = this.getIgdb();
     if (!igdb) return false;
 
     let results;
     try {
-      results = await igdb.search(game.searchTitle, 8);
+      results = await igdb.search(game.searchTitle, 8, signal);
     } catch (error) {
       this.logger.warn({ err: error, title: game.searchTitle }, 'IGDB search failed');
       this.health.igdb = {
@@ -386,7 +386,7 @@ export class MetadataService {
       return false;
     }
 
-    await this.applyIgdbGame(game.id, best.raw.id, 'auto');
+    await this.applyIgdbGame(game.id, best.raw.id, 'auto', { signal });
     return true;
   }
 
@@ -395,7 +395,7 @@ export class MetadataService {
     gameId: string,
     igdbId: number,
     matchStatus: 'auto' | 'manual',
-    options: { refreshArtwork?: boolean } = {},
+    options: { refreshArtwork?: boolean; signal?: AbortSignal } = {},
   ): Promise<void> {
     const igdb = this.getIgdb();
     if (!igdb) {
@@ -431,12 +431,16 @@ export class MetadataService {
         videos: meta.videoIds,
         coverImageId,
         updatedAt: new Date().toISOString(),
+        // A provider has now written to this row, so the automatic pass leaves
+        // it alone from here. A deliberate re-match comes back through this
+        // same method and simply re-stamps it.
+        metadataLockedAt: new Date().toISOString(),
       })
       .where(eq(games.id, gameId))
       .run();
 
     if (options.refreshArtwork !== false) {
-      await this.fetchArtwork(gameId, meta.title);
+      await this.fetchArtwork(gameId, meta.title, options.signal);
     }
   }
 
@@ -445,7 +449,7 @@ export class MetadataService {
    * preferred over the IGDB cover because it is the artwork shaped for a poster
    * grid, but IGDB's cover stays as the fallback when nothing is published.
    */
-  async fetchArtwork(gameId: string, title: string): Promise<void> {
+  async fetchArtwork(gameId: string, title: string, signal?: AbortSignal): Promise<void> {
     const sgdb = this.getSgdb();
     if (!sgdb) return;
 
@@ -453,7 +457,7 @@ export class MetadataService {
     if (!game) return;
 
     try {
-      const matches = await sgdb.search(title);
+      const matches = await sgdb.search(title, signal);
       if (matches.length === 0) return;
 
       const best =
@@ -472,6 +476,9 @@ export class MetadataService {
       const patch: Partial<typeof games.$inferInsert> = {
         sgdbId: best.id,
         updatedAt: new Date().toISOString(),
+        // As in applyIgdbGame: artwork written here is the "initial set" the
+        // automatic pass is not to revisit.
+        metadataLockedAt: new Date().toISOString(),
       };
 
       const gridUrl = grids[0]?.url;
@@ -669,6 +676,9 @@ export class MetadataService {
         logoImageId: null,
         iconImageId: null,
         updatedAt: new Date().toISOString(),
+        // Clearing a match is the way back into the enrichment queue: the row
+        // now holds nothing worth protecting, so the lock comes off with it.
+        metadataLockedAt: null,
       })
       .where(eq(games.id, gameId))
       .run();

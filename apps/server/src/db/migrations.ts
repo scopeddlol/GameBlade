@@ -703,4 +703,25 @@ export const migrations: Migration[] = [
       CREATE UNIQUE INDEX discord_tickets_number_idx ON discord_tickets(number);
     `,
   },
+  {
+    id: '0016_metadata_lock',
+    sql: /* sql */ `
+      -- Enrichment is a first-time job, not something every scan redoes.
+      --
+      -- Without this the automatic pass re-ran on anything still flagged
+      -- unmatched or missing a cover, and happily overwrote a title, summary
+      -- or artwork that had been corrected by hand. The stamp records that a
+      -- provider has already written to this row; the scan then leaves it
+      -- alone until somebody clears it or re-matches on purpose.
+      ALTER TABLE games ADD COLUMN metadata_locked_at TEXT;
+
+      -- Existing libraries are locked on the way in, so the first scan after
+      -- this upgrade does not go and redo everything it already did.
+      UPDATE games
+         SET metadata_locked_at = COALESCE(updated_at, added_at)
+       WHERE match_status <> 'unmatched' OR cover_image_id IS NOT NULL;
+
+      CREATE INDEX games_metadata_lock_idx ON games(metadata_locked_at);
+    `,
+  },
 ];
