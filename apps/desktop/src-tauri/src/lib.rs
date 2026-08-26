@@ -125,21 +125,21 @@ async fn sign_out(state: State<'_, AppState>) -> AppResult<()> {
 async fn verify_session(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<UserInfo> {
     let client = state.client().await?;
     match client.session().await {
-            Ok(user) => {
-                // A restored session has no socket yet, so opening it here is what
-                // makes presence work after a restart rather than only after a login.
-                if !state.realtime.is_running() {
-                    if let Some(session) = state.session.read().await.as_ref() {
-                        state
-                            .realtime
-                            .start(app, session.server_url.clone(), session.token.clone());
-                    }
+        Ok(user) => {
+            // A restored session has no socket yet, so opening it here is what
+            // makes presence work after a restart rather than only after a login.
+            if !state.realtime.is_running() {
+                if let Some(session) = state.session.read().await.as_ref() {
+                    state
+                        .realtime
+                        .start(app, session.server_url.clone(), session.token.clone());
                 }
-                // Same for the download queue: a restored session means an
-                // interrupted transfer from the last run can pick up now.
-                state.downloads.wake().await;
-                Ok(user)
             }
+            // Same for the download queue: a restored session means an
+            // interrupted transfer from the last run can pick up now.
+            state.downloads.wake().await;
+            Ok(user)
+        }
         Err(err) => {
             // The token is gone or revoked, so drop it rather than retrying forever.
             if matches!(err, AppError::Server(_)) {
@@ -254,7 +254,12 @@ async fn run_client_installer(
     // comfortably in memory, and the old in-memory path silently returned
     // nothing past its cap and reported "no installer published".
     client.download_file("/client/download", &target).await?;
-    if tokio::fs::metadata(&target).await.map(|m| m.len()).unwrap_or(0) == 0 {
+    if tokio::fs::metadata(&target)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0)
+        == 0
+    {
         let _ = tokio::fs::remove_file(&target).await;
         return Err(AppError::Other(
             "The server has no client installer published.".to_string(),
@@ -321,10 +326,12 @@ async fn update_settings(state: State<'_, AppState>, patch: Settings) -> AppResu
     // Transfer preferences reach the queue immediately rather than being read
     // once at startup — historically these two saved a value and changed
     // nothing, which is worse than not offering them.
-    state.downloads.set_transfer_options(download::TransferOptions {
-        connections: sanitised.download_concurrency,
-        verify: sanitised.verify_downloads,
-    });
+    state
+        .downloads
+        .set_transfer_options(download::TransferOptions {
+            connections: sanitised.download_concurrency,
+            verify: sanitised.verify_downloads,
+        });
 
     Ok(sanitised)
 }
@@ -775,6 +782,24 @@ async fn running_game(state: State<'_, AppState>) -> AppResult<Option<RunningGam
     Ok(state.launcher.current().await)
 }
 
+/// Closes the running game from the app, rather than from the game.
+///
+/// The button this backs used to be a greyed-out "Running" — accurate, and no
+/// help at all to somebody whose game has hung behind a fullscreen window they
+/// cannot get back to. It asks the process to close first and kills it if it
+/// will not, so a game that handles the request still gets to save.
+///
+/// `game_id` is optional because the client is single-slot: the player pressing
+/// Stop on the title bar means "the one that is running", and making the UI
+/// look up an id to say that is ceremony.
+#[tauri::command]
+async fn stop_game(state: State<'_, AppState>, game_id: Option<String>) -> AppResult<bool> {
+    match game_id {
+        Some(id) => Ok(state.launcher.stop(&id).await),
+        None => Ok(state.launcher.stop_current().await.is_some()),
+    }
+}
+
 /* -------------------------------------------------------------- cloud saves */
 
 #[derive(Debug, Serialize)]
@@ -1127,6 +1152,7 @@ pub fn run() {
             uninstall_game,
             launch_game,
             running_game,
+            stop_game,
             save_status,
             push_save,
             pull_save,

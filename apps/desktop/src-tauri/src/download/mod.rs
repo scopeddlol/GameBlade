@@ -23,9 +23,8 @@ use tokio::sync::{Mutex, Notify};
 /// queue. Read at activation time rather than at enqueue time so a session
 /// that was signed out and back in between cannot strand hours of transfers
 /// behind a dead token.
-pub type ClientProvider = Arc<
-    dyn Fn() -> futures_util::future::BoxFuture<'static, AppResult<ApiClient>> + Send + Sync,
->;
+pub type ClientProvider =
+    Arc<dyn Fn() -> futures_util::future::BoxFuture<'static, AppResult<ApiClient>> + Send + Sync>;
 
 /// The two transfer preferences a download honours.
 #[derive(Debug, Clone, Copy)]
@@ -344,10 +343,8 @@ impl DownloadManager {
 
     /// Applies the current preferences, so the next download honours them.
     pub fn set_transfer_options(&self, options: TransferOptions) {
-        self.connections.store(
-            options.connections.clamp(1, 16) as u64,
-            Ordering::SeqCst,
-        );
+        self.connections
+            .store(options.connections.clamp(1, 16) as u64, Ordering::SeqCst);
         self.verify.store(options.verify, Ordering::SeqCst);
     }
 
@@ -365,9 +362,10 @@ impl DownloadManager {
                     if inner.active.is_some() {
                         None
                     } else {
-                        inner.order.iter().find(|id| {
-                            inner.entries[*id].entry.status == DownloadStatus::Queued
-                        })
+                        inner
+                            .order
+                            .iter()
+                            .find(|id| inner.entries[*id].entry.status == DownloadStatus::Queued)
                     }
                     .cloned()
                 };
@@ -479,7 +477,12 @@ impl DownloadManager {
             engine::Outcome::Done => {
                 // An archive game reports the archive itself, not the folder
                 // around it, so `finish_install` can see the extension.
-                (DownloadStatus::Completed, None, false, self.archive_destination(&game_id).await)
+                (
+                    DownloadStatus::Completed,
+                    None,
+                    false,
+                    self.archive_destination(&game_id).await,
+                )
             }
             // Ahead of `paused`: pausing and then cancelling with deletion
             // sets both, and what the user last asked for was to cancel.
@@ -488,9 +491,7 @@ impl DownloadManager {
                 (DownloadStatus::Paused, None, false, None)
             }
             engine::Outcome::Stopped => (DownloadStatus::Canceled, None, false, None),
-            engine::Outcome::Quota(message) => {
-                (DownloadStatus::Paused, Some(message), false, None)
-            }
+            engine::Outcome::Quota(message) => (DownloadStatus::Paused, Some(message), false, None),
             engine::Outcome::Fatal(err) => {
                 (DownloadStatus::Failed, Some(err.to_string()), false, None)
             }
@@ -541,7 +542,11 @@ impl DownloadManager {
 
     /// Adds a game to the queue, or replaces a stopped entry for the same
     /// game in place. Progress arrives as `download://progress` events.
-    pub async fn enqueue(&self, manifest: &DownloadManifest, destination: PathBuf) -> AppResult<()> {
+    pub async fn enqueue(
+        &self,
+        manifest: &DownloadManifest,
+        destination: PathBuf,
+    ) -> AppResult<()> {
         let mut entry = QueueEntry::from_manifest(manifest, destination);
 
         let mut inner = self.inner.lock().await;
@@ -557,9 +562,7 @@ impl DownloadManager {
         }
 
         let game_id = entry.game_id.clone();
-        inner
-            .entries
-            .insert(game_id.clone(), Handle::fresh(entry));
+        inner.entries.insert(game_id.clone(), Handle::fresh(entry));
         if !inner.order.contains(&game_id) {
             inner.order.push(game_id);
         }
@@ -615,12 +618,10 @@ impl DownloadManager {
         if is_active {
             let handle = {
                 let inner = self.inner.lock().await;
-                inner.entries.get(game_id).map(|h| {
-                    (
-                        h.paused.clone(),
-                        h.cancel.clone(),
-                    )
-                })
+                inner
+                    .entries
+                    .get(game_id)
+                    .map(|h| (h.paused.clone(), h.cancel.clone()))
             };
             let Some((paused, cancel)) = handle else {
                 return false;
@@ -679,7 +680,10 @@ impl DownloadManager {
         if self.is_active(game_id).await {
             let flags = {
                 let inner = self.inner.lock().await;
-                inner.entries.get(game_id).map(|h| (h.purge.clone(), h.cancel.clone()))
+                inner
+                    .entries
+                    .get(game_id)
+                    .map(|h| (h.purge.clone(), h.cancel.clone()))
             };
             let Some((purge, cancel)) = flags else {
                 return false;
@@ -1100,7 +1104,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_restored_queue_resumes_what_was_interrupted_and_keeps_what_was_paused() {
-        let dir = std::env::temp_dir().join(format!("gb-queue-{}-{:?}", std::process::id(), std::time::SystemTime::now()));
+        let dir = std::env::temp_dir().join(format!(
+            "gb-queue-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut interrupted = entry("archive", Path::new("/games/a"), &["a.zip"]);
@@ -1121,7 +1129,10 @@ mod tests {
         let manager = DownloadManager::new(&dir, no_provider());
         let snapshot = manager.snapshot().await;
 
-        let interrupted = snapshot.iter().find(|d| d.game_id == "interrupted").unwrap();
+        let interrupted = snapshot
+            .iter()
+            .find(|d| d.game_id == "interrupted")
+            .unwrap();
         assert_eq!(interrupted.status, DownloadStatus::Queued);
         let deliberate = snapshot.iter().find(|d| d.game_id == "deliberate").unwrap();
         assert_eq!(deliberate.status, DownloadStatus::Paused);

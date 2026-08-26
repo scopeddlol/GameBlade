@@ -111,12 +111,7 @@ export class SteamGridDbClient {
    * alone silently returns an empty list, which reads as "no artwork exists".
    */
   async grids(gameId: number, signal?: AbortSignal): Promise<SgdbAsset[]> {
-    const posters = await this.assets(
-      'grids',
-      gameId,
-      { dimensions: '600x900,342x482' },
-      signal,
-    );
+    const posters = await this.assets('grids', gameId, { dimensions: '600x900,342x482' }, signal);
     if (posters.length > 0) return posters;
 
     const all = await this.assets('grids', gameId, {}, signal);

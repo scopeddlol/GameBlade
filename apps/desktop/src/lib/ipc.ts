@@ -67,7 +67,14 @@ export interface RunningGame {
 export interface ClientSettings {
   installDir: string;
   extraInstallDirs: string[];
+  /** The master switch: with it off nothing syncs without a button press. */
   syncSaves: boolean;
+  /** Upload the save once the game closes. */
+  autoSyncOnExit: boolean;
+  /** Upload every this many minutes while playing; 0 is off. */
+  autoSyncIntervalMinutes: number;
+  /** On sign-in, upload anything this machine is ahead on. */
+  autoSyncOnStart: boolean;
   promptOnSaveConflict: boolean;
   shareActivity: boolean;
   minimizeOnLaunch: boolean;
@@ -202,6 +209,15 @@ export const ipc = {
       workingDir: options?.workingDir,
     }),
   runningGame: () => invoke<RunningGame | null>('running_game'),
+
+  /**
+   * Closes the running game from here.
+   *
+   * Asks first and kills after a few seconds, so a game that handles the
+   * request gets to save. Omitting the id means "whatever is running", which
+   * is the only thing the title bar's Stop button can mean.
+   */
+  stopGame: (gameId?: string) => invoke<boolean>('stop_game', { gameId }),
 
   /* ---------------------------------------------------------- cloud saves */
 

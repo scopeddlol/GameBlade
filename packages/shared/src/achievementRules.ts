@@ -220,7 +220,9 @@ export function saveTemplateFromSource(sourceTemplate: string): string | null {
   // Everything from the first wildcard on is a pattern, not a location: a rule
   // reading `{appdata}\Game\*\progress.json` describes a folder per profile,
   // and the folder worth syncing is the one above them all.
-  const wildcardAt = segments.findIndex((segment) => segment.includes('*') || segment.includes('?'));
+  const wildcardAt = segments.findIndex(
+    (segment) => segment.includes('*') || segment.includes('?'),
+  );
   const upTo = wildcardAt === -1 ? segments.length - 1 : wildcardAt;
   if (upTo < 1) return null;
 
@@ -274,7 +276,9 @@ export function deriveSaveTemplates(sourceTemplates: string[]): DerivedSaveTempl
     kept.push({ pathTemplate, ruleCount });
   }
 
-  return kept.sort((a, b) => b.ruleCount - a.ruleCount || a.pathTemplate.localeCompare(b.pathTemplate));
+  return kept.sort(
+    (a, b) => b.ruleCount - a.ruleCount || a.pathTemplate.localeCompare(b.pathTemplate),
+  );
 }
 
 /** Whether `candidate` sits inside `ancestor`, comparing whole segments. */

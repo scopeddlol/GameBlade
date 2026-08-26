@@ -10,6 +10,7 @@ import clsx from 'clsx';
 import { ArrowBigUp, Check, Plus, Search, Sparkles, Star, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { RequestRow } from '../components/GameRequests.js';
+import { SuggestionDetail } from '../components/SuggestionDetail.js';
 import { Artwork, Empty, ErrorNote, Loading, ListSkeleton } from '../components/ui.js';
 import {
   useDiscovery,
@@ -45,12 +46,29 @@ export function RequestsTab({ onOpenGameId }: { onOpenGameId: (gameId: string) =
   const [filter, setFilter] = useState<Filter>('');
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  // The suggestion being read about. A title the archive already has opens the
+  // real game page instead, which is why this only ever holds one it does not.
+  const [reading, setReading] = useState<GameRequestSuggestion | null>(null);
 
   const digestQuery = useRequestDigest();
   const listQuery = useRequestList(filter);
 
   const requests = listQuery.data ?? [];
   const counts = digestQuery.data?.counts;
+
+  /**
+   * What clicking a card does.
+   *
+   * In the archive, it opens the game — the same panel the Store opens, with
+   * its screenshots, its size and its Install button. Not in the archive,
+   * there is no game page to open, so what opens is everything the provider
+   * told us about it: the cover, the blurb, the year, the score, and the
+   * button that asks for it.
+   */
+  const openSuggestion = (suggestion: GameRequestSuggestion) => {
+    if (suggestion.gameId) onOpenGameId(suggestion.gameId);
+    else setReading(suggestion);
+  };
 
   return (
     <div className="tab-content requests-tab">
@@ -72,9 +90,9 @@ export function RequestsTab({ onOpenGameId }: { onOpenGameId: (gameId: string) =
 
       <ErrorNote message={error} />
 
-      <Finder search={search} onSearch={setSearch} onError={setError} />
+      <Finder search={search} onSearch={setSearch} onError={setError} onOpen={openSuggestion} />
 
-      {search.trim().length >= 2 ? null : <Shelves onError={setError} />}
+      {search.trim().length >= 2 ? null : <Shelves onError={setError} onOpen={openSuggestion} />}
 
       <section className="requests-queue">
         <div className="requests-filters">
@@ -116,6 +134,14 @@ export function RequestsTab({ onOpenGameId }: { onOpenGameId: (gameId: string) =
           </ul>
         )}
       </section>
+
+      {reading ? (
+        <SuggestionDetail
+          suggestion={reading}
+          onClose={() => setReading(null)}
+          onError={setError}
+        />
+      ) : null}
     </div>
   );
 }
@@ -141,10 +167,12 @@ function Finder({
   search,
   onSearch,
   onError,
+  onOpen,
 }: {
   search: string;
   onSearch: (value: string) => void;
   onError: (message: string) => void;
+  onOpen: (suggestion: GameRequestSuggestion) => void;
 }) {
   const [note, setNote] = useState('');
   const debounced = useDebounced(search, 350);
@@ -187,7 +215,7 @@ function Finder({
           {searchQuery.isFetching && results.length === 0 ? (
             <Loading label="Searching" />
           ) : results.length > 0 ? (
-            <CardGrid items={results} onError={onError} />
+            <CardGrid items={results} onError={onError} onOpen={onOpen} />
           ) : null}
 
           {exhausted ? (
@@ -235,12 +263,33 @@ function Finder({
 }
 
 /** Every discovery shelf the server offered, in the order it offered them. */
-function Shelves({ onError }: { onError: (message: string) => void }) {
+function Shelves({
+  onError,
+  onOpen,
+}: {
+  onError: (message: string) => void;
+  onOpen: (suggestion: GameRequestSuggestion) => void;
+}) {
   const discoveryQuery = useDiscovery();
   const shelves = discoveryQuery.data?.shelves ?? [];
 
+  // A strip of empty card shapes rather than nothing at all. The shelves are
+  // the slowest thing on this page, and rendering nothing while they arrive is
+  // what made the tab appear a beat after it was opened.
+  if (discoveryQuery.isLoading) {
+    return (
+      <section className="discover">
+        <div className="discover-strip" role="status" aria-label="Loading suggestions">
+          {Array.from({ length: 6 }, (_, index) => (
+            <div key={index} className="skeleton discover-card-skeleton" />
+          ))}
+        </div>
+      </section>
+    );
+  }
+
   // Silent when no metadata provider is configured: the page works without it.
-  if (discoveryQuery.isLoading || shelves.length === 0) return null;
+  if (shelves.length === 0) return null;
 
   return (
     <>
@@ -257,6 +306,7 @@ function Shelves({ onError }: { onError: (message: string) => void }) {
                 key={`${shelf.id}-${item.title}`}
                 suggestion={item}
                 onError={onError}
+                onOpen={onOpen}
               />
             ))}
           </div>
@@ -270,14 +320,16 @@ function Shelves({ onError }: { onError: (message: string) => void }) {
 function CardGrid({
   items,
   onError,
+  onOpen,
 }: {
   items: GameRequestSuggestion[];
   onError: (message: string) => void;
+  onOpen: (suggestion: GameRequestSuggestion) => void;
 }) {
   return (
     <div className="discover-grid">
       {items.map((item) => (
-        <SuggestionCard key={item.title} suggestion={item} onError={onError} />
+        <SuggestionCard key={item.title} suggestion={item} onError={onError} onOpen={onOpen} />
       ))}
     </div>
   );
@@ -293,9 +345,11 @@ function CardGrid({
 function SuggestionCard({
   suggestion,
   onError,
+  onOpen,
 }: {
   suggestion: GameRequestSuggestion;
   onError: (message: string) => void;
+  onOpen: (suggestion: GameRequestSuggestion) => void;
 }) {
   const queryClient = useQueryClient();
   const { create, vote } = useRequestMutations();
@@ -313,36 +367,48 @@ function SuggestionCard({
 
   return (
     <article className="discover-card">
-      <div className="discover-cover-wrap">
-        <Artwork
-          path={suggestion.coverUrl}
-          alt={suggestion.title}
-          className="discover-cover"
-          fallbackText={suggestion.title}
-        />
-        {suggestion.rating !== null ? (
-          <span className="discover-score" title={`Rated ${suggestion.rating} out of 100`}>
-            <Star size={11} aria-hidden />
-            {suggestion.rating}
-          </span>
-        ) : null}
-      </div>
+      {/* The cover and the title are one button, and the action below it is
+          another. A whole card that was one big button would make Request
+          unreachable without also opening the panel behind it. */}
+      <button
+        type="button"
+        className="discover-open"
+        onClick={() => onOpen(suggestion)}
+        title={suggestion.gameId ? `Open ${suggestion.title}` : `More about ${suggestion.title}`}
+      >
+        <span className="discover-cover-wrap">
+          <Artwork
+            path={suggestion.coverUrl}
+            alt={suggestion.title}
+            className="discover-cover"
+            fallbackText={suggestion.title}
+          />
+          {suggestion.rating !== null ? (
+            <span className="discover-score" title={`Rated ${suggestion.rating} out of 100`}>
+              <Star size={11} aria-hidden />
+              {suggestion.rating}
+            </span>
+          ) : null}
+        </span>
 
-      <div className="discover-body">
-        <p className="discover-title" title={suggestion.title}>
-          {suggestion.title}
-        </p>
-        {suggestion.releaseYear ? <p className="muted small">{suggestion.releaseYear}</p> : null}
-        {suggestion.summary ? (
-          <p className="muted small discover-blurb">{suggestion.summary}</p>
-        ) : null}
-      </div>
+        <span className="discover-body">
+          <span className="discover-title" title={suggestion.title}>
+            {suggestion.title}
+          </span>
+          {suggestion.releaseYear ? (
+            <span className="muted small">{suggestion.releaseYear}</span>
+          ) : null}
+          {suggestion.summary ? (
+            <span className="muted small discover-blurb">{suggestion.summary}</span>
+          ) : null}
+        </span>
+      </button>
 
       {suggestion.inCatalog ? (
-        <span className="row-chip installed">
-          <Check size={12} aria-hidden />
+        <button type="button" className="btn btn-ghost" onClick={() => onOpen(suggestion)}>
+          <Check size={14} aria-hidden />
           In the archive
-        </span>
+        </button>
       ) : (
         <button
           type="button"

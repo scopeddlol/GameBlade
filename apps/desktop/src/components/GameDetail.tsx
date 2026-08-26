@@ -15,6 +15,7 @@ import {
   HardDrive,
   Lock,
   Play,
+  Square,
   Trash2,
   Trophy,
   X,
@@ -155,6 +156,24 @@ export function GameDetailPanel({
   // the same way.
   const addMutation = useAddToLibrary();
 
+  /**
+   * Closes the running game from here.
+   *
+   * The button this replaces was a greyed-out "Running" — true, and useless to
+   * somebody whose game has hung behind a fullscreen window with no way back
+   * to the desktop. The process is asked to close and killed if it does not
+   * answer, so a game that handles the request still gets to save first.
+   */
+  const stopMutation = useMutation({
+    mutationFn: () => ipc.stopGame(gameId),
+    onSuccess: () => {
+      setError(null);
+      setNotice('Closing the game…');
+      void queryClient.invalidateQueries({ queryKey: ['running'] });
+    },
+    onError: (caught) => setError(errorMessage(caught)),
+  });
+
   const uninstallMutation = useMutation({
     mutationFn: () => ipc.uninstall(gameId),
     onSuccess: () => {
@@ -207,15 +226,25 @@ export function GameDetailPanel({
               {notice ? <p className="notice">{notice}</p> : null}
 
               <div className="detail-actions">
-                {installed ? (
+                {installed && isRunning ? (
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-lg"
+                    onClick={() => stopMutation.mutate()}
+                    disabled={stopMutation.isPending}
+                  >
+                    <Square size={16} aria-hidden />
+                    {stopMutation.isPending ? 'Closing…' : 'Stop'}
+                  </button>
+                ) : installed ? (
                   <button
                     type="button"
                     className="btn btn-primary btn-lg"
                     onClick={() => launchMutation.mutate()}
-                    disabled={isRunning || launchMutation.isPending}
+                    disabled={launchMutation.isPending}
                   >
                     <Play size={16} aria-hidden />
-                    {isRunning ? 'Running' : launchMutation.isPending ? 'Starting…' : 'Play'}
+                    {launchMutation.isPending ? 'Starting…' : 'Play'}
                   </button>
                 ) : (
                   <button

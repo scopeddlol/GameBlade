@@ -152,10 +152,53 @@ export function SettingsTab() {
 
               <Toggle
                 label="Sync saves automatically"
-                hint="Pull before launching and push after quitting."
+                hint="Keeps this machine's saves and the cloud's in step without you thinking about it. Turning it off leaves the buttons on each game's page working."
                 checked={draft.syncSaves}
                 onChange={(syncSaves) => update({ syncSaves })}
               />
+
+              {/* Nested under the master switch: these describe *when* it
+                  syncs, and offering them while syncing is off would be four
+                  controls that do nothing. */}
+              {draft.syncSaves ? (
+                <div className="settings-subgroup">
+                  <Toggle
+                    label="Upload when a game closes"
+                    hint="The other half of automatic. Without it the cloud copy stays at whenever you last pressed Upload."
+                    checked={draft.autoSyncOnExit}
+                    onChange={(autoSyncOnExit) => update({ autoSyncOnExit })}
+                  />
+
+                  <Toggle
+                    label="Catch up on sign-in"
+                    hint="Uploads anything this machine is ahead on when the app starts — a crash or a power cut ends a session with nothing sent."
+                    checked={draft.autoSyncOnStart}
+                    onChange={(autoSyncOnStart) => update({ autoSyncOnStart })}
+                  />
+
+                  <label className="field">
+                    <span>Back up while playing</span>
+                    <select
+                      className="input"
+                      value={draft.autoSyncIntervalMinutes}
+                      onChange={(event) =>
+                        update({ autoSyncIntervalMinutes: Number(event.target.value) })
+                      }
+                    >
+                      <option value={0}>Only when the game closes</option>
+                      <option value={5}>Every 5 minutes</option>
+                      <option value={15}>Every 15 minutes</option>
+                      <option value={30}>Every 30 minutes</option>
+                      <option value={60}>Every hour</option>
+                    </select>
+                    <span className="muted small">
+                      A long session that ends in a crash loses everything since it started.
+                      Uploading part-way through costs bandwidth and, for a game that keeps its save
+                      file open, can capture a half-written one.
+                    </span>
+                  </label>
+                </div>
+              ) : null}
 
               <Toggle
                 label="Ask before overwriting"

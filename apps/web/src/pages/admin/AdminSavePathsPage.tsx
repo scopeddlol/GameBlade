@@ -407,7 +407,9 @@ function AchievementGaps() {
 
       <FormError message={failure} />
       <Notice
-        message={written === null ? null : `${written} save ${written === 1 ? 'rule' : 'rules'} written.`}
+        message={
+          written === null ? null : `${written} save ${written === 1 ? 'rule' : 'rules'} written.`
+        }
       />
 
       <div className="divide-ink-700/70 divide-y">
@@ -471,9 +473,7 @@ function AchievementGaps() {
         <button
           type="button"
           className="gb-btn-ghost"
-          onClick={() =>
-            setTicked(Object.fromEntries(gaps.map((gap) => [gap.gameId, true])))
-          }
+          onClick={() => setTicked(Object.fromEntries(gaps.map((gap) => [gap.gameId, true])))}
         >
           Select all
         </button>

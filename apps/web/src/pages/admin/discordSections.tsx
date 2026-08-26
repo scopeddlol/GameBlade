@@ -509,7 +509,10 @@ export function PostSection({
       <MentionBar
         guild={guild}
         onInsert={(token) =>
-          setPost((current) => ({ ...current, message: insertAt(bodyRef.current, current.message, token) }))
+          setPost((current) => ({
+            ...current,
+            message: insertAt(bodyRef.current, current.message, token),
+          }))
         }
       />
 
@@ -1384,9 +1387,9 @@ function MentionOptions({
           <span>
             Notify the people tagged
             <span className="text-ink-500 block text-xs">
-              Discord never sends a notification for a mention inside an embed — it renders the
-              pill and stops there. Ticking this repeats the tags on a line above the embed, which
-              is the only thing that reaches them.
+              Discord never sends a notification for a mention inside an embed — it renders the pill
+              and stops there. Ticking this repeats the tags on a line above the embed, which is the
+              only thing that reaches them.
             </span>
           </span>
         </label>

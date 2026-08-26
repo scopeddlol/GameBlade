@@ -3,7 +3,9 @@ import { allowedMentions, extractMentions, mentionToken, pingLine } from './disc
 
 describe('extractMentions', () => {
   it('finds each kind of token', () => {
-    const found = extractMentions('<@111111111111111111> <@&222222222222222222> <#333333333333333333>');
+    const found = extractMentions(
+      '<@111111111111111111> <@&222222222222222222> <#333333333333333333>',
+    );
     expect(found.users).toEqual(['111111111111111111']);
     expect(found.roles).toEqual(['222222222222222222']);
     expect(found.channels).toEqual(['333333333333333333']);
@@ -43,7 +45,9 @@ describe('extractMentions', () => {
  */
 describe('allowedMentions', () => {
   it('names exactly the ids the text contained', () => {
-    const allowed = allowedMentions(extractMentions('<@111111111111111111> <@&222222222222222222>'));
+    const allowed = allowedMentions(
+      extractMentions('<@111111111111111111> <@&222222222222222222>'),
+    );
     expect(allowed).toEqual({
       parse: [],
       users: ['111111111111111111'],

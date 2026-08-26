@@ -3581,31 +3581,54 @@ textarea::placeholder {
   box-shadow: 0 8px 20px rgb(0 0 0 / 0.28);
 }
 
-/* Whatever the provider sent — a 300×450 poster, a 1000×1500 one, or nothing
-   at all — the box it lands in is the card's width and only that. */
+/* The card's own contents, as a button: the cover and the title open the game
+   or its details, and the action underneath stays separately clickable. */
+.discover-open {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.discover-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+/* Whatever the provider sent — a 300×450 poster, a 1000×1500 one, a wide
+   capsule, or nothing at all — the box it lands in is exactly this.
+   
+   The previous approach asked for `aspect-ratio` on the image itself and let
+   its height resolve to auto, which is correct right up until it is not: an
+   `<img>` with no intrinsic size yet (still loading, or failed) resolves that
+   auto height against nothing, so a strip of covers grew and settled at
+   different heights as each one arrived. Pinning the *container* to a fixed
+   ratio and having the image fill it absolutely takes the image's own
+   dimensions out of the layout entirely, so every card is its final size from
+   the first paint. */
 .discover-cover-wrap {
   position: relative;
-  width: 100%;
-}
-/* Every cover the same shape, whatever the provider sent.
-   `height` is set explicitly rather than left to `.artwork`'s `height: 100%`:
-   a percentage height against an auto-height parent resolves to auto, so which
-   of the two rules won decided whether the aspect ratio applied at all — and
-   art of a dozen different natural sizes then rendered at a dozen different
-   sizes. Pinning height to auto lets aspect-ratio be the only thing deciding. */
-.discover-cover {
-  width: 100%;
-  height: auto;
-  aspect-ratio: 2 / 3;
-  object-fit: cover;
-  border-radius: var(--radius-sm);
   display: block;
-}
-/* The initials placeholder has to match, or a game with no art breaks the row. */
-.discover-cover.placeholder {
   width: 100%;
-  height: auto;
   aspect-ratio: 2 / 3;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--ink-800);
+}
+.discover-cover,
+.discover-cover.placeholder {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: flex;
 }
 /* Sits on the artwork rather than in the body: the body is where the title and
    blurb go, and a score competing with them there reads as part of the name. */
@@ -3630,6 +3653,14 @@ textarea::placeholder {
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+/* The card's own placeholder, so a strip that has not arrived holds the same
+   shape the covers will. */
+.discover-card-skeleton {
+  flex: 0 0 var(--discover-card);
+  width: var(--discover-card);
+  height: 300px;
+  border-radius: var(--radius-md);
 }
 .discover-title {
   margin: 0;
@@ -3717,4 +3748,157 @@ textarea::placeholder {
   margin-top: 4px;
   color: var(--ink-300);
   font-size: 13px;
+}
+
+/* ------------------------------------------------- stopping a running game */
+
+/* The chip in the title bar is a button now, not a label. It reads as a status
+   until the pointer reaches it, and only then offers the thing it can do —
+   a permanent red Stop next to the game you are enjoying is not the tone. */
+/* Only the parts that turn the existing pill into a button. Its colour, size
+   and padding stay where they were defined, so the resting state is unchanged. */
+.playing-chip {
+  border: 1px solid transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.playing-chip-stop,
+.playing-chip-action {
+  display: none;
+}
+.playing-chip:hover:not(:disabled),
+.playing-chip:focus-visible:not(:disabled) {
+  border-color: color-mix(in srgb, var(--danger) 60%, transparent);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+.playing-chip:hover:not(:disabled) .playing-chip-icon,
+.playing-chip:focus-visible:not(:disabled) .playing-chip-icon {
+  display: none;
+}
+.playing-chip:hover:not(:disabled) .playing-chip-stop,
+.playing-chip:focus-visible:not(:disabled) .playing-chip-stop {
+  display: inline-flex;
+}
+/* The title gives way to the verb: at this width both do not fit, and which
+   game it is has just been read. */
+.playing-chip:hover:not(:disabled) .playing-chip-label,
+.playing-chip:focus-visible:not(:disabled) .playing-chip-label {
+  display: none;
+}
+.playing-chip:hover:not(:disabled) .playing-chip-action,
+.playing-chip:focus-visible:not(:disabled) .playing-chip-action {
+  display: inline;
+}
+.playing-chip.is-stopping {
+  color: var(--ink-400);
+  cursor: default;
+}
+
+/* Settings that only mean anything while the switch above them is on. The rule
+   is indentation plus a line, which is enough to read as "part of that". */
+.settings-subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0 4px 10px;
+  padding-left: 14px;
+  border-left: 2px solid var(--ink-800);
+}
+
+/* ------------------------------------------- a title that is not here yet */
+
+/* Narrower than the game drawer: there is a cover, a paragraph and a button,
+   and stretching that across the full-width panel leaves a page of whitespace
+   with a sentence stranded in it. */
+.suggestion-drawer {
+  max-width: 720px;
+}
+.suggestion-detail {
+  display: flex;
+  gap: 24px;
+  padding: 28px;
+  align-items: flex-start;
+}
+/* Fixed, for the same reason the cards are: the provider's art arrives at
+   whatever size it likes, and the layout must not depend on which. */
+.suggestion-cover {
+  flex: 0 0 200px;
+  width: 200px;
+  height: 300px;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+  background: var(--ink-800);
+}
+.suggestion-body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.suggestion-body h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+.suggestion-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.suggestion-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-200);
+}
+.suggestion-summary {
+  margin: 0;
+  line-height: 1.55;
+  color: var(--ink-200);
+}
+.suggestion-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+@media (max-width: 640px) {
+  .suggestion-detail {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .suggestion-cover {
+    flex: none;
+    width: 160px;
+    height: 240px;
+  }
+}
+
+/* A request row whose game now exists. Styled as text rather than as a button,
+   because it is a row in a list — the pointer and the hover are what say it
+   goes somewhere. */
+.request-body-link {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+.request-body-link:hover .request-title,
+.request-body-link:focus-visible .request-title {
+  color: var(--accent);
 }

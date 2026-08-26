@@ -21,6 +21,7 @@ import {
   MessageSquare,
   Settings,
   Sparkles,
+  Square,
   Store,
   Swords,
   Trophy,
@@ -39,6 +40,7 @@ import { ProfileDrawer } from './components/ProfileDrawer.js';
 import { TitleBar } from './components/TitleBar.js';
 import { GameDetailPanel } from './components/GameDetail.js';
 import { Avatar, Loading } from './components/ui.js';
+import { useAutoSync } from './hooks/useAutoSync.js';
 import { RealtimeProvider, useRealtime } from './hooks/useRealtime.js';
 import { SessionProvider, useSession } from './hooks/useSession.js';
 import { useTheme } from './hooks/useTheme.js';
@@ -108,7 +110,14 @@ const queryClient = new QueryClient({
  */
 const TAB_PREFETCH: Partial<Record<TabId, { key: readonly unknown[]; path: string }[]>> = {
   home: [{ key: ['home'], path: '/home' }],
-  requests: [{ key: ['requests', 'digest'], path: '/requests/digest' }],
+  // All three, because the tab renders all three and the shelves are the slow
+  // one — asking for them only once the tab mounts is what made pressing
+  // "Requests" show an empty page for a beat before anything appeared.
+  requests: [
+    { key: ['requests', 'digest'], path: '/requests/digest' },
+    { key: ['requests', 'discover'], path: '/requests/discover' },
+    { key: ['requests', 'list', ''], path: '/requests?sort=votes&limit=100' },
+  ],
   news: [{ key: ['news'], path: '/feed?scope=everyone&kind=announcement&limit=50' }],
   social: [{ key: ['feed', 'friends'], path: '/feed?scope=friends&limit=30' }],
 };
@@ -151,6 +160,32 @@ function Shell() {
     // the app was reopened while a game was already running.
     refetchInterval: 20_000,
   });
+
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => ipc.getSettings(),
+    enabled: Boolean(session),
+  });
+
+  // The half of "sync saves automatically" that never happened: pulling before
+  // a launch was implemented, pushing afterwards was not.
+  useAutoSync(settingsQuery.data, Boolean(session));
+
+  // A game closing is what ends a session, so the chip in the title bar and
+  // anything keyed on "is this running" have to hear about it immediately
+  // rather than on the next twenty-second poll.
+  useEffect(() => {
+    if (!session) return;
+
+    const unlisten = listen('play://ended', () => {
+      void queryClient.invalidateQueries({ queryKey: ['running'] });
+      void queryClient.invalidateQueries({ queryKey: ['home'] });
+    });
+
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, [session]);
 
   // Progress arrives from the Rust downloader as events rather than by polling.
   useEffect(() => {
@@ -514,12 +549,7 @@ function TopBar({ running, tab }: { running: RunningGame | null; tab: TabId }) {
 
   return (
     <div className="topbar" data-tauri-drag-region>
-      {running ? (
-        <span className="playing-chip">
-          <Gamepad2 size={14} aria-hidden />
-          Playing {running.title}
-        </span>
-      ) : null}
+      {running ? <PlayingChip running={running} /> : null}
 
       <span className="spacer" />
 
@@ -584,6 +614,49 @@ function TopBar({ running, tab }: { running: RunningGame | null; tab: TabId }) {
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * What is running, and the way to stop it.
+ *
+ * It used to be a label. That is fine right up until a game hangs behind a
+ * fullscreen window, at which point the only thing the app could offer was the
+ * observation that the game was running — which the player could see, and was
+ * the problem. Hovering turns it into a Stop button; the process is asked to
+ * close and killed if it will not, so a game that handles the request still
+ * gets to save.
+ */
+function PlayingChip({ running }: { running: RunningGame }) {
+  const queryClient = useQueryClient();
+  const [stopping, setStopping] = useState(false);
+
+  return (
+    <button
+      type="button"
+      className={clsx('playing-chip', stopping && 'is-stopping')}
+      title={stopping ? 'Closing…' : `Stop ${running.title}`}
+      disabled={stopping}
+      onClick={() => {
+        setStopping(true);
+        void ipc
+          .stopGame(running.gameId)
+          .catch(() => undefined)
+          .finally(() => {
+            // The chip disappears when the watcher reports the exit; this only
+            // covers a stop that failed outright, so the button comes back.
+            void queryClient.invalidateQueries({ queryKey: ['running'] });
+            setTimeout(() => setStopping(false), 4000);
+          });
+      }}
+    >
+      <Gamepad2 size={14} aria-hidden className="playing-chip-icon" />
+      <Square size={13} aria-hidden className="playing-chip-stop" />
+      <span className="playing-chip-label">
+        {stopping ? `Closing ${running.title}…` : `Playing ${running.title}`}
+      </span>
+      <span className="playing-chip-action">Stop</span>
+    </button>
   );
 }
 

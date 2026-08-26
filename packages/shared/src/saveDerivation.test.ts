@@ -10,9 +10,9 @@ import { deriveSaveTemplates, saveTemplateFromSource } from './achievementRules.
  */
 describe('saveTemplateFromSource', () => {
   it('takes the folder holding the watched file', () => {
-    expect(saveTemplateFromSource('{appdata}\\Goldberg SteamEmu Saves\\480\\achievements.json')).toBe(
-      '{appdata}\\Goldberg SteamEmu Saves\\480',
-    );
+    expect(
+      saveTemplateFromSource('{appdata}\\Goldberg SteamEmu Saves\\480\\achievements.json'),
+    ).toBe('{appdata}\\Goldberg SteamEmu Saves\\480');
   });
 
   it('accepts forward slashes and answers in the authored form', () => {

@@ -1609,7 +1609,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
             pathTemplate: entry.pathTemplate,
             include: entry.include ?? null,
             exclude: null,
-            note: 'Derived from this game\'s achievement rules',
+            note: "Derived from this game's achievement rules",
             createdAt: isoNow(),
           })
           .run();

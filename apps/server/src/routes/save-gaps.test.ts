@@ -182,7 +182,11 @@ describe('save rules derived from achievement rules', () => {
 
     expect(response.json()).toMatchObject({ applied: 0 });
 
-    const rule = app.gameblade.db.select().from(gameSaveRules).all().find((r) => r.gameId === 'g2');
+    const rule = app.gameblade.db
+      .select()
+      .from(gameSaveRules)
+      .all()
+      .find((r) => r.gameId === 'g2');
     expect(rule?.pathTemplate).toBe('{documents}\\Already Synced');
   });
 });

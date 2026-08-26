@@ -823,6 +823,13 @@ export interface GameRequestSuggestion {
   rating: number | null;
   /** Already on the shelf: asking for it would be pointless. */
   inCatalog: boolean;
+  /**
+   * Which catalog entry it is, when it is one.
+   *
+   * "In the archive" with nothing to click was a dead end — the one thing
+   * anybody wants on reading it is to go and look at the game.
+   */
+  gameId: string | null;
   /** Set when somebody has already asked, so the button becomes a vote. */
   requestId: string | null;
   status: GameRequestStatus | null;

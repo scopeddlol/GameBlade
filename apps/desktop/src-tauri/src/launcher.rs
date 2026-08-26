@@ -3,6 +3,7 @@ use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -13,6 +14,15 @@ const HEARTBEAT: Duration = Duration::from_secs(60);
 
 /// How often the watcher checks whether the process has exited.
 const POLL: Duration = Duration::from_millis(750);
+
+/// How long a game is given to close itself before it is killed outright.
+///
+/// On Windows the polite request is a WM_CLOSE to the process's windows, which
+/// a game may honour by saving and exiting — the whole reason to ask first. A
+/// game that is hung, or that is showing a "really quit?" dialog nobody can
+/// reach because it is fullscreen on a minimized window, will not answer, and
+/// waiting on it forever is the state the player pressed Stop to get out of.
+const GRACEFUL_EXIT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +64,13 @@ struct SessionResponse {
 #[derive(Default)]
 pub struct Launcher {
     running: RwLock<HashMap<String, RunningGame>>,
+    /// Set by `stop`, read by the watcher on its next poll.
+    ///
+    /// A flag rather than a handle to the child, because the child is owned by
+    /// the watcher task: handing a second owner the ability to kill it invites
+    /// exactly the race where the process is reaped twice and the play session
+    /// is closed with the wrong duration.
+    stopping: RwLock<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl Launcher {
@@ -63,6 +80,28 @@ impl Launcher {
 
     pub async fn is_running(&self, game_id: &str) -> bool {
         self.running.read().await.contains_key(game_id)
+    }
+
+    /// Ask the running game to close, and kill it if it will not.
+    ///
+    /// Returns false when nothing is running under that id, so the caller can
+    /// say so rather than reporting a stop that stopped nothing.
+    ///
+    /// The playtime session is closed by the watcher on the way out, exactly as
+    /// it is for a game that exited on its own — a force-quit still counts as
+    /// time played, because it was.
+    pub async fn stop(&self, game_id: &str) -> bool {
+        let Some(flag) = self.stopping.read().await.get(game_id).cloned() else {
+            return false;
+        };
+        flag.store(true, Ordering::SeqCst);
+        true
+    }
+
+    /// Stop whatever is running, whichever game that is.
+    pub async fn stop_current(&self) -> Option<String> {
+        let game_id = self.current().await.map(|running| running.game_id)?;
+        self.stop(&game_id).await.then_some(game_id)
     }
 
     /// Starts a game and watches it until it exits.
@@ -133,9 +172,17 @@ impl Launcher {
             .await
             .insert(game_id.clone(), running.clone());
 
+        let stopping = Arc::new(AtomicBool::new(false));
+        self.stopping
+            .write()
+            .await
+            .insert(game_id.clone(), Arc::clone(&stopping));
+
         let watcher = Arc::clone(&self);
         tokio::spawn(async move {
-            watcher.watch(app, client, child, game_id, session.id).await;
+            watcher
+                .watch(app, client, child, game_id, session.id, stopping)
+                .await;
         });
 
         Ok(running)
@@ -149,9 +196,11 @@ impl Launcher {
         mut child: tokio::process::Child,
         game_id: String,
         session_id: String,
+        stopping: Arc<AtomicBool>,
     ) {
         let started = Instant::now();
         let mut last_beat = Instant::now();
+        let mut asked_to_close: Option<Instant> = None;
 
         loop {
             match child.try_wait() {
@@ -160,6 +209,24 @@ impl Launcher {
                 // as finished rather than looping forever on a broken child.
                 Err(_) => break,
                 Ok(None) => {}
+            }
+
+            if stopping.load(Ordering::SeqCst) {
+                match asked_to_close {
+                    // First time round: ask nicely, so a game that handles the
+                    // request gets to save and exit on its own terms.
+                    None => {
+                        request_close(&child);
+                        asked_to_close = Some(Instant::now());
+                        let _ =
+                            app.emit("play://stopping", serde_json::json!({ "gameId": game_id }));
+                    }
+                    // It has had its chance.
+                    Some(asked) if asked.elapsed() >= GRACEFUL_EXIT => {
+                        let _ = child.start_kill();
+                    }
+                    Some(_) => {}
+                }
             }
 
             tokio::time::sleep(POLL).await;
@@ -190,6 +257,7 @@ impl Launcher {
 
         let seconds = started.elapsed().as_secs();
         self.running.write().await.remove(&game_id);
+        self.stopping.write().await.remove(&game_id);
 
         let _ = client
             .post_json(
@@ -202,6 +270,43 @@ impl Launcher {
             "play://ended",
             serde_json::json!({ "gameId": game_id, "seconds": seconds }),
         );
+    }
+}
+
+/// Asks a running game to close itself.
+///
+/// On Windows this is `taskkill` without `/F`, which posts WM_CLOSE to the
+/// process's windows — the same thing clicking the X does, and the request a
+/// game can answer by saving first. Elsewhere it is SIGTERM, which is the same
+/// idea in the same spirit. Either way the watcher kills it outright if the
+/// grace period runs out, so a game that ignores the request still stops.
+fn request_close(child: &tokio::process::Child) {
+    let Some(pid) = child.id() else { return };
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        /// Keeps taskkill's console window from flashing over a fullscreen game.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+
+    #[cfg(unix)]
+    {
+        // SIGTERM by hand rather than through a crate: this is the one signal
+        // needed, and `kill` is guaranteed to be there.
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = pid;
     }
 }
 

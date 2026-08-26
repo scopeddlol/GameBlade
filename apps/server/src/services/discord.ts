@@ -665,7 +665,9 @@ export class DiscordService {
       this.logger?.debug({ err: error }, 'could not list guild members');
     }
 
-    return linked.sort((a, b) => Number(b.linked) - Number(a.linked) || a.name.localeCompare(b.name));
+    return linked.sort(
+      (a, b) => Number(b.linked) - Number(a.linked) || a.name.localeCompare(b.name),
+    );
   }
 
   /**

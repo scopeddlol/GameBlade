@@ -389,7 +389,10 @@ export class ScannerService {
       // part-way through its second root reported "25 / 25" for minutes on
       // end. The counters are cleared here and the walk reports what it has
       // found so far as it goes.
-      this.beginPhase('reading', { library: library.name, currentItem: `Reading ${library.name}…` });
+      this.beginPhase('reading', {
+        library: library.name,
+        currentItem: `Reading ${library.name}…`,
+      });
       this.note('info', `Reading ${library.name} (${library.path})`);
 
       const controller = new AbortController();

@@ -11,6 +11,7 @@ import {
   Info,
   Link2Off,
   Play,
+  Square,
   Trash2,
   X,
 } from 'lucide-react';
@@ -85,12 +86,18 @@ export function useGameMenuItems({ onOpen, onError, onManageGroups, onInstall }:
 
     const items: MenuItem[] = [];
 
-    if (installed) {
+    if (installed && isRunning) {
+      // A disabled "Running" entry told the player what they could already see.
+      // The useful thing to offer at that moment is the way out of it.
       items.push({
-        label: isRunning ? 'Running' : 'Play',
+        label: 'Stop',
+        icon: <Square size={14} />,
+        onSelect: () => run(ipc.stopGame(game.id)),
+      });
+    } else if (installed) {
+      items.push({
+        label: 'Play',
         icon: <Play size={14} />,
-        disabled: isRunning,
-        disabledReason: 'This game is already running',
         onSelect: () => run(ipc.launch(game.id)),
       });
     } else if (downloading) {
