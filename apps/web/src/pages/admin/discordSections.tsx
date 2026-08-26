@@ -9,7 +9,17 @@ import {
   type DiscordPresenceStatus,
 } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ImagePlus, LifeBuoy, Play, RefreshCw, Send, Square, Ticket, X } from 'lucide-react';
+import {
+  ImagePlus,
+  LifeBuoy,
+  Play,
+  RefreshCw,
+  Send,
+  Square,
+  Ticket,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Badge, EmptyState, Field, RowSkeleton, Spinner } from '../../components/ui.js';
 import { api, ApiRequestError, uploadFile } from '../../lib/api.js';
@@ -620,6 +630,11 @@ export function TicketSection({
       onError(caught instanceof ApiRequestError ? caught.message : 'Could not post the panel.'),
   });
 
+  const deleteTicketMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/admin/discord/tickets/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'discord', 'tickets'] }),
+  });
+
   const ticketsQuery = useQuery({
     queryKey: ['admin', 'discord', 'tickets', showClosed],
     queryFn: () =>
@@ -822,6 +837,26 @@ export function TicketSection({
                 ) : (
                   <Badge tone="neutral">Closed</Badge>
                 )}
+                <button
+                  type="button"
+                  className="gb-btn-danger shrink-0 px-2 py-1"
+                  title="Close and delete this ticket"
+                  disabled={deleteTicketMutation.isPending}
+                  onClick={() => {
+                    const label = `#${String(ticket.number).padStart(4, '0')}`;
+                    // The Discord channel goes with it, so this is worth a
+                    // confirmation even for a ticket already marked closed.
+                    if (
+                      confirm(
+                        `Delete ticket ${label}? Its Discord channel is removed and the record is gone for good.`,
+                      )
+                    ) {
+                      deleteTicketMutation.mutate(ticket.id);
+                    }
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                </button>
               </div>
             ))}
           </div>

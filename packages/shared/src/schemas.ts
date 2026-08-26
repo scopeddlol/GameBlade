@@ -61,6 +61,17 @@ export const changePasswordSchema = z.object({
 });
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 
+export const resetPasswordSchema = z.object({
+  token: z.string().min(1, 'The reset link is missing its token'),
+  newPassword: passwordSchema,
+});
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+
+export const createPasswordResetSchema = z.object({
+  expiresInHours: z.number().int().min(1).max(168).default(24),
+});
+export type CreatePasswordResetInput = z.infer<typeof createPasswordResetSchema>;
+
 export const createInviteSchema = z.object({
   role: z.enum(ROLES).default('user'),
   note: z.string().trim().max(200).optional(),

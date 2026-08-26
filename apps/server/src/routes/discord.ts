@@ -101,16 +101,23 @@ export async function discordRoutes(app: FastifyInstance): Promise<void> {
 
     const expected = request.cookies[STATE_COOKIE];
     const intent = (request.cookies[INTENT_COOKIE] ?? 'link') as Intent;
+    // Linking started on the account page and signing in started at the front
+    // door, so that is where each goes back to. Prefixed with the base path so
+    // this still works when the panel is served under a subdirectory.
+    const base = config.basePath || '';
+    const returnTo = intent === 'signin' ? `${base}/` : `${base}/account`;
     reply.clearCookie(STATE_COOKIE, { path: `${config.basePath || ''}/api/auth/discord` });
     reply.clearCookie(INTENT_COOKIE, { path: `${config.basePath || ''}/api/auth/discord` });
 
-    if (error) return finished(reply, false, 'Discord sign-in was cancelled.');
-    if (!code || !state) return finished(reply, false, 'Discord sent an incomplete response.');
+    if (error) return finished(reply, false, 'Discord sign-in was cancelled.', returnTo);
+    if (!code || !state) {
+      return finished(reply, false, 'Discord sent an incomplete response.', returnTo);
+    }
 
     // Without this, a code obtained anywhere could be replayed against
     // somebody else's session, attaching an attacker's Discord to their account.
     if (!expected || expected !== state) {
-      return finished(reply, false, 'That sign-in attempt has expired. Try again.');
+      return finished(reply, false, 'That sign-in attempt has expired. Try again.', returnTo);
     }
 
     /**
@@ -146,6 +153,7 @@ export async function discordRoutes(app: FastifyInstance): Promise<void> {
         caught instanceof Error && caught.message
           ? caught.message
           : 'Discord did not answer. Try again in a moment.',
+        returnTo,
       );
     }
 
@@ -158,6 +166,7 @@ export async function discordRoutes(app: FastifyInstance): Promise<void> {
         discordInviteUrl
           ? `Join the Discord first, then link again: ${discordInviteUrl}`
           : 'This server requires you to be in its Discord, and no invite has been published yet. Ask the operator.',
+        returnTo,
       );
     }
 
@@ -172,12 +181,13 @@ export async function discordRoutes(app: FastifyInstance): Promise<void> {
           reply,
           false,
           'That Discord account is not linked to anyone here. Sign in normally once, then link it from your account page.',
+          returnTo,
         );
       }
 
       const account = auth.findById(userId);
       if (!account || !account.isActive) {
-        return finished(reply, false, 'That account is no longer active.');
+        return finished(reply, false, 'That account is no longer active.', returnTo);
       }
 
       // Refresh what Discord told us, then start a session — the same kind
@@ -191,18 +201,23 @@ export async function discordRoutes(app: FastifyInstance): Promise<void> {
         ...app.gameblade.cookieOptions(isSecureRequest(request)),
         expires: new Date(session.expiresAt),
       });
-      return finished(reply, true, 'Signed in.');
+      return finished(reply, true, 'Signed in.', returnTo);
     }
 
     /* --------------------------------------------------------------- link */
 
     const context = request.auth;
     if (!context) {
-      return finished(reply, false, 'Your session expired while Discord was open. Try again.');
+      return finished(
+        reply,
+        false,
+        'Your session expired while Discord was open. Try again.',
+        returnTo,
+      );
     }
 
     discord.link(context.user.id, identity, tokens, inGuild);
-    return finished(reply, true, `Linked as ${identity.username}.`);
+    return finished(reply, true, `Linked as ${identity.username}.`, returnTo);
   });
 
   /* ------------------------------------------------------------- account */
@@ -241,19 +256,34 @@ export async function discordRoutes(app: FastifyInstance): Promise<void> {
   });
 }
 
+/** How long the landing page waits before taking a browser tab onward. */
+const RETURN_DELAY_MS = 2_000;
+
 /**
  * The page the browser lands on at the end of the round trip.
  *
- * Plain HTML with no scripts of consequence: it closes itself when the desktop
- * client opened it in a popup, and otherwise says what happened. Text is
- * escaped — the message can carry an invite URL an operator typed.
+ * Two audiences, and they need opposite things. The desktop client opens this
+ * in a popup, where the right ending is to tell the opener and close. An
+ * ordinary browser tab has no opener, and used to be told "you can close this
+ * window" — a dead end, with the panel it came from nowhere in reach. So a tab
+ * is sent back where it started: the account page after linking, the landing
+ * page after signing in. The link is spelled out as well, because a redirect
+ * that does not fire should still leave somewhere to click.
+ *
+ * Text is escaped — the message can carry an invite URL an operator typed.
  */
-function finished(reply: FastifyReply, ok: boolean, message: string) {
-  const safe = message
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+function finished(reply: FastifyReply, ok: boolean, message: string, returnTo = '/') {
+  const escape = (value: string) =>
+    value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+
+  const safe = escape(message);
+  // Same-origin, and built here rather than taken from the query, so the
+  // callback cannot be used to bounce somebody to another site.
+  const destination = escape(returnTo.startsWith('/') ? returnTo : '/');
 
   return reply.type('text/html; charset=utf-8').send(`<!doctype html>
 <html><head><meta charset="utf-8"><title>${ok ? 'Linked' : 'Not linked'}</title>
@@ -263,19 +293,28 @@ function finished(reply: FastifyReply, ok: boolean, message: string) {
   main { max-width:28rem; padding:2rem; text-align:center; }
   h1 { font-size:1.25rem; margin:0 0 .75rem; color:${ok ? '#34d399' : '#f87171'}; }
   p { color:#8a93a6; line-height:1.6; margin:0; }
+  a { color:#62d0ff; }
 </style></head>
 <body><main>
   <h1>${ok ? 'Discord connected' : 'Could not connect Discord'}</h1>
   <p>${safe}</p>
-  <p style="margin-top:1rem">You can close this window.</p>
+  <p style="margin-top:1rem" id="onward">
+    Taking you back — or <a href="${destination}">continue</a>.
+  </p>
 </main>
 <script>
   // Opened as a popup by the desktop client: tell the opener and get out of
-  // the way. A normal tab has no opener and simply stays put.
+  // the way. A normal tab has no opener, and goes back to the panel instead.
   try {
     if (window.opener) {
       window.opener.postMessage({ source: 'gameblade-discord', ok: ${ok} }, '*');
+      var note = document.getElementById('onward');
+      if (note) note.textContent = 'You can close this window.';
       setTimeout(function () { window.close(); }, 800);
+    } else {
+      setTimeout(function () {
+        window.location.replace(${JSON.stringify(destination)});
+      }, ${RETURN_DELAY_MS});
     }
   } catch (e) { /* a blocked opener is not worth reporting */ }
 </script>

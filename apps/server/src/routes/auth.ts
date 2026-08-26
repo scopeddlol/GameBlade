@@ -1,6 +1,7 @@
 import {
   SESSION_COOKIE,
   changePasswordSchema,
+  resetPasswordSchema,
   loginSchema,
   registerSchema,
   updateAccountSchema,
@@ -175,6 +176,18 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       csrfToken: context.session?.csrfToken ?? '',
     };
     return body;
+  });
+
+  /**
+   * Spend an admin-issued reset link.
+   *
+   * Unauthenticated on purpose: whoever holds the link is, by construction,
+   * somebody who cannot sign in. The token is the whole credential.
+   */
+  app.post('/auth/reset-password', async (request) => {
+    const input = resetPasswordSchema.parse(request.body);
+    await auth.consumePasswordReset(input.token, input.newPassword);
+    return { ok: true };
   });
 
   app.post('/auth/change-password', async (request) => {

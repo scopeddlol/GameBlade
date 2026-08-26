@@ -697,6 +697,38 @@ export class DiscordBotService {
 
   /* -------------------------------------------------------------- admin view */
 
+  /**
+   * Close a ticket and remove the record of it entirely.
+   *
+   * Distinct from the in-Discord close button, which keeps the row so there is
+   * still an account of who asked for what. This is the admin saying they are
+   * finished with it — spam, a duplicate, something resolved long ago — so the
+   * channel goes if it is still there and the row goes with it.
+   *
+   * The channel is deleted first and awaited: a row removed while its channel
+   * survives leaves an orphan nothing in the panel can reach any more.
+   */
+  async deleteTicket(id: string): Promise<boolean> {
+    const ticket = this.db.select().from(discordTickets).where(eq(discordTickets.id, id)).get();
+    if (!ticket) return false;
+
+    if (ticket.channelId) {
+      await this.discord
+        .botCall(`/channels/${ticket.channelId}`, { method: 'DELETE' })
+        .catch((error: unknown) => {
+          // A channel somebody already deleted by hand is not a reason to
+          // refuse to tidy up the row that points at it.
+          this.logger.warn(
+            { err: error, channelId: ticket.channelId },
+            'could not delete a ticket channel; removing the record anyway',
+          );
+        });
+    }
+
+    this.db.delete(discordTickets).where(eq(discordTickets.id, id)).run();
+    return true;
+  }
+
   listTickets(status: string | undefined, limit = 50): TicketRow[] {
     const rows = this.db
       .select({

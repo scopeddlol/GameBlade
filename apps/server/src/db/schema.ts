@@ -85,6 +85,30 @@ export const invites = sqliteTable(
   (t) => [uniqueIndex('invites_code_idx').on(t.code)],
 );
 
+/**
+ * A single-use password reset an admin hands to a player who cannot sign in.
+ *
+ * Stored hashed, like a session token: the link is the credential, so a copy of
+ * the database must not yield working ones.
+ */
+export const passwordResets = sqliteTable(
+  'password_resets',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: text('created_at').notNull().default(now),
+    expiresAt: text('expires_at').notNull(),
+    usedAt: text('used_at'),
+  },
+  (t) => [
+    index('password_resets_user_idx').on(t.userId),
+    index('password_resets_expires_idx').on(t.expiresAt),
+  ],
+);
+
 export const libraries = sqliteTable(
   'libraries',
   {

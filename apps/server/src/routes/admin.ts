@@ -21,6 +21,7 @@ import {
   autoImportAchievementsSchema,
   providerSettingsSchema,
   purgeMissingSchema,
+  createPasswordResetSchema,
   reorderClientButtonsSchema,
   reorderFeaturedSchema,
   scanRequestSchema,
@@ -144,6 +145,29 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     const updated = auth.findById(id);
     return updated ? toPublicUser(updated) : null;
+  });
+
+  /**
+   * A single-use reset link for a player who cannot sign in.
+   *
+   * There is no mail server here, so the link is handed back for an admin to
+   * pass on themselves — which is also why it is shown once and never stored
+   * in a form anyone can read back.
+   */
+  app.post('/admin/users/:id/password-reset', async (request) => {
+    const context = requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const input = createPasswordResetSchema.parse(request.body ?? {});
+
+    const target = auth.findById(id);
+    if (!target) throw ApiError.notFound('User not found');
+
+    const { token, expiresAt } = auth.createPasswordReset(
+      id,
+      context.user.id,
+      input.expiresInHours,
+    );
+    return { token, expiresAt, path: `/reset-password?token=${encodeURIComponent(token)}` };
   });
 
   app.delete('/admin/users/:id', async (request) => {
@@ -1106,6 +1130,23 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/discord/tickets', async (request) => {
     const { status } = request.query as { status?: string };
     return { tickets: discordBot.listTickets(status), counts: discordBot.ticketCounts() };
+  });
+
+  /**
+   * Close a ticket and drop the record of it.
+   *
+   * The in-Discord close button keeps the row on purpose, so there is still an
+   * account of who asked for what. This is for the ones an operator wants gone
+   * outright — spam, duplicates, anything long since dealt with.
+   */
+  app.delete('/admin/discord/tickets/:id', async (request, reply) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+
+    if (!(await discordBot.deleteTicket(id))) {
+      throw ApiError.notFound('That ticket no longer exists');
+    }
+    return reply.code(200).send({ deleted: true });
   });
 
   app.patch('/admin/discord/tickets/settings', async (request) => {

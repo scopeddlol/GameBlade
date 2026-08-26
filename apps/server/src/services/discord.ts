@@ -650,6 +650,8 @@ export class DiscordService {
         summary: games.summary,
         addedAt: games.addedAt,
         coverImageId: games.coverImageId,
+        bannerImageId: games.bannerImageId,
+        heroImageId: games.heroImageId,
         releaseDate: games.releaseDate,
         genres: games.genres,
       })
@@ -667,18 +669,31 @@ export class DiscordService {
 
     if (fresh.length === 0) return 0;
 
+    // Absolute, because Discord fetches artwork itself rather than through a
+    // player's browser — a relative path would resolve to discord.com.
+    const artwork = (imageId: string | null): string | undefined =>
+      imageId && publicBaseUrl
+        ? `${publicBaseUrl}${this.basePath}/api/images/${imageId}`
+        : undefined;
+
     let posted = 0;
     for (const game of fresh) {
+      // Two shapes of art, and Discord renders them differently: the wide one
+      // fills the width of the embed, the portrait cover sits in the corner.
+      // A banner or hero is the one worth showing large; the cover is the
+      // fallback so a game with only a cover still arrives with a picture
+      // rather than as a wall of text.
+      const wide = artwork(game.bannerImageId) ?? artwork(game.heroImageId);
+      const cover = artwork(game.coverImageId);
+
       await this.postEmbed({
         title: game.title,
         description: game.summary ? truncate(game.summary, 300) : undefined,
         color: 0x2bb7f5,
-        // Absolute, because Discord fetches it itself rather than through a
-        // player's browser — a relative path would resolve to discord.com.
-        thumbnail:
-          game.coverImageId && publicBaseUrl
-            ? { url: `${publicBaseUrl}${this.basePath}/api/images/${game.coverImageId}` }
-            : undefined,
+        image: wide ? { url: wide } : cover ? { url: cover } : undefined,
+        // Only alongside a wide image; on its own the cover is already the
+        // large one above, and repeating it looks like a mistake.
+        thumbnail: wide && cover ? { url: cover } : undefined,
         fields: [
           ...(game.releaseDate
             ? [{ name: 'Released', value: game.releaseDate.slice(0, 4), inline: true }]

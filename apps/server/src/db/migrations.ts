@@ -724,4 +724,25 @@ export const migrations: Migration[] = [
       CREATE INDEX games_metadata_lock_idx ON games(metadata_locked_at);
     `,
   },
+  {
+    id: '0017_password_resets',
+    sql: /* sql */ `
+      -- An admin-issued, single-use link for a player who cannot sign in.
+      --
+      -- The token is stored hashed for the same reason a session token is: a
+      -- leaked database should not hand out working reset links. Nothing here
+      -- identifies the user to whoever holds the link beyond the row it points
+      -- at, so the link alone is the credential and it expires.
+      CREATE TABLE password_resets (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        expires_at TEXT NOT NULL,
+        used_at TEXT
+      );
+      CREATE INDEX password_resets_user_idx ON password_resets(user_id);
+      CREATE INDEX password_resets_expires_idx ON password_resets(expires_at);
+    `,
+  },
 ];
