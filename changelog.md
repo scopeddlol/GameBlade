@@ -86,6 +86,74 @@ packages/
 
 ---
 
+## Version 0.5.3a - August 26, 2026
+
+Fixes for what the first 0.5.3 build got wrong, found by actually running it.
+
+### Not a single image loaded
+
+0.5.3 routed every image in the client through a custom URI scheme so artwork
+could be cached on disk and survive the server going away. It did not work in a
+packaged build, and because _every_ image went through it, every image in the
+app was broken — covers, avatars, screenshots, all of it.
+
+Reverted to the direct URL with the device token in the query string, which is
+what 0.5.2 did and what works. The response cache stays, so pages already
+visited still render offline; artwork now falls back to the initials
+placeholder rather than a broken-image icon, which makes an offline library a
+grid of titles instead of posters. That is a worse offline library than the one
+attempted and an enormously better app than the one that shipped.
+
+An optimisation that takes the whole UI down when it fails is not worth having.
+
+### Everything read as disconnected
+
+The client learns that the socket is up from an event, and an event fires once.
+Registering the listener is itself a round trip through the IPC bridge, so a
+socket that connects quickly — the normal case — opened before anything was
+listening. The frame was then gone for good and the app showed the crossed-out
+indicator for the entire time it was connected.
+
+The Rust side now records whether a socket is open, and the UI asks on mount
+instead of waiting for a frame that has already been and gone.
+
+### Encryption removed from messages
+
+At the operator's request, and it was the right call. The cost was out of all
+proportion to what this is: an archive whose operator already holds every save
+file, every screenshot and every password hash. Wrapping message bodies
+protected nothing that was not already readable, and it added a failure mode
+that was very real — a device with no key wrap for a conversation could not read
+a word of it, which is exactly what happened.
+
+Messages are now text the server stores like any other row. Access control is
+the whole security model, and it is the half that was always doing the work:
+friends only, membership checked on every read and write, attachments that must
+belong to whoever is attaching them.
+
+Gone with it: the X25519 identity, the key tables, the wrap and backfill dance,
+the fingerprint comparison, the `sealed` media kind, and six Rust dependencies.
+Existing message bodies are dropped by the migration — they are ciphertext under
+keys it deletes, so there is nothing to convert them into.
+
+### The Messages layout
+
+It flowed down the page, which put the composer wherever the last message left
+it and stranded a new conversation's two lines under a header. It now fills the
+window: the list and the thread each scroll inside themselves, the composer is
+pinned to the bottom edge, and messages sit at the bottom of the space so three
+of them look like a conversation rather than three lines of debris.
+
+### Seven CSS rules that were doing nothing
+
+`var(--accent)` was never a token in this stylesheet — the theme's accent is
+`--blade-500`. Seven rules added in 0.5.3 referenced it and silently did
+nothing: your own message bubbles had no tint, focus outlines were invisible,
+the picked state in the conversation picker did not show, and the media viewer's
+active thumbnail was unmarked.
+
+---
+
 ## Version 0.5.3 - August 26, 2026
 
 The release the scanner gets fixed, the client stops needing the server to be

@@ -23,12 +23,24 @@ const RECONNECT_MAX: Duration = Duration::from_secs(60);
 /// disconnect degrades the UI to whatever it last fetched, never breaks it.
 pub struct RealtimeClient {
     running: Arc<AtomicBool>,
+    /// Whether a socket is open *right now*.
+    ///
+    /// Separate from `running`, which only says the reconnect loop is alive.
+    /// This exists because the UI learns about the connection from an event,
+    /// and an event fires once: registering the listener is itself a round trip
+    /// through the IPC bridge, so a socket that connects quickly — which is the
+    /// normal case — can open before anything is listening. The frame is then
+    /// gone for good and the app reads as disconnected for as long as the
+    /// connection stays up, which is exactly backwards. Being able to *ask*
+    /// removes the race entirely.
+    connected: Arc<AtomicBool>,
 }
 
 impl Default for RealtimeClient {
     fn default() -> Self {
         Self {
             running: Arc::new(AtomicBool::new(false)),
+            connected: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -42,11 +54,12 @@ impl RealtimeClient {
         }
 
         let running = Arc::clone(&self.running);
+        let connected = Arc::clone(&self.connected);
         tokio::spawn(async move {
             let mut backoff = RECONNECT_MIN;
 
             while running.load(Ordering::SeqCst) {
-                match connect(&app, &server_url, &token, &running).await {
+                match connect(&app, &server_url, &token, &running, &connected).await {
                     // A clean end means the socket closed normally, so the next
                     // attempt starts from the short delay again.
                     Ok(()) => backoff = RECONNECT_MIN,
@@ -55,6 +68,7 @@ impl RealtimeClient {
                     }
                 }
 
+                connected.store(false, Ordering::SeqCst);
                 if !running.load(Ordering::SeqCst) {
                     break;
                 }
@@ -66,10 +80,16 @@ impl RealtimeClient {
 
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
+        self.connected.store(false, Ordering::SeqCst);
     }
 
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
+    }
+
+    /// Whether a socket is open right now, for a UI that missed the event.
+    pub fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::SeqCst)
     }
 }
 
@@ -78,6 +98,7 @@ async fn connect(
     server_url: &str,
     token: &str,
     running: &Arc<AtomicBool>,
+    connected: &Arc<AtomicBool>,
 ) -> AppResult<()> {
     let ws_url = to_websocket_url(server_url);
 
@@ -99,6 +120,9 @@ async fn connect(
         .map_err(|err| crate::error::AppError::Other(format!("Realtime connect failed: {err}")))?;
 
     let (mut write, mut read) = stream.split();
+    // Recorded before it is announced, so a UI that missed the frame and asks
+    // instead gets the right answer rather than a slightly earlier one.
+    connected.store(true, Ordering::SeqCst);
     let _ = app.emit("realtime://connected", ());
 
     let mut ping = tokio::time::interval(PING_INTERVAL);

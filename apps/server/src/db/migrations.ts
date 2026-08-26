@@ -957,4 +957,52 @@ export const migrations: Migration[] = [
       CREATE INDEX message_media_media_idx ON message_media(media_id);
     `,
   },
+  {
+    id: '0023_plain_messages',
+    sql: /* sql */ `
+      -- Messages go back to being text the server can read.
+      --
+      -- The end-to-end encryption this replaces cost more than it bought. This
+      -- is a small archive where the operator already holds every save file,
+      -- every screenshot and every password hash, so wrapping message bodies
+      -- protected nothing that was not already readable — while adding a
+      -- failure mode that was very real: a device with no key wrap for a
+      -- conversation could not read a word of it, and there was no way to
+      -- recover one from the client side.
+      --
+      -- Existing message bodies are dropped rather than migrated. They are
+      -- ciphertext under keys these tables are about to delete, so there is
+      -- nothing to convert them into.
+      DROP TABLE IF EXISTS conversation_keys;
+      DROP TABLE IF EXISTS device_keys;
+
+      DROP TABLE IF EXISTS message_media;
+      DROP TABLE IF EXISTS messages;
+
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        sender_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        body TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        edited_at TEXT,
+        -- Tombstoned rather than deleted, so every client agrees the message is
+        -- gone instead of one that missed the event still showing it.
+        deleted_at TEXT
+      );
+      CREATE INDEX messages_conversation_idx ON messages(conversation_id, created_at);
+
+      CREATE TABLE message_media (
+        message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (message_id, media_id)
+      );
+      CREATE INDEX message_media_media_idx ON message_media(media_id);
+
+      -- A one-line preview, so the conversation list draws without reading the
+      -- messages table at all.
+      ALTER TABLE conversations ADD COLUMN last_message_preview TEXT;
+    `,
+  },
 ];

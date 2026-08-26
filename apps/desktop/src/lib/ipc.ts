@@ -154,9 +154,9 @@ export const ipc = {
   /**
    * Turns a server-relative artwork path into one the webview can load.
    *
-   * The result goes through the client's own image scheme rather than straight
-   * at the server, so artwork is on local disk after the first look — faster on
-   * every launch after that, and still there when the server is not.
+   * An `<img>` cannot send an Authorization header, so the device token has to
+   * ride in the query string — which means the URL has to be built on the Rust
+   * side, where the address and the token live.
    */
   imageUrl: (path: string) => invoke<string>('image_url', { path }),
 
@@ -167,6 +167,16 @@ export const ipc = {
 
   /** Asks the server whether it is back. The only deliberate probe there is. */
   recheckConnection: () => invoke<boolean>('recheck_connection'),
+
+  /**
+   * Whether the realtime socket is open right now.
+   *
+   * Asked on mount because the connection is announced by an event, and an
+   * event fires once — a socket that opens before the listener is registered
+   * would otherwise leave the app reading as disconnected the whole time it is
+   * connected.
+   */
+  realtimeConnected: () => invoke<boolean>('realtime_connected'),
 
   /** Reads one of a game's own files, for evaluating achievement rules. */
   readRuleFile: (gameId: string, template: string) =>
@@ -253,65 +263,9 @@ export const ipc = {
   pullSave: (gameId: string, rule: SaveRulePayload, slotId: string, versionId?: string) =>
     invoke<string>('pull_save', { gameId, rule, slotId, versionId }),
 
-  uploadMedia: (filePath: string, kind: 'image' | 'clip' | 'avatar' | 'banner' | 'sealed') =>
+  uploadMedia: (filePath: string, kind: 'image' | 'clip' | 'avatar' | 'banner') =>
     invoke<{ id: string; url: string; kind: string }>('upload_media', { filePath, kind }),
-
-  /* ------------------------------------------------------------ messages */
-
-  /**
-   * This device's message identity.
-   *
-   * Only ever the public half. The private key is generated in Rust, kept in
-   * the OS credential store, and never crosses into the webview — which is
-   * what stops a compromised page from being able to leak it.
-   */
-  messageIdentity: () => invoke<{ publicKey: string; fingerprint: string }>('message_identity'),
-
-  /** The readable digest of somebody else's key, for comparing out loud. */
-  keyFingerprint: (publicKey: string) => invoke<string>('key_fingerprint', { publicKey }),
-
-  /** A new conversation key, already sealed for each device that should hold it. */
-  sealConversationKey: (recipients: string[]) =>
-    invoke<{ key: string; wraps: WrappedKey[] }>('seal_conversation_key', { recipients }),
-
-  /** Re-seals a key this device can open, for devices that could not. */
-  rewrapConversationKey: (conversationKey: string, recipients: string[]) =>
-    invoke<WrappedKey[]>('rewrap_conversation_key', { conversationKey, recipients }),
-
-  openConversationKey: (wrapped: { ephemeralPublic: string; nonce: string; ciphertext: string }) =>
-    invoke<string>('open_conversation_key', { wrapped }),
-
-  sealMessage: (conversationKey: string, plaintext: string) =>
-    invoke<SealedBody>('seal_message', { conversationKey, plaintext }),
-
-  openMessage: (conversationKey: string, sealed: SealedBody) =>
-    invoke<string>('open_message', { conversationKey, sealed }),
-
-  /** Encrypts a file and stages the ciphertext for upload. */
-  sealFile: (conversationKey: string, filePath: string) =>
-    invoke<{ path: string; name: string; sizeBytes: number; contentType: string }>('seal_file', {
-      conversationKey,
-      filePath,
-    }),
-
-  /** Fetches and opens an attachment, answering with a local file path. */
-  openAttachment: (conversationKey: string, mediaId: string, url: string, contentType: string) =>
-    invoke<string>('open_attachment', { conversationKey, mediaId, url, contentType }),
 };
-
-/** One conversation key sealed for one device. */
-export interface WrappedKey {
-  publicKey: string;
-  ephemeralPublic: string;
-  nonce: string;
-  ciphertext: string;
-}
-
-/** A sealed body: a nonce and a ciphertext, both base64. */
-export interface SealedBody {
-  nonce: string;
-  ciphertext: string;
-}
 
 /** The server's own sync verdict, echoed back through the Rust side. */
 export interface SaveSyncStatusPayload {

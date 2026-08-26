@@ -734,8 +734,6 @@ export type RealtimeEvent =
   | { type: 'notification'; notification: NotificationInfo }
   | { type: 'friend-request'; profile: ProfileSummary }
   | { type: 'achievement'; achievement: AchievementProgress }
-  // A message arrives sealed, exactly as it was stored: the gateway is as
-  // unable to read it as the database is.
   | { type: 'message'; message: MessageInfo }
   | { type: 'message-removed'; conversationId: string; messageId: string }
   /** Membership, the name, or the keys changed — refetch the conversation. */

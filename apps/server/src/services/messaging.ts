@@ -4,20 +4,16 @@ import {
   type ConversationInfo,
   type ConversationMemberInfo,
   type CreateConversationInput,
+  type MessageAttachmentInfo,
   type MessageInfo,
   type MessageQuery,
-  type PublishedDeviceKey,
   type SendMessageInput,
-  type WrappedKeyInput,
 } from '@gameblade/shared';
 import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
-import { createHash } from 'node:crypto';
 import type { Db } from '../db/index.js';
 import {
-  conversationKeys,
   conversationMembers,
   conversations,
-  deviceKeys,
   media,
   messageMedia,
   messages,
@@ -32,19 +28,18 @@ import type { MediaStore } from './media.js';
 import type { ProfileService } from './profiles.js';
 import type { RealtimeGateway } from './realtime.js';
 
+/** How much of a message the sidebar shows beside a conversation. */
+const PREVIEW_LENGTH = 80;
+
 /**
- * Conversations the server routes and cannot read.
+ * Direct messages and group chats.
  *
- * Everything that arrives here is either ciphertext or metadata. The bodies are
- * two opaque base64 columns; the attachments are media rows whose bytes are
- * ciphertext and whose recorded content type is deliberately meaningless. The
- * server holds no key that opens any of it, and — importantly — is never asked
- * to make one: a conversation key is generated and wrapped on a client, because
- * the moment the server could seal it, it could read it.
- *
- * What it does know, and what no amount of encryption hides: who is talking to
- * whom, when, and how much. That is the shape of the thing, not an oversight,
- * and it is said out loud in the client rather than left to be discovered.
+ * Access control is the entire security model here, and it is the half that was
+ * always doing the work: who may start a conversation, who may read one, who
+ * may write into it, and who may withdraw a message. An earlier version wrapped
+ * every body in a key the server could not open, which protected nothing on a
+ * server whose operator already holds every save file and password hash — and
+ * broke in a way nothing could recover from when a device had no wrap.
  */
 export class MessagingService {
   constructor(
@@ -55,100 +50,14 @@ export class MessagingService {
     private readonly realtime: RealtimeGateway,
   ) {}
 
-  /* ------------------------------------------------------------- devices */
-
-  /**
-   * Publishes this device's public key.
-   *
-   * Idempotent on the key itself: a client calls this every time it starts, and
-   * re-registering the same key must not create a second row that everyone then
-   * has to seal for a second time.
-   */
-  publishDeviceKey(
-    userId: string,
-    input: { publicKey: string; label?: string | null },
-  ): PublishedDeviceKey {
-    const existing = this.db
-      .select()
-      .from(deviceKeys)
-      .where(and(eq(deviceKeys.userId, userId), eq(deviceKeys.publicKey, input.publicKey)))
-      .get();
-
-    if (existing) {
-      this.db
-        .update(deviceKeys)
-        .set({ lastSeenAt: isoNow(), ...(input.label ? { label: input.label } : {}) })
-        .where(eq(deviceKeys.id, existing.id))
-        .run();
-      return this.toDeviceKey({ ...existing, label: input.label ?? existing.label });
-    }
-
-    const record = {
-      id: newId('dvk'),
-      userId,
-      deviceId: null,
-      publicKey: input.publicKey,
-      label: input.label ?? null,
-      createdAt: isoNow(),
-      lastSeenAt: isoNow(),
-    };
-    this.db.insert(deviceKeys).values(record).run();
-    return this.toDeviceKey(record);
-  }
-
-  /** Every key belonging to one account. */
-  deviceKeysFor(userIds: string[]): PublishedDeviceKey[] {
-    const unique = [...new Set(userIds)].filter(Boolean);
-    if (unique.length === 0) return [];
-    return this.db
-      .select()
-      .from(deviceKeys)
-      .where(inArray(deviceKeys.userId, unique))
-      .all()
-      .map((row) => this.toDeviceKey(row));
-  }
-
-  /**
-   * Retires one key.
-   *
-   * Called when a client signs out, because the private half is destroyed at
-   * the same moment — leaving the public key published would mean everybody
-   * going on sealing conversation keys for a device that can no longer open
-   * them.
-   */
-  retireDeviceKey(userId: string, publicKey: string): boolean {
-    const result = this.db
-      .delete(deviceKeys)
-      .where(and(eq(deviceKeys.userId, userId), eq(deviceKeys.publicKey, publicKey)))
-      .run();
-    return result.changes > 0;
-  }
-
-  private toDeviceKey(row: {
-    id: string;
-    userId: string;
-    publicKey: string;
-    label: string | null;
-    createdAt: string;
-  }): PublishedDeviceKey {
-    return {
-      id: row.id,
-      userId: row.userId,
-      publicKey: row.publicKey,
-      label: row.label,
-      createdAt: row.createdAt,
-      fingerprint: fingerprint(row.publicKey),
-    };
-  }
-
   /* ------------------------------------------------------- conversations */
 
   /**
    * Starts a conversation, or hands back the direct one that already exists.
    *
    * The second half matters more than it looks: without it, opening a chat with
-   * the same friend twice would create two conversations with two different
-   * keys, and half your history would be in the one you are not looking at.
+   * the same friend twice would create two conversations, and half the history
+   * would be in the one you are not looking at.
    */
   create(userId: string, input: CreateConversationInput): ConversationInfo {
     const members = new Set(input.memberIds.filter(Boolean));
@@ -181,6 +90,7 @@ export class MessagingService {
           createdBy: userId,
           createdAt: now,
           lastMessageAt: null,
+          lastMessagePreview: null,
         })
         .run();
 
@@ -199,15 +109,12 @@ export class MessagingService {
           })
           .run();
       }
-
-      this.storeKeys(tx, id, input.keys, members);
     });
 
-    const created = this.load(id);
     // Everyone else finds out immediately rather than on their next refresh —
     // a conversation somebody has to reload to discover is one they miss.
     this.notify(id, userId, { type: 'conversation', conversationId: id });
-    return this.describe(created, userId);
+    return this.describe(this.load(id), userId);
   }
 
   /** Every conversation the caller is still in, most recent first. */
@@ -228,25 +135,7 @@ export class MessagingService {
     return this.describe(this.load(conversationId), userId);
   }
 
-  /**
-   * Seals the key for devices that did not exist when the conversation started.
-   *
-   * A member who signs in on a second machine has a key nobody has wrapped for.
-   * Any existing member can supply the wrap, because any of them can already
-   * read the conversation — the server only checks that they are one.
-   */
-  backfillKeys(userId: string, conversationId: string, keys: WrappedKeyInput[]): number {
-    this.assertMember(userId, conversationId);
-    const members = new Set(this.memberIds(conversationId));
-
-    let stored = 0;
-    this.db.transaction((tx) => {
-      stored = this.storeKeys(tx, conversationId, keys, members);
-    });
-    return stored;
-  }
-
-  /** Adds people to a group, with the key already sealed for their devices. */
+  /** Adds people to a group. */
   addMembers(userId: string, conversationId: string, input: AddMembersInput): ConversationInfo {
     const conversation = this.load(conversationId);
     if (conversation.kind !== 'group') {
@@ -296,8 +185,6 @@ export class MessagingService {
             .run();
         }
       }
-
-      this.storeKeys(tx, conversationId, input.keys, new Set([...current, ...joining]));
     });
 
     this.notify(conversationId, null, { type: 'conversation', conversationId });
@@ -308,20 +195,15 @@ export class MessagingService {
    * Leaves a group, or removes somebody from one.
    *
    * The membership row is kept with `leftAt` set rather than deleted: the
-   * messages they sent are still in the history, and the sidebar needs a name
-   * to put against them.
-   *
-   * Deliberately does *not* re-key. Doing so would suggest the conversation's
-   * past is now closed to them, and it is not — they held the key and could
-   * have kept a copy of everything they read. Saying otherwise would be a
-   * security promise this design cannot keep.
+   * messages they sent are still in the history, and the thread needs a name to
+   * put against them.
    */
   removeMember(userId: string, conversationId: string, targetId: string): void {
     const conversation = this.load(conversationId);
     const self = this.assertMember(userId, conversationId);
 
     if (conversation.kind !== 'group') {
-      throw ApiError.badRequest('A direct conversation cannot be left; delete it instead');
+      throw ApiError.badRequest('A direct conversation cannot be left');
     }
     if (targetId !== userId && self.role !== 'owner') {
       throw ApiError.forbidden('Only the group owner can remove somebody else');
@@ -363,13 +245,7 @@ export class MessagingService {
 
   /* ------------------------------------------------------------ messages */
 
-  /**
-   * Stores one sealed message and pushes it to everybody else in the room.
-   *
-   * Both columns are opaque. The only thing validated about them is their
-   * shape and their size — there is nothing else the server could check, since
-   * it cannot tell a well-formed message from noise.
-   */
+  /** Stores one message and pushes it to everybody else in the room. */
   send(userId: string, conversationId: string, input: SendMessageInput): MessageInfo {
     this.assertMember(userId, conversationId);
 
@@ -388,8 +264,7 @@ export class MessagingService {
           id,
           conversationId,
           senderId: userId,
-          nonce: input.body.nonce,
-          ciphertext: input.body.ciphertext,
+          body: input.body,
           createdAt: now,
           editedAt: null,
           deletedAt: null,
@@ -401,7 +276,7 @@ export class MessagingService {
       });
 
       tx.update(conversations)
-        .set({ lastMessageAt: now })
+        .set({ lastMessageAt: now, lastMessagePreview: preview(input) })
         .where(eq(conversations.id, conversationId))
         .run();
 
@@ -449,11 +324,10 @@ export class MessagingService {
   /**
    * Withdraws a message.
    *
-   * The ciphertext is cleared rather than the row deleted, so every client
-   * agrees it is gone — one that missed the event would otherwise go on showing
-   * a body it had already decrypted. Worth being plain about the limit: anybody
-   * who had already read it still has, and this does not reach into their
-   * screen.
+   * The body is cleared rather than the row deleted, so every client agrees it
+   * is gone — one that missed the event would otherwise go on showing text it
+   * had already rendered. Worth being plain about the limit: anybody who
+   * already read it still has, and this does not reach into their screen.
    */
   remove(userId: string, messageId: string): void {
     const row = this.db.select().from(messages).where(eq(messages.id, messageId)).get();
@@ -464,7 +338,7 @@ export class MessagingService {
 
     this.db
       .update(messages)
-      .set({ deletedAt: isoNow(), nonce: '', ciphertext: '' })
+      .set({ deletedAt: isoNow(), body: '' })
       .where(eq(messages.id, messageId))
       .run();
 
@@ -580,60 +454,6 @@ export class MessagingService {
       .map((row) => row.userId);
   }
 
-  /**
-   * Writes wrapped keys, ignoring any addressed to somebody outside the room.
-   *
-   * A client builds the wrap list from the member list the server gave it, so a
-   * stray entry is a bug rather than an attack — but storing one would leave a
-   * key blob addressed to a device with no business holding it.
-   */
-  private storeKeys(
-    tx: Db,
-    conversationId: string,
-    keys: WrappedKeyInput[],
-    members: Set<string>,
-  ): number {
-    if (keys.length === 0) return 0;
-
-    const owners = new Map(
-      tx
-        .select({ publicKey: deviceKeys.publicKey, userId: deviceKeys.userId })
-        .from(deviceKeys)
-        .where(
-          inArray(
-            deviceKeys.publicKey,
-            keys.map((key) => key.publicKey),
-          ),
-        )
-        .all()
-        .map((row) => [row.publicKey, row.userId]),
-    );
-
-    let stored = 0;
-    for (const key of keys) {
-      const owner = owners.get(key.publicKey);
-      if (!owner || !members.has(owner)) continue;
-
-      tx.insert(conversationKeys)
-        .values({
-          id: newId('cvk'),
-          conversationId,
-          userId: owner,
-          publicKey: key.publicKey,
-          ephemeralPublic: key.ephemeralPublic,
-          nonce: key.nonce,
-          ciphertext: key.ciphertext,
-          createdAt: isoNow(),
-        })
-        // Already sealed for that device: the first wrap is as good as the
-        // second, and replacing it would invalidate nothing.
-        .onConflictDoNothing()
-        .run();
-      stored += 1;
-    }
-    return stored;
-  }
-
   private describe(
     conversation: {
       id: string;
@@ -641,6 +461,7 @@ export class MessagingService {
       title: string | null;
       createdAt: string;
       lastMessageAt: string | null;
+      lastMessagePreview: string | null;
     },
     viewerId: string,
   ): ConversationInfo {
@@ -675,23 +496,6 @@ export class MessagingService {
 
     const self = memberRows.find((row) => row.userId === viewerId);
 
-    const keys = this.db
-      .select()
-      .from(conversationKeys)
-      .where(
-        and(
-          eq(conversationKeys.conversationId, conversation.id),
-          eq(conversationKeys.userId, viewerId),
-        ),
-      )
-      .all()
-      .map((row) => ({
-        publicKey: row.publicKey,
-        ephemeralPublic: row.ephemeralPublic,
-        nonce: row.nonce,
-        ciphertext: row.ciphertext,
-      }));
-
     const unread =
       this.db
         .select({ count: sql<number>`count(*)` })
@@ -712,8 +516,8 @@ export class MessagingService {
       title: conversation.title,
       createdAt: conversation.createdAt,
       lastMessageAt: conversation.lastMessageAt,
+      lastMessagePreview: conversation.lastMessagePreview,
       members,
-      keys,
       unreadCount: unread,
     };
   }
@@ -733,7 +537,7 @@ export class MessagingService {
   }
 
   private attachmentsFor(messageIds: string[]) {
-    const grouped = new Map<string, MessageInfo['attachments']>();
+    const grouped = new Map<string, MessageAttachmentInfo[]>();
     if (messageIds.length === 0) return grouped;
 
     const rows = this.db
@@ -741,7 +545,10 @@ export class MessagingService {
         messageId: messageMedia.messageId,
         mediaId: messageMedia.mediaId,
         sortOrder: messageMedia.sortOrder,
+        kind: media.kind,
         sizeBytes: media.sizeBytes,
+        width: media.width,
+        height: media.height,
       })
       .from(messageMedia)
       .innerJoin(media, eq(media.id, messageMedia.mediaId))
@@ -753,7 +560,10 @@ export class MessagingService {
       list.push({
         mediaId: row.mediaId,
         url: this.mediaStore.url(row.mediaId),
+        kind: row.kind === 'clip' ? 'clip' : 'image',
         sizeBytes: row.sizeBytes,
+        width: row.width,
+        height: row.height,
       });
       grouped.set(row.messageId, list);
     }
@@ -771,19 +581,18 @@ export class MessagingService {
       id: string;
       conversationId: string;
       senderId: string | null;
-      nonce: string;
-      ciphertext: string;
+      body: string;
       createdAt: string;
       editedAt: string | null;
       deletedAt: string | null;
     },
-    attachments: MessageInfo['attachments'],
+    attachments: MessageAttachmentInfo[],
   ): MessageInfo {
     return {
       id: row.id,
       conversationId: row.conversationId,
       senderId: row.senderId,
-      body: { nonce: row.nonce, ciphertext: row.ciphertext },
+      body: row.body,
       attachments,
       createdAt: row.createdAt,
       editedAt: row.editedAt,
@@ -804,13 +613,16 @@ export class MessagingService {
   }
 }
 
-/**
- * The same eight groups of four the client shows.
- *
- * Computed here as well so the fingerprint on a key somebody is *about* to
- * trust does not depend on that same client having computed it honestly.
- */
-function fingerprint(publicKey: string): string {
-  const digest = createHash('sha256').update(Buffer.from(publicKey, 'base64')).digest('hex');
-  return (digest.slice(0, 32).match(/.{4}/g) ?? []).join(' ');
+/** The line the sidebar shows beside a conversation. */
+function preview(input: SendMessageInput): string {
+  if (input.body) {
+    const collapsed = input.body.replace(/\s+/g, ' ').trim();
+    return collapsed.length > PREVIEW_LENGTH
+      ? `${collapsed.slice(0, PREVIEW_LENGTH - 1)}…`
+      : collapsed;
+  }
+  // A message that is only attachments still needs a line, and "sent a
+  // picture" is what every other chat says because it is what happened.
+  const count = input.mediaIds.length;
+  return count === 1 ? 'Sent an attachment' : `Sent ${count} attachments`;
 }

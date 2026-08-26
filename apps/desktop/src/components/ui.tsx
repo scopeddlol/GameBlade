@@ -171,11 +171,23 @@ export function Avatar({
   presence?: 'offline' | 'online' | 'away' | 'in-game';
 }) {
   const resolved = useArtwork(url);
+  // An avatar that resolves and then fails to load is the offline case, or one
+  // whose file has gone. Either way the initials are a better answer than the
+  // broken-image icon a bare <img> leaves behind.
+  const [broken, setBroken] = useState(false);
+
+  useEffect(() => setBroken(false), [resolved]);
 
   return (
     <span className="avatar-wrap" style={{ width: size, height: size }}>
-      {resolved ? (
-        <img src={resolved} alt="" className="avatar" style={{ width: size, height: size }} />
+      {resolved && !broken ? (
+        <img
+          src={resolved}
+          alt=""
+          className="avatar"
+          style={{ width: size, height: size }}
+          onError={() => setBroken(true)}
+        />
       ) : (
         <span
           className="avatar placeholder"

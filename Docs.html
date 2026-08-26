@@ -650,7 +650,7 @@
             <p><strong>0.5.3 at a glance.</strong> The larger changes are described in their own sections:</p>
             <ul>
               <li><a href="#scanning">The library scanner</a>, rebuilt — the run that never finished.</li>
-              <li><a href="#messages">Encrypted direct messages and group chats</a>.</li>
+              <li><a href="#messages">Direct messages and group chats</a>.</li>
               <li><a href="#offline">The client works offline</a>, where it previously refused to start.</li>
               <li><a href="#database">Database tuning</a> for a catalog on a spinning disk.</li>
               <li><a href="#save-paths">Save rules derived from achievement rules</a>.</li>
@@ -1516,13 +1516,9 @@ cp .env.example .env</code></pre>
 
         <section id="messages">
           <h2>Messages</h2>
-          <div class="new">
-            <p>New in 0.5.3: direct messages and group chats, end-to-end encrypted.</p>
-          </div>
-
           <p>
             The <strong>Messages</strong> tab in the client. Text, images and video, between friends
-            or in a group of up to 32. The server routes these and cannot read them.
+            or in a group of up to 32.
           </p>
 
           <h3 id="messages-using">Using it</h3>
@@ -1534,128 +1530,43 @@ cp .env.example .env</code></pre>
             </li>
             <li>
               <strong>Picking more than one person makes a group.</strong> Whoever starts it owns it
-              and can rename it and add people; anyone can leave.
+              and can rename it and add people; anyone can leave. A member who leaves stays in the
+              record with a departure date, so the messages they sent still have a name against them.
             </li>
             <li>
-              <strong>Attachments</strong> are encrypted before they are uploaded and decrypt on
-              demand — a thread scrolled back through a year of screenshots does not fetch all of
-              them to draw thumbnails nobody has looked at. They open in
-              <a href="#media">the media viewer</a>.
+              <strong>Attachments</strong> are ordinary uploads that count against the same media
+              quota as screenshots and clips, and open in <a href="#media">the media viewer</a>.
             </li>
             <li>
-              <strong>Withdrawing</strong> a message clears its ciphertext rather than hiding the
-              row, so every client agrees it is gone. It does not reach into the screen of somebody
-              who has already read it, and nothing could.
+              <strong>Withdrawing</strong> a message clears its text rather than hiding the row, so
+              every client agrees it is gone. It does not reach into the screen of somebody who has
+              already read it, and nothing could.
+            </li>
+            <li>
+              <strong>Enter sends</strong>, shift+enter breaks the line. The composer is pinned to
+              the bottom of the window and the conversation list scrolls beside it, so neither moves
+              with however much history is above them.
             </li>
           </ul>
 
-          <h3 id="messages-crypto">How the encryption works</h3>
-          <p>
-            Each device generates a long-lived X25519 identity key the first time it is used, kept in
-            the OS credential store beside the device token. The private half never leaves that
-            machine — not to the server, and not even into the client's own web view, so a
-            compromised page cannot leak one.
-          </p>
-          <p>
-            A conversation has one symmetric key, made by whoever starts it. For each member device
-            it is <em>wrapped</em>: a one-time X25519 keypair, ECDH against that device's identity
-            key, HKDF-SHA256 over the shared secret, and XChaCha20-Poly1305 around the conversation
-            key. The server stores one wrapped blob per device and can open none of them — and is
-            never asked to make one, because the moment it could seal a key it could read the
-            conversation.
-          </p>
-          <p>
-            Messages and attachments are then XChaCha20-Poly1305 under that key with a fresh random
-            nonce each time. XChaCha specifically for its 192-bit nonce: one key covers a whole
-            conversation's history, and at that many messages a random 96-bit nonce is no longer
-            comfortably collision-free. Poly1305 is what makes this authenticated rather than merely
-            encrypted — a server that edited a stored row would produce something that will not open,
-            not something that opens as different words.
-          </p>
-          <p>
-            The plaintext is a small JSON envelope rather than bare text, so an attachment's name and
-            type are encrypted too. The server can say that a file was sent; it cannot say it was a
-            screenshot whose filename gives away which game.
-          </p>
-
-          <h3 id="messages-limits">What this protects against, and what it does not</h3>
-          <p>
-            Stated plainly, because a security promise nobody reads is worth nothing — and the same
-            three points are on the screen in the client, not only here.
-          </p>
-
-          <div class="scroller">
-            <table>
-              <thead>
-                <tr><th>Threat</th><th>Covered?</th></tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>Someone who reads the database, or takes a backup of it</td>
-                  <td><strong>Yes.</strong> Every body and attachment is ciphertext at rest.</td>
-                </tr>
-                <tr>
-                  <td>Someone who intercepts the traffic</td>
-                  <td><strong>Yes</strong>, on top of TLS — the payloads are already sealed.</td>
-                </tr>
-                <tr>
-                  <td>An operator reading the messages on a stock server</td>
-                  <td><strong>Yes.</strong> Nothing on the server holds a key that opens one.</td>
-                </tr>
-                <tr>
-                  <td>An operator who has <em>replaced the server binary</em></td>
-                  <td>
-                    <strong>Only if you check fingerprints.</strong> The server distributes the
-                    public keys, so a modified one could hand out a key of its own. See below.
-                  </td>
-                </tr>
-                <tr>
-                  <td>A conversation key that leaks later</td>
-                  <td>
-                    <strong>No.</strong> There is no ratchet, so no forward secrecy: it opens that
-                    conversation's past as well as its future.
-                  </td>
-                </tr>
-                <tr>
-                  <td>Who talks to whom, when, and how much</td>
-                  <td>
-                    <strong>No.</strong> Encrypting content does not hide the shape of a social
-                    graph, and nothing here pretends otherwise.
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <h3 id="messages-verify">Verifying a fingerprint</h3>
-          <p>
-            <strong>Verify</strong> in a conversation's header lists everybody in it and the
-            fingerprint of each of their devices — eight groups of four characters. Read one aloud to
-            the person it belongs to. If they match, no key was substituted, which is the one thing
-            encryption alone cannot prove. The server computes the fingerprint independently of the
-            client claiming it, so a modified client cannot simply display the digest you expect.
-          </p>
-
           <div class="note">
             <p>
-              <strong>Signing out destroys this device's message identity.</strong> That is
-              deliberate: it is the one secret that makes the account's conversations readable on
-              that machine, and leaving it behind on a shared PC would throw away the whole point.
-              Signing back in creates a new identity, and every conversation is re-keyed for it by
-              the other members' clients — quietly, the next time they open the thread. A device that
-              signs in while everybody else is offline shows "not unlocked for this machine yet"
-              until one of them does.
+              <strong>These are not end-to-end encrypted, and the operator can read them.</strong>
+              0.5.3 shipped an encrypted version and 0.5.3 took it back out: the cost was out of
+              proportion to what this is. An operator already holds every save file, every
+              screenshot and every password hash on the server, so wrapping message bodies protected
+              nothing that was not already readable — while adding a failure mode that was very
+              real, where a device with no key wrap for a conversation could not read a word of it
+              and nothing could recover one.
+            </p>
+            <p>
+              Access control is the security model, and it is the half that was always doing the
+              work: friends only, membership checked on every read and write, and an attachment that
+              has to belong to whoever is attaching it. Treat a conversation as private from other
+              players and visible to whoever runs the server — which is the same understanding that
+              already applies to everything else stored here.
             </p>
           </div>
-
-          <h3 id="messages-leaving">Leaving a group</h3>
-          <p>
-            The membership record is kept, with a departure date, so the messages that person sent
-            still have a name against them. The conversation is deliberately <em>not</em> re-keyed on
-            their way out: doing so would suggest its past is now closed to them, and it is not —
-            they held the key and could have kept a copy of everything they read. Saying otherwise
-            would be a promise this design cannot keep.
-          </p>
         </section>
 
         <section id="desktop">
@@ -1674,7 +1585,7 @@ cp .env.example .env</code></pre>
                 <tr><td><strong>Requests</strong></td><td>Ask for what is missing, and back what others asked for</td></tr>
                 <tr><td><strong>News</strong></td><td>Announcements, and the replies to them</td></tr>
                 <tr><td><strong>Social</strong></td><td>Feed with screenshots and clips, comments, reactions, friends and requests</td></tr>
-                <tr><td><strong>Messages</strong></td><td><a href="#messages">Encrypted conversations</a> with friends and groups</td></tr>
+                <tr><td><strong>Messages</strong></td><td><a href="#messages">Conversations</a> with friends and groups</td></tr>
                 <tr><td><strong>Settings</strong></td><td>Profile, appearance, install locations, save sync, presence, devices, your bug reports</td></tr>
               </tbody>
             </table>
@@ -1777,7 +1688,7 @@ cp .env.example .env</code></pre>
             <li><strong>Installed games launch</strong>, and playtime is recorded when the server comes back.</li>
             <li><strong>The library lists what is on this disk</strong>, from the install records themselves — so changing the sort does not empty the page.</li>
             <li><strong>Pages you have already visited</strong> render from the last answer the server gave.</li>
-            <li><strong>Artwork</strong> comes off local disk. It goes through the client's own cache now, which also makes every launch after the first much faster.</li>
+            <li><strong>Artwork</strong> falls back to the initials placeholder rather than a broken-image icon. Covers are fetched from the server, so offline the library is a grid of titles rather than posters — plainer, and a great deal better than no app at all.</li>
           </ul>
           <p>
             A banner says what still works rather than only that something is wrong. Anything that
@@ -2204,13 +2115,13 @@ cd apps/desktop/src-tauri &amp;&amp; cargo test &amp;&amp; cargo clippy --all-ta
           <h3 id="layout">Layout</h3>
           <pre><code>apps/server     Fastify API, scanner, metadata, social, saves, achievements, messaging
 apps/web        Public landing page and the admin panel (React 19 + Tailwind)
-apps/desktop    Tauri v2 client: the tabbed UI plus Rust install/launch/sync/crypto
+apps/desktop    Tauri v2 client: the tabbed UI plus Rust install/launch/sync
 packages/shared Types, zod schemas and constants used by all three</code></pre>
           <p>
             Server services live in <code>apps/server/src/services</code> and are wired in dependency
             order in <code>context.ts</code>. On the Rust side, <code>install.rs</code>,
-            <code>launcher.rs</code>, <code>saves.rs</code>, <code>realtime.rs</code>,
-            <code>offline.rs</code> and <code>e2ee.rs</code> hold everything the browser cannot do.
+            <code>launcher.rs</code>, <code>saves.rs</code>, <code>realtime.rs</code> and
+            <code>offline.rs</code> hold everything the browser cannot do.
           </p>
           <p>
             The database schema lives in <code>apps/server/src/db/schema.ts</code>, with plain-SQL
@@ -2302,9 +2213,9 @@ packages/shared Types, zod schemas and constants used by all three</code></pre>
               profile never leaks its current game to a stranger.
             </li>
             <li>
-              Message bodies and attachments are encrypted on the sending device and the server holds
-              no key that opens them. What that does and does not cover is set out in full under
-              <a href="#messages-limits">Messages</a>.
+              Messages are stored as text the server can read; membership is checked on every read
+              and write, and messaging is friends-only. What that does and does not mean is set out
+              under <a href="#messages">Messages</a>.
             </li>
             <li>
               Outgoing Discord messages carry an explicit mention permission list, so text the server

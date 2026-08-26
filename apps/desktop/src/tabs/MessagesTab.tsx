@@ -2,43 +2,29 @@ import type { ConversationInfo, FriendEntry, MessageInfo } from '@gameblade/shar
 import { useQuery } from '@tanstack/react-query';
 import { open } from '@tauri-apps/plugin-dialog';
 import clsx from 'clsx';
-import {
-  Image as ImageIcon,
-  Lock,
-  MessageSquare,
-  Paperclip,
-  Send,
-  ShieldCheck,
-  Trash2,
-  UserPlus,
-  Users,
-  X,
-} from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Paperclip, Send, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { MediaViewer, type MediaItem } from '../components/MediaViewer.js';
 import { Avatar, Empty, ErrorNote, Loading, Modal, ListSkeleton } from '../components/ui.js';
 import { useConnectivity } from '../hooks/useConnectivity.js';
 import {
-  useConversationKey,
   useConversationMessages,
   useConversations,
-  useEnvelope,
-  useKeyBackfill,
-  useMessageIdentity,
   useMessageMutations,
 } from '../hooks/useMessages.js';
+import { useArtwork } from '../hooks/useArtwork.js';
 import { useSession } from '../hooks/useSession.js';
 import { formatRelative } from '../lib/format.js';
 import { errorMessage, ipc } from '../lib/ipc.js';
 
 /**
- * Private conversations, which the server carries and cannot read.
+ * Direct messages and group chats.
  *
- * The security note at the top is not decoration. Everything here rests on a
- * key the server never sees, and the two limits of that — it hands out the
- * public keys, and there is no forward secrecy — are the sort of thing that
- * should be on the screen rather than buried in a design document. A promise
- * nobody reads is worth nothing.
+ * The layout fills the app rather than flowing down the page: a chat whose
+ * composer sits wherever the last message left it is one where the box moves
+ * every time somebody types. The list and the thread each scroll inside
+ * themselves, the composer is pinned to the bottom edge, and an empty
+ * conversation looks the same as a full one.
  */
 export function MessagesTab({ onOpenProfile }: { onOpenProfile: (userId: string) => void }) {
   const { session } = useSession();
@@ -47,60 +33,48 @@ export function MessagesTab({ onOpenProfile }: { onOpenProfile: (userId: string)
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const identityQuery = useMessageIdentity(Boolean(session));
-  const conversationsQuery = useConversations(Boolean(session) && Boolean(identityQuery.data));
-
+  const conversationsQuery = useConversations(Boolean(session));
   const conversations = conversationsQuery.data ?? [];
   const active = conversations.find((entry) => entry.id === openId) ?? null;
 
-  // Opening the newest conversation on arrival, rather than an empty pane with
-  // a list beside it that the reader then has to be told to click.
+  // Opening the newest conversation on arrival, rather than an empty pane
+  // beside a list the reader then has to be told to click.
   useEffect(() => {
     if (!openId && conversations.length > 0) setOpenId(conversations[0]?.id ?? null);
   }, [conversations, openId]);
 
   if (!online) {
     return (
-      <div className="tab-content">
+      <div className="messages-tab messages-offline">
         <Empty
           title="Messages need a connection"
-          message="Conversations are carried by the server, so they are the one thing that cannot work offline. Everything already downloaded still does."
+          message="Conversations live on the server, so they are the one thing that cannot work offline. Everything already downloaded still does."
         />
       </div>
     );
   }
 
   return (
-    <div className="tab-content messages-tab">
-      <ErrorNote message={error} />
+    <div className="messages-tab">
+      <aside className="messages-sidebar">
+        <div className="messages-sidebar-head">
+          <h1>Messages</h1>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setStarting(true)}
+            title="Start a conversation"
+          >
+            <UserPlus size={15} aria-hidden />
+            New
+          </button>
+        </div>
 
-      <div className="messages-layout">
-        <aside className="messages-sidebar">
-          <div className="messages-sidebar-head">
-            <h1>Messages</h1>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => setStarting(true)}
-              title="Start a conversation"
-            >
-              <UserPlus size={15} aria-hidden />
-              New
-            </button>
-          </div>
-
-          <p className="messages-privacy">
-            <Lock size={12} aria-hidden />
-            <span>
-              Encrypted on this machine. The server carries these and cannot read them — it holds no
-              key that opens one.
-            </span>
-          </p>
-
+        <div className="messages-sidebar-list">
           {conversationsQuery.isLoading ? (
             <ListSkeleton rows={4} />
           ) : conversations.length === 0 ? (
-            <p className="muted small">
+            <p className="muted small messages-sidebar-empty">
               Nothing yet. Start one with a friend — messaging is friends-only, so nobody can write
               to you out of nowhere.
             </p>
@@ -117,24 +91,27 @@ export function MessagesTab({ onOpenProfile }: { onOpenProfile: (userId: string)
               ))}
             </ul>
           )}
-        </aside>
+        </div>
+      </aside>
 
-        <section className="messages-thread">
-          {active ? (
-            <Thread
-              key={active.id}
-              conversation={active}
-              onError={setError}
-              onOpenProfile={onOpenProfile}
-            />
-          ) : (
-            <Empty
-              title="No conversation open"
-              message="Pick one on the left, or start a new one."
-            />
-          )}
-        </section>
-      </div>
+      <section className="messages-thread">
+        {error ? (
+          <div className="messages-error">
+            <ErrorNote message={error} />
+          </div>
+        ) : null}
+
+        {active ? (
+          <Thread
+            key={active.id}
+            conversation={active}
+            onError={setError}
+            onOpenProfile={onOpenProfile}
+          />
+        ) : (
+          <Empty title="No conversation open" message="Pick one on the left, or start a new one." />
+        )}
+      </section>
 
       {starting ? (
         <StartConversation
@@ -196,10 +173,10 @@ function ConversationRow({
 
         <span className="conversation-row-text">
           <strong>{conversationTitle(conversation, selfId)}</strong>
+          {/* The preview travels on the conversation itself, so the sidebar
+              draws without fetching a single thread. */}
           <span className="muted small">
-            {conversation.lastMessageAt
-              ? formatRelative(conversation.lastMessageAt)
-              : 'No messages yet'}
+            {conversation.lastMessagePreview ?? 'No messages yet'}
           </span>
         </span>
 
@@ -222,15 +199,12 @@ function Thread({
   onOpenProfile: (userId: string) => void;
 }) {
   const { session } = useSession();
-  const { key, state } = useConversationKey(conversation);
   const messagesQuery = useConversationMessages(conversation.id);
   const { send, withdraw, markRead, leave } = useMessageMutations(conversation.id);
   const [showMembers, setShowMembers] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  useKeyBackfill(conversation, key);
-
-  const messages = useMemo(() => messagesQuery.data ?? [], [messagesQuery.data]);
+  const messages = messagesQuery.data ?? [];
 
   // Opening a thread is reading it, and the badge should go the moment it does
   // rather than after the next refetch.
@@ -252,7 +226,7 @@ function Thread({
   return (
     <>
       <header className="thread-head">
-        <div>
+        <div className="thread-head-text">
           <h2>{conversationTitle(conversation, session?.userId ?? '')}</h2>
           <p className="muted small">
             {conversation.kind === 'group'
@@ -261,45 +235,24 @@ function Thread({
           </p>
         </div>
 
-        <button
-          type="button"
-          className="btn btn-ghost"
-          onClick={() => setShowMembers(true)}
-          title="Who is in this conversation, and their key fingerprints"
-        >
-          <ShieldCheck size={15} aria-hidden />
-          Verify
+        <button type="button" className="btn btn-ghost" onClick={() => setShowMembers(true)}>
+          <Users size={15} aria-hidden />
+          {conversation.kind === 'group' ? 'Members' : 'Details'}
         </button>
       </header>
-
-      {state === 'no-key' ? (
-        <p className="thread-notice">
-          <Lock size={14} aria-hidden />
-          This conversation has not been unlocked for this machine yet. It happens automatically the
-          next time one of the others opens it.
-        </p>
-      ) : state === 'failed' ? (
-        <p className="thread-notice danger">
-          <Lock size={14} aria-hidden />
-          The key for this conversation would not open. Nothing here can be read on this device.
-        </p>
-      ) : null}
 
       <div className="thread-scroll">
         {messagesQuery.isLoading ? (
           <Loading label="Loading messages" />
         ) : messages.length === 0 ? (
-          <p className="muted small thread-empty">
-            Nothing here yet. Whatever you write is encrypted before it leaves this machine.
-          </p>
+          <p className="muted small thread-empty">No messages yet. Say something.</p>
         ) : (
           messages.map((message) => (
             <MessageRow
               key={message.id}
               message={message}
               conversation={conversation}
-              conversationKey={key}
-              isMine={message.senderId === session?.username}
+              isMine={message.senderId === session?.userId}
               onWithdraw={() => withdraw.mutate(message.id)}
               onOpenProfile={onOpenProfile}
             />
@@ -309,20 +262,14 @@ function Thread({
       </div>
 
       <Composer
-        disabled={!key}
-        onSend={(text, attachments) => {
-          if (!key) return;
+        sending={send.isPending}
+        onSend={(body, attachments) => {
           onError(null);
           send.mutate(
-            { conversationKey: key, text, attachments },
+            { body, attachments },
             { onError: (caught) => onError(errorMessage(caught)) },
           );
         }}
-        onSeal={(filePath) =>
-          key ? ipc.sealFile(key, filePath) : Promise.reject(new Error('No key'))
-        }
-        onError={onError}
-        sending={send.isPending}
       />
 
       {showMembers ? (
@@ -344,66 +291,24 @@ function Thread({
 function MessageRow({
   message,
   conversation,
-  conversationKey,
   isMine,
   onWithdraw,
   onOpenProfile,
 }: {
   message: MessageInfo;
   conversation: ConversationInfo;
-  conversationKey: string | null;
   isMine: boolean;
   onWithdraw: () => void;
   onOpenProfile: (userId: string) => void;
 }) {
-  const envelope = useEnvelope(message.id, message.body, conversationKey, message.deleted);
   const author = conversation.members.find((member) => member.userId === message.senderId);
   const [viewing, setViewing] = useState<number | null>(null);
-  const [opened, setOpened] = useState<MediaItem[]>([]);
-  const [opening, setOpening] = useState(false);
 
-  // What an attachment is called and what it *is* both live in the sealed
-  // envelope; the server only ever knew there was a file.
-  const described = envelope?.attachments ?? [];
-
-  /**
-   * Attachments are fetched and decrypted on demand.
-   *
-   * Not on render: a thread scrolled back through a year of screenshots would
-   * otherwise download and decrypt every one of them to draw thumbnails nobody
-   * has looked at. Pressing the attachment is the signal that one is wanted.
-   */
-  const openAttachments = async () => {
-    if (!conversationKey || described.length === 0) return;
-    setOpening(true);
-
-    const byId = new Map(message.attachments.map((entry) => [entry.mediaId, entry]));
-    const items: MediaItem[] = [];
-
-    try {
-      for (const attachment of described) {
-        const stored = byId.get(attachment.mediaId);
-        if (!stored) continue;
-
-        const url = await ipc
-          .openAttachment(conversationKey, attachment.mediaId, stored.url, attachment.contentType)
-          .catch(() => null);
-        if (!url) continue;
-
-        items.push({
-          kind: attachment.contentType.startsWith('video/') ? 'video' : 'image',
-          path: attachment.mediaId,
-          resolvedUrl: url,
-          label: attachment.name,
-        });
-      }
-    } finally {
-      setOpening(false);
-    }
-
-    setOpened(items);
-    setViewing(items.length > 0 ? 0 : null);
-  };
+  const items: MediaItem[] = message.attachments.map((attachment, index) => ({
+    kind: attachment.kind === 'clip' ? 'video' : 'image',
+    path: attachment.url,
+    label: `${author?.displayName ?? 'Someone'} — ${index + 1}`,
+  }));
 
   return (
     <article className={clsx('message-row', isMine && 'mine')}>
@@ -430,28 +335,24 @@ function MessageRow({
 
         {message.deleted ? (
           <span className="muted small message-withdrawn">This message was withdrawn.</span>
-        ) : envelope === null ? (
-          <span className="muted small">
-            <Lock size={11} aria-hidden /> Cannot be read on this device.
-          </span>
-        ) : envelope.text ? (
-          <span className="message-text">{envelope.text}</span>
+        ) : message.body ? (
+          <span className="message-text">{message.body}</span>
         ) : null}
 
-        {described.length > 0 && !message.deleted ? (
-          <button
-            type="button"
-            className="message-attachment"
-            onClick={() => void openAttachments()}
-            disabled={opening}
-          >
-            <ImageIcon size={13} aria-hidden />
-            {opening
-              ? 'Decrypting…'
-              : described.length === 1
-                ? (described[0]?.name ?? 'View attachment')
-                : `View ${described.length} attachments`}
-          </button>
+        {message.attachments.length > 0 && !message.deleted ? (
+          <div className="message-media">
+            {message.attachments.map((attachment, index) => (
+              <button
+                key={attachment.mediaId}
+                type="button"
+                className="message-media-thumb"
+                onClick={() => setViewing(index)}
+                aria-label="Open this attachment"
+              >
+                <Attachment attachment={attachment} />
+              </button>
+            ))}
+          </div>
         ) : null}
 
         <span className="message-meta muted small">
@@ -470,38 +371,34 @@ function MessageRow({
         </span>
       </div>
 
-      {viewing !== null && opened.length > 0 ? (
-        <MediaViewer items={opened} startIndex={viewing} onClose={() => setViewing(null)} />
+      {viewing !== null ? (
+        <MediaViewer items={items} startIndex={viewing} onClose={() => setViewing(null)} />
       ) : null}
     </article>
   );
 }
 
-interface StagedAttachment {
-  /** The staged ciphertext on disk, waiting to be uploaded. */
-  path: string;
-  name: string;
-  sizeBytes: number;
-  /** The real type, which travels inside the sealed envelope. */
-  contentType: string;
+/** One attachment's thumbnail, resolved the same way any other artwork is. */
+function Attachment({ attachment }: { attachment: MessageInfo['attachments'][number] }) {
+  const url = useArtwork(attachment.url);
+  if (!url) return <span className="skeleton message-media-pending" aria-hidden />;
+
+  return attachment.kind === 'clip' ? (
+    <video src={url} muted preload="metadata" />
+  ) : (
+    <img src={url} alt="" loading="lazy" />
+  );
 }
 
 function Composer({
-  disabled,
   sending,
   onSend,
-  onSeal,
-  onError,
 }: {
-  disabled: boolean;
   sending: boolean;
-  onSend: (text: string, attachments: StagedAttachment[]) => void;
-  onSeal: (filePath: string) => Promise<StagedAttachment>;
-  onError: (message: string | null) => void;
+  onSend: (body: string, attachments: string[]) => void;
 }) {
   const [text, setText] = useState('');
-  const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
-  const [sealing, setSealing] = useState(false);
+  const [attachments, setAttachments] = useState<string[]>([]);
 
   const attach = async () => {
     const selected = await open({
@@ -513,20 +410,7 @@ function Composer({
         },
       ],
     });
-    if (typeof selected !== 'string') return;
-
-    setSealing(true);
-    try {
-      // Encrypted here, before it is uploaded — the server receives ciphertext
-      // and a content type that deliberately says nothing.
-      const staged = await onSeal(selected);
-      setAttachments((current) => [...current, staged]);
-      onError(null);
-    } catch (caught) {
-      onError(errorMessage(caught));
-    } finally {
-      setSealing(false);
-    }
+    if (typeof selected === 'string') setAttachments((current) => [...current, selected]);
   };
 
   const submit = () => {
@@ -547,19 +431,15 @@ function Composer({
     >
       {attachments.length > 0 ? (
         <ul className="composer-attachments">
-          {attachments.map((attachment) => (
-            <li key={attachment.path}>
+          {attachments.map((path) => (
+            <li key={path}>
               <Paperclip size={12} aria-hidden />
-              {attachment.name}
+              {path.split(/[\\/]/).pop()}
               <button
                 type="button"
                 className="icon-btn small-icon-btn"
-                aria-label={`Remove ${attachment.name}`}
-                onClick={() =>
-                  setAttachments((current) =>
-                    current.filter((entry) => entry.path !== attachment.path),
-                  )
-                }
+                aria-label="Remove this attachment"
+                onClick={() => setAttachments((current) => current.filter((p) => p !== path))}
               >
                 <X size={12} aria-hidden />
               </button>
@@ -573,7 +453,6 @@ function Composer({
           type="button"
           className="icon-btn"
           onClick={() => void attach()}
-          disabled={disabled || sealing}
           aria-label="Attach a picture or clip"
           title="Attach a picture or clip"
         >
@@ -581,13 +460,12 @@ function Composer({
         </button>
 
         <textarea
-          className="input composer-input"
+          className="composer-input"
           rows={1}
           value={text}
           maxLength={4000}
-          placeholder={disabled ? 'This conversation cannot be read here' : 'Write a message…'}
+          placeholder="Write a message…"
           aria-label="Message"
-          disabled={disabled}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             // Enter sends, shift+enter breaks the line — the convention every
@@ -602,7 +480,7 @@ function Composer({
         <button
           type="submit"
           className="btn btn-primary"
-          disabled={disabled || sending || (!text.trim() && attachments.length === 0)}
+          disabled={sending || (!text.trim() && attachments.length === 0)}
         >
           <Send size={15} aria-hidden />
           Send
@@ -612,15 +490,7 @@ function Composer({
   );
 }
 
-/**
- * Who is here, and the fingerprint of each of their devices.
- *
- * The fingerprints are the only defence against the one attack this design
- * cannot rule out by itself: the server hands out the public keys, so an
- * operator who had replaced it could hand out one of their own. Two people
- * reading the same eight groups to each other have ruled that out. Nothing
- * else can.
- */
+/** Who is in this conversation. */
 function MemberList({
   conversation,
   onClose,
@@ -632,24 +502,8 @@ function MemberList({
   onOpenProfile: (userId: string) => void;
   onLeave: () => void;
 }) {
-  const memberIds = conversation.members.map((member) => member.userId);
-  const keysQuery = useQuery({
-    queryKey: ['messages', 'keys', memberIds.sort().join(',')],
-    queryFn: () =>
-      ipc.get<{ keys: Array<{ userId: string; fingerprint: string; label: string | null }> }>(
-        `/messages/keys?userIds=${memberIds.join(',')}`,
-      ),
-  });
-
-  const keys = keysQuery.data?.keys ?? [];
-
   return (
     <Modal title="Who is in this conversation" onClose={onClose}>
-      <p className="muted small">
-        Read a fingerprint aloud to the person it belongs to. If they match, nobody has substituted
-        a key — which is the one thing encryption alone cannot prove.
-      </p>
-
       <ul className="member-verify-list">
         {conversation.members.map((member) => (
           <li key={member.userId}>
@@ -671,17 +525,6 @@ function MemberList({
                 </span>
               </span>
             </button>
-
-            <ul className="fingerprint-list">
-              {keys
-                .filter((key) => key.userId === member.userId)
-                .map((key) => (
-                  <li key={key.fingerprint}>
-                    <code>{key.fingerprint}</code>
-                    {key.label ? <span className="muted small">{key.label}</span> : null}
-                  </li>
-                ))}
-            </ul>
           </li>
         ))}
       </ul>
@@ -757,7 +600,7 @@ function StartConversation({
                     size={32}
                   />
                   <span>{entry.profile.displayName}</span>
-                  {picked ? <MessageSquare size={14} aria-hidden /> : null}
+                  {picked ? <Check size={14} aria-hidden /> : null}
                 </button>
               </li>
             );

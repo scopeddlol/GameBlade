@@ -18,17 +18,6 @@ const ALLOWED_TYPES: Record<MediaKind, readonly string[]> = {
   banner: ['image/png', 'image/jpeg', 'image/webp'],
   image: ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'],
   clip: ['video/mp4', 'video/webm'],
-  /**
-   * A message attachment, which arrives already encrypted.
-   *
-   * There is exactly one acceptable type because there is nothing to check:
-   * the bytes are ciphertext and reveal nothing about what they were. What it
-   * actually is — a screenshot, a clip — travels inside the sealed message
-   * body, where only the conversation's members can read it. Type sniffing is
-   * a *client's* job here, after decryption, and it is the only place it can
-   * be done at all.
-   */
-  sealed: ['application/octet-stream'],
 };
 
 /**
@@ -187,10 +176,8 @@ export class MediaStore {
    * The desktop client uploads before it composes, so an abandoned draft would
    * otherwise leak a file per attempt.
    *
-   * A message attachment counts as referenced exactly like a post's does. It
-   * has to: the bytes are ciphertext, so a sweep that got this wrong would
-   * delete something nobody could even recognise as lost until they scrolled
-   * back to it.
+   * A message attachment counts as referenced exactly like a post's does — a
+   * sweep that got this wrong would quietly empty people's conversations.
    */
   async collectOrphans(olderThanIso: string): Promise<number> {
     const rows = this.db

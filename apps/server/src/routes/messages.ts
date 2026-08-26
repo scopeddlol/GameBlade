@@ -1,9 +1,7 @@
 import {
   addMembersSchema,
-  backfillKeysSchema,
   createConversationSchema,
   messageQuerySchema,
-  publishDeviceKeySchema,
   renameConversationSchema,
   sendMessageSchema,
 } from '@gameblade/shared';
@@ -11,61 +9,14 @@ import type { FastifyInstance } from 'fastify';
 import { requireUser } from '../auth/middleware.js';
 
 /**
- * Private conversations.
+ * Direct messages and group chats.
  *
- * Every route here handles ciphertext it cannot read and metadata it can. The
- * server's whole job is routing and access control: is this person in this
- * conversation, are these two allowed to talk at all, and does this attachment
- * belong to whoever is claiming it. What is *in* any of it is not a question
- * these routes are able to ask.
+ * The server's whole job here is routing and access control: is this person in
+ * this conversation, are these two allowed to talk at all, and does this
+ * attachment belong to whoever is claiming it.
  */
 export async function messageRoutes(app: FastifyInstance): Promise<void> {
   const { messaging } = app.gameblade;
-
-  /* ------------------------------------------------------------- devices */
-
-  /**
-   * Publishes the calling device's public key.
-   *
-   * Called on every start rather than once at setup: a client that has been
-   * reinstalled has a new key, and one that has not gets a cheap no-op.
-   */
-  app.post('/messages/devices', async (request) => {
-    const context = requireUser(request);
-    const input = publishDeviceKeySchema.parse(request.body ?? {});
-    return { device: messaging.publishDeviceKey(context.user.id, input) };
-  });
-
-  /** Retires a key, because the private half has just been destroyed. */
-  app.delete('/messages/devices/:publicKey', async (request) => {
-    const context = requireUser(request);
-    const { publicKey } = request.params as { publicKey: string };
-    return { retired: messaging.retireDeviceKey(context.user.id, decodeURIComponent(publicKey)) };
-  });
-
-  /**
-   * The keys belonging to a set of people, so a client can seal a conversation
-   * key for each of their devices.
-   *
-   * Public by design — that is what a public key is for — but only for people
-   * the caller could message anyway, so this cannot double as a way to
-   * enumerate the server's accounts.
-   */
-  app.get('/messages/keys', async (request) => {
-    const context = requireUser(request);
-    const { userIds } = request.query as { userIds?: string };
-    const requested = (userIds ?? '')
-      .split(',')
-      .map((id) => id.trim())
-      .filter(Boolean);
-
-    const reachable = app.gameblade.profiles.friendIds(context.user.id);
-    const allowed = requested.filter((id) => id === context.user.id || reachable.has(id));
-
-    return { keys: messaging.deviceKeysFor(allowed) };
-  });
-
-  /* -------------------------------------------------------- conversations */
 
   app.get('/messages/conversations', async (request) => {
     const context = requireUser(request);
@@ -92,14 +43,6 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     return { conversation: messaging.rename(context.user.id, id, input.title) };
   });
 
-  /** Seals the key for a device that did not exist when this started. */
-  app.post('/messages/conversations/:id/keys', async (request) => {
-    const context = requireUser(request);
-    const { id } = request.params as { id: string };
-    const input = backfillKeysSchema.parse(request.body);
-    return { stored: messaging.backfillKeys(context.user.id, id, input.keys) };
-  });
-
   app.post('/messages/conversations/:id/members', async (request) => {
     const context = requireUser(request);
     const { id } = request.params as { id: string };
@@ -114,8 +57,6 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     messaging.removeMember(context.user.id, id, userId);
     return { ok: true };
   });
-
-  /* ------------------------------------------------------------ messages */
 
   app.get('/messages/conversations/:id/messages', async (request) => {
     const context = requireUser(request);

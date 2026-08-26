@@ -19,7 +19,7 @@ file, no build step, and everything below is covered there in depth.
 - **Achievements.** Sets are imported from public sources and tracked per
   account, so a DRM-free copy still earns something.
 - **Friends, activity and messages.** Live presence, a shared feed, screenshots
-  and clips, and end-to-end encrypted direct messages and group chats.
+  and clips, and direct messages and group chats.
 - **Read-only by design.** Your library is mounted `:ro`. GameBlade indexes and
   serves it; it never writes to it.
 - **Invite-only.** Self-registration is off by default. Accounts come from
@@ -92,7 +92,7 @@ cd apps/desktop/src-tauri && cargo test && cargo clippy --all-targets -- -D warn
 ```
 apps/server     Fastify API, scanner, metadata, social, saves, achievements, messaging
 apps/web        Public landing page and the admin panel (React 19 + Tailwind)
-apps/desktop    Tauri v2 client: the tabbed UI plus Rust install/launch/sync/crypto
+apps/desktop    Tauri v2 client: the tabbed UI plus Rust install/launch/sync
 packages/shared Types, zod schemas and constants used by all three
 ```
 
