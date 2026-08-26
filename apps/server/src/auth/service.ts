@@ -6,7 +6,7 @@ import {
 } from '@gameblade/shared';
 import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { devices, invites, sessions, users, type User } from '../db/schema.js';
+import { devices, invites, passwordResets, sessions, users, type User } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { hashToken, newId, newToken, normalizeInviteCode } from '../lib/ids.js';
 import { fakeVerify, hashPassword, verifyPassword } from './password.js';
@@ -268,6 +268,74 @@ export class AuthService {
       throw ApiError.gone('That invite has already been used');
     }
     return invite.role;
+  }
+
+  /**
+   * Issue a single-use reset an admin can hand to a player.
+   *
+   * Returns the token once; only its hash is kept, so a lost link cannot be
+   * recovered and has to be reissued. Any earlier unused reset for the same
+   * account is dropped, so a fresh link is the only live one.
+   */
+  createPasswordReset(
+    userId: string,
+    createdBy: string,
+    expiresInHours = 24,
+  ): {
+    token: string;
+    expiresAt: string;
+  } {
+    const user = this.findById(userId);
+    if (!user) throw ApiError.notFound('User not found');
+
+    this.db.delete(passwordResets).where(eq(passwordResets.userId, userId)).run();
+
+    const token = newToken();
+    const expiresAt = new Date(Date.now() + expiresInHours * 3_600_000).toISOString();
+    this.db
+      .insert(passwordResets)
+      .values({ tokenHash: hashToken(token), userId, createdBy, expiresAt })
+      .run();
+
+    return { token, expiresAt };
+  }
+
+  /**
+   * Spend a reset link and set the new password.
+   *
+   * Deliberately one message for every failure mode: an expired token, a spent
+   * one and one that never existed are indistinguishable to the caller, so this
+   * cannot be used to probe which links are real.
+   */
+  async consumePasswordReset(token: string, newPassword: string): Promise<void> {
+    const invalid = ApiError.badRequest('That reset link is no longer valid');
+
+    const row = this.db
+      .select()
+      .from(passwordResets)
+      .where(eq(passwordResets.tokenHash, hashToken(token)))
+      .get();
+    if (!row || row.usedAt !== null || row.expiresAt <= isoNow()) throw invalid;
+
+    const user = this.findById(row.userId);
+    if (!user) throw invalid;
+
+    const passwordHash = await hashPassword(newPassword);
+
+    // Marked spent in the same statement that checks it is unspent, so two
+    // requests racing on one link cannot both go through.
+    const spent = this.db
+      .update(passwordResets)
+      .set({ usedAt: isoNow() })
+      .where(and(eq(passwordResets.tokenHash, row.tokenHash), isNull(passwordResets.usedAt)))
+      .run();
+    if (spent.changes === 0) throw invalid;
+
+    this.db.update(users).set({ passwordHash }).where(eq(users.id, row.userId)).run();
+
+    // As with a self-service change: a reset ends every existing login.
+    this.destroyAllSessions(row.userId);
+    this.db.delete(devices).where(eq(devices.userId, row.userId)).run();
   }
 
   async changePassword(

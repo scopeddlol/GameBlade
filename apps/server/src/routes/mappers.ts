@@ -66,6 +66,7 @@ export function toAchievementRule(row: {
   selector: string;
   comparator: AchievementComparator;
   value: string | null;
+  tags?: string[] | null;
 }): AchievementRule & { id: string } {
   return {
     id: row.id,
@@ -75,5 +76,6 @@ export function toAchievementRule(row: {
     selector: row.selector,
     comparator: row.comparator,
     value: row.value,
+    tags: row.tags ?? [],
   };
 }

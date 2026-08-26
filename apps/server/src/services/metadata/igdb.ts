@@ -1,4 +1,10 @@
-import { HttpError, REQUEST_TIMEOUT_MS, RateLimiter, withRetry } from '../../lib/ratelimit.js';
+import {
+  HttpError,
+  REQUEST_TIMEOUT_MS,
+  RateLimiter,
+  requestSignal,
+  withRetry,
+} from '../../lib/ratelimit.js';
 
 const TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
 const API_URL = 'https://api.igdb.com/v4';
@@ -129,7 +135,7 @@ export class IgdbClient {
     return body.access_token;
   }
 
-  private async query<T>(endpoint: string, apicalypse: string): Promise<T[]> {
+  private async query<T>(endpoint: string, apicalypse: string, signal?: AbortSignal): Promise<T[]> {
     return withRetry(() =>
       this.limiter.run(async () => {
         const token = await this.getToken();
@@ -142,7 +148,7 @@ export class IgdbClient {
             Accept: 'application/json',
           },
           body: apicalypse,
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: requestSignal(REQUEST_TIMEOUT_MS, signal),
         });
 
         if (response.status === 401) {
@@ -178,22 +184,26 @@ export class IgdbClient {
    * does not know it. The rejection is remembered, so the cost is one wasted
    * request per process rather than one per lookup.
    */
-  private async queryGames(build: (fields: string) => string): Promise<IgdbGame[]> {
+  private async queryGames(
+    build: (fields: string) => string,
+    signal?: AbortSignal,
+  ): Promise<IgdbGame[]> {
     try {
-      return await this.query<IgdbGame>('games', build(this.fields()));
+      return await this.query<IgdbGame>('games', build(this.fields()), signal);
     } catch (error) {
       if (this.typeFieldUsable && isInvalidFieldError(error)) {
         this.typeFieldUsable = false;
-        return this.query<IgdbGame>('games', build(this.fields()));
+        return this.query<IgdbGame>('games', build(this.fields()), signal);
       }
       throw error;
     }
   }
 
-  async search(title: string, limit = 10): Promise<IgdbGame[]> {
+  async search(title: string, limit = 10, signal?: AbortSignal): Promise<IgdbGame[]> {
     const capped = Math.min(Math.max(limit, 1), 50);
     const results = await this.queryGames(
       (fields) => `search ${IgdbClient.quote(title)}; fields ${fields}; limit ${capped};`,
+      signal,
     );
 
     // Main games first when IGDB told us the type, so a base game outranks its

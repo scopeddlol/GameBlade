@@ -1,6 +1,6 @@
 import type { PublicUser } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Trash2 } from 'lucide-react';
+import { KeyRound, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Badge, FormError, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
@@ -34,6 +34,26 @@ export function AdminUsersPage() {
     },
     onError: (caught) =>
       setError(caught instanceof ApiRequestError ? caught.message : 'Could not delete user.'),
+  });
+
+  // Shown once, next to the account it belongs to. There is no mail server
+  // here, so handing the link to the player is the administrator's job — and
+  // the token is never readable again after this.
+  const [resetLink, setResetLink] = useState<{ username: string; url: string } | null>(null);
+
+  const resetMutation = useMutation({
+    mutationFn: (user: PublicUser) =>
+      api
+        .post<{ path: string }>(`/admin/users/${user.id}/password-reset`, {})
+        .then((result) => ({ user, result })),
+    onSuccess: ({ user, result }) => {
+      setError(null);
+      setResetLink({ username: user.username, url: `${window.location.origin}${result.path}` });
+    },
+    onError: (caught) =>
+      setError(
+        caught instanceof ApiRequestError ? caught.message : 'Could not create a reset link.',
+      ),
   });
 
   if (usersQuery.isLoading) return <RowSkeleton rows={5} />;
@@ -80,6 +100,16 @@ export function AdminUsersPage() {
 
             <button
               type="button"
+              className="gb-btn-ghost"
+              title="Create a single-use password reset link"
+              onClick={() => resetMutation.mutate(user)}
+              disabled={resetMutation.isPending}
+            >
+              <KeyRound className="h-4 w-4" aria-hidden />
+            </button>
+
+            <button
+              type="button"
               className="gb-btn-danger"
               onClick={() => {
                 if (confirm(`Permanently delete "${user.username}"?`)) {
@@ -89,6 +119,36 @@ export function AdminUsersPage() {
             >
               <Trash2 className="h-4 w-4" aria-hidden />
             </button>
+
+            {resetLink && resetLink.username === user.username ? (
+              <div className="border-blade-500/40 bg-ink-900/60 w-full rounded-lg border p-3">
+                <p className="text-ink-300 mb-2 text-xs">
+                  Single-use reset link for <strong>{user.username}</strong>. It is shown once —
+                  copy it now, and send it to them yourself.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    readOnly
+                    className="gb-input flex-1 font-mono text-xs"
+                    value={resetLink.url}
+                  />
+                  <button
+                    type="button"
+                    className="gb-btn-ghost text-xs"
+                    onClick={() => void navigator.clipboard?.writeText(resetLink.url)}
+                  >
+                    Copy
+                  </button>
+                  <button
+                    type="button"
+                    className="gb-btn-ghost text-xs"
+                    onClick={() => setResetLink(null)}
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         ))}
       </div>

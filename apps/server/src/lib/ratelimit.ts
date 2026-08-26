@@ -89,6 +89,18 @@ export const REQUEST_TIMEOUT_MS = 20_000;
 /** The same, for artwork — a whole image body rather than a page of JSON. */
 export const DOWNLOAD_TIMEOUT_MS = 60_000;
 
+/**
+ * The request's own deadline, plus whatever the caller wants to abort on.
+ *
+ * A scan that has been told to skip the title it is stuck on needs the
+ * in-flight request to stop, not just the loop around it — otherwise "skip"
+ * only takes effect once the request finishes on its own.
+ */
+export function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([deadline, signal]) : deadline;
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

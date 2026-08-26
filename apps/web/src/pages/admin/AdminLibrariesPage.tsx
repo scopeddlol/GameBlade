@@ -1,6 +1,6 @@
 import type { LibraryInfo, ScanProgress } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FolderPlus, RefreshCw, Trash2 } from 'lucide-react';
+import { FolderPlus, RefreshCw, SkipForward, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Badge, Field, FormError, Spinner, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
@@ -50,8 +50,24 @@ export function AdminLibrariesPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'scan'] }),
   });
 
+  const skipMutation = useMutation({
+    mutationFn: () => api.post('/admin/scan/skip'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'scan'] }),
+  });
+
   const progress = progressQuery.data;
   const scanning = progress?.state === 'scanning' || progress?.state === 'matching';
+
+  // "Reading" reports no count, because the walk does not know one yet. Saying
+  // which library is being read is what distinguishes it from a stall.
+  const phaseLabel =
+    progress?.phase === 'reading'
+      ? `Reading ${progress.library ?? 'library'}`
+      : progress?.phase === 'indexing'
+        ? `Indexing ${progress.library ?? 'library'}`
+        : progress?.phase === 'matching'
+          ? 'Fetching metadata'
+          : null;
 
   return (
     <div className="gb-page">
@@ -83,12 +99,16 @@ export function AdminLibrariesPage() {
               >
                 {progress.state}
               </Badge>
+              {scanning && phaseLabel ? <span>{phaseLabel}</span> : null}
               {scanning && progress.total > 0 ? (
                 <span>
                   {progress.processed} / {progress.total}
-                  {progress.currentItem ? ` · ${progress.currentItem}` : ''}
                 </span>
               ) : null}
+              {scanning && progress.currentItem ? (
+                <span className="truncate">{progress.currentItem}</span>
+              ) : null}
+              {scanning && progress.skipped > 0 ? <span>{progress.skipped} skipped</span> : null}
               {progress.finishedAt && !scanning ? (
                 <span>Last finished {formatRelative(progress.finishedAt)}</span>
               ) : null}
@@ -105,6 +125,44 @@ export function AdminLibrariesPage() {
               </div>
             ) : null}
 
+            {scanning ? (
+              <div>
+                <button
+                  type="button"
+                  className="gb-btn-ghost text-xs"
+                  onClick={() => skipMutation.mutate()}
+                  disabled={skipMutation.isPending}
+                >
+                  <SkipForward className="h-3.5 w-3.5" />
+                  Skip this one
+                </button>
+              </div>
+            ) : null}
+
+            {progress.log.length > 0 ? (
+              <details className="text-xs" open={scanning}>
+                <summary className="text-ink-400 cursor-pointer select-none">
+                  Activity ({progress.log.length})
+                </summary>
+                <ul className="bg-ink-900/50 mt-2 max-h-56 space-y-1 overflow-y-auto rounded p-2 font-mono">
+                  {progress.log
+                    .slice()
+                    .reverse()
+                    .map((line) => (
+                      <li
+                        key={`${line.at}-${line.message}`}
+                        className={line.level === 'warn' ? 'text-amber-400' : 'text-ink-300'}
+                      >
+                        <span className="text-ink-500">
+                          {new Date(line.at).toLocaleTimeString()}
+                        </span>{' '}
+                        {line.message}
+                      </li>
+                    ))}
+                </ul>
+              </details>
+            ) : null}
+
             {progress.state === 'error' && progress.error ? (
               <FormError message={progress.error} />
             ) : null}
@@ -112,6 +170,7 @@ export function AdminLibrariesPage() {
             {!scanning && progress.finishedAt ? (
               <p className="text-ink-400 text-xs">
                 {progress.added} added · {progress.updated} updated · {progress.removed} missing
+                {progress.skipped > 0 ? ` · ${progress.skipped} skipped` : ''}
               </p>
             ) : null}
           </div>

@@ -1593,6 +1593,37 @@ function AchievementRulesSection({
             </Field>
           </div>
 
+          <Field
+            label="Tags"
+            htmlFor={`tags-${index}`}
+            hint="Comma separated. One achievement usually needs a rule per save layout; this is how you tell them apart."
+          >
+            <input
+              id={`tags-${index}`}
+              className="gb-input"
+              value={(rule.tags ?? []).join(', ')}
+              placeholder="goldberg, needs testing"
+              onChange={(e) =>
+                update(index, {
+                  tags: e.target.value
+                    .split(',')
+                    .map((tag) => tag.trim())
+                    .filter((tag) => tag.length > 0),
+                })
+              }
+            />
+          </Field>
+
+          {(rule.tags ?? []).length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {(rule.tags ?? []).map((tag) => (
+                <Badge key={tag} tone="neutral">
+                  {tag}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
+
           <button
             type="button"
             className="gb-btn-danger"
@@ -1617,6 +1648,7 @@ function AchievementRulesSection({
                 selector: '',
                 comparator: 'truthy',
                 value: null,
+                tags: [],
               },
             ])
           }

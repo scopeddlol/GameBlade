@@ -703,4 +703,83 @@ export const migrations: Migration[] = [
       CREATE UNIQUE INDEX discord_tickets_number_idx ON discord_tickets(number);
     `,
   },
+  {
+    id: '0016_metadata_lock',
+    sql: /* sql */ `
+      -- Enrichment is a first-time job, not something every scan redoes.
+      --
+      -- Without this the automatic pass re-ran on anything still flagged
+      -- unmatched or missing a cover, and happily overwrote a title, summary
+      -- or artwork that had been corrected by hand. The stamp records that a
+      -- provider has already written to this row; the scan then leaves it
+      -- alone until somebody clears it or re-matches on purpose.
+      ALTER TABLE games ADD COLUMN metadata_locked_at TEXT;
+
+      -- Existing libraries are locked on the way in, so the first scan after
+      -- this upgrade does not go and redo everything it already did.
+      UPDATE games
+         SET metadata_locked_at = COALESCE(updated_at, added_at)
+       WHERE match_status <> 'unmatched' OR cover_image_id IS NOT NULL;
+
+      CREATE INDEX games_metadata_lock_idx ON games(metadata_locked_at);
+    `,
+  },
+  {
+    id: '0017_password_resets',
+    sql: /* sql */ `
+      -- An admin-issued, single-use link for a player who cannot sign in.
+      --
+      -- The token is stored hashed for the same reason a session token is: a
+      -- leaked database should not hand out working reset links. Nothing here
+      -- identifies the user to whoever holds the link beyond the row it points
+      -- at, so the link alone is the credential and it expires.
+      CREATE TABLE password_resets (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        expires_at TEXT NOT NULL,
+        used_at TEXT
+      );
+      CREATE INDEX password_resets_user_idx ON password_resets(user_id);
+      CREATE INDEX password_resets_expires_idx ON password_resets(expires_at);
+    `,
+  },
+  {
+    id: '0018_achievement_rule_tags',
+    sql: /* sql */ `
+      -- Labels on an unlock rule, not on the achievement it unlocks.
+      --
+      -- A game needs one rule per candidate emulator or save layout, all of
+      -- them naming the same achievement, and they are otherwise told apart
+      -- only by a long path. A tag is what lets an operator say which is which
+      -- — "goldberg", "rune", "needs testing" — and filter on it later.
+      ALTER TABLE game_achievement_rules ADD COLUMN tags TEXT;
+    `,
+  },
+  {
+    id: '0019_discord_roles',
+    sql: /* sql */ `
+      -- Emoji-on-a-message to role, the way every other server does it.
+      --
+      -- Keyed on the message and the emoji together: one message usually
+      -- carries several choices. The emoji is stored in the form the gateway
+      -- reports it — a bare unicode character, or name:id for a custom one —
+      -- so the comparison at dispatch time is a string equality and not a
+      -- guess about which half Discord will send.
+      CREATE TABLE discord_reaction_roles (
+        id TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        role_id TEXT NOT NULL,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX discord_reaction_roles_key_idx
+        ON discord_reaction_roles(message_id, emoji);
+      CREATE INDEX discord_reaction_roles_message_idx ON discord_reaction_roles(message_id);
+    `,
+  },
 ];

@@ -140,6 +140,29 @@ describe('discord', () => {
       expect(response.body).toContain('cancelled');
     });
 
+    /**
+     * The landing page used to end at "you can close this window", which in an
+     * ordinary tab is a dead end with the panel nowhere in reach.
+     */
+    it('sends a browser tab back to the account page after linking', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/auth/discord/callback?error=access_denied',
+        // No intent cookie means link, which is where the account page is.
+      });
+      expect(response.body).toContain('/account');
+      expect(response.body).toContain('window.location.replace');
+    });
+
+    it('sends a browser tab to the landing page after a sign-in attempt', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/auth/discord/callback?error=access_denied',
+        cookies: { gb_discord_intent: 'signin' },
+      });
+      expect(response.body).not.toContain('/account');
+    });
+
     it('escapes the operator-typed invite URL into the result page', async () => {
       // The message can carry text an operator typed; it lands in HTML.
       app.gameblade.settings.update({

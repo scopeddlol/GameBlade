@@ -6,12 +6,12 @@ import {
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Db } from '../db/index.js';
-import { discordLinks, discordTickets, users } from '../db/schema.js';
+import { discordLinks, discordReactionRoles, discordTickets, users } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { isoNow } from '../lib/time.js';
 import type { DiscordService, DiscordUpload } from './discord.js';
-import { DiscordGateway } from './discordGateway.js';
+import { DiscordGateway, GATEWAY_INTENTS } from './discordGateway.js';
 import type { MediaStore } from './media.js';
 import type { ProfileService } from './profiles.js';
 import type { SettingsService } from './settings.js';
@@ -75,6 +75,22 @@ const TICKET_MEMBER_ALLOW = (
   PERM.ATTACH_FILES |
   PERM.EMBED_LINKS
 ).toString();
+
+/** GUILD_MEMBER_ADD, trimmed to the two fields the auto-role needs. */
+interface GuildMemberAdd {
+  guild_id?: string;
+  user?: { id?: string };
+}
+
+/** MESSAGE_REACTION_ADD and _REMOVE, which carry the same shape. */
+interface ReactionEvent {
+  guild_id?: string;
+  channel_id?: string;
+  message_id?: string;
+  user_id?: string;
+  /** `id` is set only for a custom emoji; a unicode one has just a name. */
+  emoji?: { id?: string | null; name?: string | null };
+}
 
 interface Interaction {
   id: string;
@@ -175,6 +191,23 @@ export class DiscordBotService {
   }
 
   /**
+   * Reconnects so a changed intent takes effect.
+   *
+   * Intents are only read at IDENTIFY, so turning auto-roles or reaction roles
+   * on has no effect on a connection that is already up. A no-op when the bot
+   * is not running, and when the intents did not actually change — a needless
+   * reconnect shows in the server as the bot blinking offline.
+   */
+  reconnectIfIntentsChanged(): void {
+    if (!this.gateway.isRunning) return;
+    if (this.gateway.currentIntents === this.intents()) return;
+
+    this.logger.info({ intents: this.intents() }, 'reconnecting the Discord bot for new intents');
+    this.gateway.stop('Reconnecting to change what the bot is told about');
+    this.startNow();
+  }
+
+  /**
    * Drops the connection without changing what the operator asked for.
    *
    * The distinction matters: `stop()` is somebody pressing the button and must
@@ -189,7 +222,24 @@ export class DiscordBotService {
     const token = this.discord.credentials;
     if (!token) return;
     this.commandsRegistered = false;
-    this.gateway.start(token, this.presence());
+    this.gateway.start(token, this.presence(), this.intents());
+  }
+
+  /**
+   * Which gateway events this configuration needs.
+   *
+   * Asked for one at a time, so an operator using neither role feature keeps a
+   * bot that is told about nothing at all. Guild Members is privileged: with
+   * an auto-role set and the intent not enabled on the Bot tab, Discord closes
+   * the socket with 4014 and the panel says so.
+   */
+  private intents(): number {
+    const s = this.settings.get();
+    return (
+      GATEWAY_INTENTS.none |
+      (s.discordAutoRoleId?.trim() ? GATEWAY_INTENTS.guildMembers : 0) |
+      (s.discordReactionRolesEnabled ? GATEWAY_INTENTS.guildMessageReactions : 0)
+    );
   }
 
   /** Pushes a changed status or activity to the live connection. */
@@ -252,12 +302,95 @@ export class DiscordBotService {
   /* ------------------------------------------------------------- dispatching */
 
   private onDispatch(event: string, data: unknown): void {
-    if (event !== 'INTERACTION_CREATE') return;
     // Deliberately not awaited: Discord expects the socket to keep being read
     // while a handler works, and every path below answers over REST.
-    void this.onInteraction(data as Interaction).catch((error: unknown) => {
-      this.logger.error({ err: error }, 'a Discord interaction failed');
-    });
+    const detach = (work: Promise<void>, what: string) =>
+      void work.catch((error: unknown) => {
+        this.logger.error({ err: error }, `a Discord ${what} failed`);
+      });
+
+    if (event === 'INTERACTION_CREATE') {
+      detach(this.onInteraction(data as Interaction), 'interaction');
+      return;
+    }
+
+    if (event === 'GUILD_MEMBER_ADD') {
+      detach(this.onMemberJoin(data as GuildMemberAdd), 'member join');
+      return;
+    }
+
+    if (event === 'MESSAGE_REACTION_ADD' || event === 'MESSAGE_REACTION_REMOVE') {
+      detach(
+        this.onReaction(data as ReactionEvent, event === 'MESSAGE_REACTION_ADD'),
+        'reaction role',
+      );
+    }
+  }
+
+  /* ----------------------------------------------------------------- roles */
+
+  /** Hands the configured role to somebody who has just joined. */
+  private async onMemberJoin(event: GuildMemberAdd): Promise<void> {
+    const roleId = this.settings.get().discordAutoRoleId?.trim();
+    const userId = event.user?.id;
+    if (!roleId || !userId || !event.guild_id) return;
+
+    await this.discord
+      .botCall(`/guilds/${event.guild_id}/members/${userId}/roles/${roleId}`, { method: 'PUT' })
+      .then(() => this.logger.info({ userId, roleId }, 'gave a new member the auto-role'))
+      .catch((error: unknown) => {
+        // Almost always the bot's own role sitting below the one it is trying
+        // to grant, which no amount of retrying fixes.
+        this.logger.warn(
+          { err: error, userId, roleId },
+          'could not give a new member the auto-role — check the bot role is above it',
+        );
+      });
+  }
+
+  /**
+   * Adds or removes a role for an emoji on a bound message.
+   *
+   * The emoji is matched in the shape the gateway reports it: a bare unicode
+   * character, or `name:id` for a custom one. Anything on a message with no
+   * binding is ignored, which is most reactions in a busy server.
+   */
+  private async onReaction(event: ReactionEvent, added: boolean): Promise<void> {
+    if (!this.settings.get().discordReactionRolesEnabled) return;
+
+    const userId = event.user_id;
+    const guildId = event.guild_id;
+    if (!userId || !guildId || !event.message_id) return;
+
+    // A bot reacting to its own posted panel must not grant itself anything.
+    if (userId === this.gateway.status.botId) return;
+
+    const emoji = event.emoji?.id
+      ? `${event.emoji.name ?? ''}:${event.emoji.id}`
+      : (event.emoji?.name ?? '');
+    if (!emoji) return;
+
+    const binding = this.db
+      .select()
+      .from(discordReactionRoles)
+      .where(
+        and(
+          eq(discordReactionRoles.messageId, event.message_id),
+          eq(discordReactionRoles.emoji, emoji),
+        ),
+      )
+      .get();
+    if (!binding) return;
+
+    const path = `/guilds/${guildId}/members/${userId}/roles/${binding.roleId}`;
+    await this.discord
+      .botCall(path, { method: added ? 'PUT' : 'DELETE' })
+      .catch((error: unknown) => {
+        this.logger.warn(
+          { err: error, userId, roleId: binding.roleId, added },
+          'could not change a reaction role — check the bot role is above it',
+        );
+      });
   }
 
   private async onInteraction(interaction: Interaction): Promise<void> {
@@ -696,6 +829,38 @@ export class DiscordBotService {
   }
 
   /* -------------------------------------------------------------- admin view */
+
+  /**
+   * Close a ticket and remove the record of it entirely.
+   *
+   * Distinct from the in-Discord close button, which keeps the row so there is
+   * still an account of who asked for what. This is the admin saying they are
+   * finished with it — spam, a duplicate, something resolved long ago — so the
+   * channel goes if it is still there and the row goes with it.
+   *
+   * The channel is deleted first and awaited: a row removed while its channel
+   * survives leaves an orphan nothing in the panel can reach any more.
+   */
+  async deleteTicket(id: string): Promise<boolean> {
+    const ticket = this.db.select().from(discordTickets).where(eq(discordTickets.id, id)).get();
+    if (!ticket) return false;
+
+    if (ticket.channelId) {
+      await this.discord
+        .botCall(`/channels/${ticket.channelId}`, { method: 'DELETE' })
+        .catch((error: unknown) => {
+          // A channel somebody already deleted by hand is not a reason to
+          // refuse to tidy up the row that points at it.
+          this.logger.warn(
+            { err: error, channelId: ticket.channelId },
+            'could not delete a ticket channel; removing the record anyway',
+          );
+        });
+    }
+
+    this.db.delete(discordTickets).where(eq(discordTickets.id, id)).run();
+    return true;
+  }
 
   listTickets(status: string | undefined, limit = 50): TicketRow[] {
     const rows = this.db

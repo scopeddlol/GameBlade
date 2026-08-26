@@ -21,6 +21,7 @@ import {
   autoImportAchievementsSchema,
   providerSettingsSchema,
   purgeMissingSchema,
+  createPasswordResetSchema,
   reorderClientButtonsSchema,
   reorderFeaturedSchema,
   scanRequestSchema,
@@ -36,12 +37,14 @@ import {
   type PublicUser,
   type ServerSettings,
   discordSettingsSchema,
+  discordRoleSettingsSchema,
+  discordReactionRoleSchema,
   discordAnnounceSchema,
   discordPresenceSchema,
   discordTicketSettingsSchema,
   MAX_DISCORD_ATTACHMENT_BYTES,
 } from '@gameblade/shared';
-import { eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -50,7 +53,15 @@ import { requireAdmin } from '../auth/middleware.js';
 import type { DiscordUpload } from '../services/discord.js';
 import type { MediaStore } from '../services/media.js';
 import { toPublicUser } from '../auth/service.js';
-import { gameFiles, gameSaveRules, games, invites, libraries, users } from '../db/schema.js';
+import {
+  discordReactionRoles,
+  gameFiles,
+  gameSaveRules,
+  games,
+  invites,
+  libraries,
+  users,
+} from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { isLikelyGameExecutable, listZipExecutables, sortCandidates } from '../lib/executables.js';
 import { newId, newInviteCode } from '../lib/ids.js';
@@ -144,6 +155,29 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     const updated = auth.findById(id);
     return updated ? toPublicUser(updated) : null;
+  });
+
+  /**
+   * A single-use reset link for a player who cannot sign in.
+   *
+   * There is no mail server here, so the link is handed back for an admin to
+   * pass on themselves — which is also why it is shown once and never stored
+   * in a form anyone can read back.
+   */
+  app.post('/admin/users/:id/password-reset', async (request) => {
+    const context = requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const input = createPasswordResetSchema.parse(request.body ?? {});
+
+    const target = auth.findById(id);
+    if (!target) throw ApiError.notFound('User not found');
+
+    const { token, expiresAt } = auth.createPasswordReset(
+      id,
+      context.user.id,
+      input.expiresInHours,
+    );
+    return { token, expiresAt, path: `/reset-password?token=${encodeURIComponent(token)}` };
   });
 
   app.delete('/admin/users/:id', async (request) => {
@@ -336,6 +370,22 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/admin/scan/progress', async () => scanner.getProgress());
+
+  /**
+   * Move the running scan past whatever it is stuck on.
+   *
+   * A single unreadable folder or a provider that will not answer used to mean
+   * waiting the run out or restarting the server. 409 rather than a silent
+   * success when nothing is running, so the panel can say why nothing happened.
+   */
+  app.post('/admin/scan/skip', async (_request, reply) => {
+    if (!scanner.skipCurrent()) {
+      return reply.code(409).send({
+        error: { code: 'no_scan_running', message: 'No scan is running' },
+      });
+    }
+    return { skipped: true };
+  });
 
   // ---- Removing catalog entries ----
 
@@ -981,6 +1031,102 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true, bot };
   });
 
+  /* ---------------------------------------------------------------- roles */
+
+  app.get('/admin/discord/roles', async (request) => {
+    requireAdmin(request);
+    const s = settings.get();
+    return {
+      autoRoleId: s.discordAutoRoleId ?? '',
+      reactionRolesEnabled: s.discordReactionRolesEnabled,
+      bindings: db
+        .select()
+        .from(discordReactionRoles)
+        .orderBy(desc(discordReactionRoles.createdAt))
+        .all(),
+    };
+  });
+
+  /**
+   * Turning either feature on changes which gateway events the bot needs, and
+   * intents are only read when the connection identifies — so the bot is
+   * reconnected rather than left listening for events it never asked for.
+   */
+  app.patch('/admin/discord/roles', async (request) => {
+    requireAdmin(request);
+    const input = discordRoleSettingsSchema.parse(request.body);
+
+    settings.update({
+      ...(input.autoRoleId !== undefined ? { discordAutoRoleId: input.autoRoleId || null } : {}),
+      ...(input.reactionRolesEnabled !== undefined
+        ? { discordReactionRolesEnabled: input.reactionRolesEnabled }
+        : {}),
+    });
+    discordBot.reconnectIfIntentsChanged();
+
+    const s = settings.get();
+    return {
+      autoRoleId: s.discordAutoRoleId ?? '',
+      reactionRolesEnabled: s.discordReactionRolesEnabled,
+      // Auto-roles need a privileged intent, and the one thing an operator
+      // reliably forgets is enabling it in the developer portal.
+      needsMembersIntent: Boolean(s.discordAutoRoleId?.trim()),
+    };
+  });
+
+  app.post('/admin/discord/roles/reactions', async (request) => {
+    requireAdmin(request);
+    const input = discordReactionRoleSchema.parse(request.body);
+
+    const guildId = settings.get().discordGuildId?.trim();
+    if (!guildId) throw ApiError.badRequest('Set the Discord server ID first');
+
+    // One role per emoji per message: binding the same emoji twice would make
+    // which role a press grants depend on row order.
+    const clash = db
+      .select({ id: discordReactionRoles.id })
+      .from(discordReactionRoles)
+      .where(
+        and(
+          eq(discordReactionRoles.messageId, input.messageId),
+          eq(discordReactionRoles.emoji, input.emoji),
+        ),
+      )
+      .get();
+    if (clash) throw ApiError.conflict('That emoji is already bound on that message');
+
+    const row = {
+      id: newId('drr'),
+      guildId,
+      channelId: input.channelId,
+      messageId: input.messageId,
+      emoji: input.emoji,
+      roleId: input.roleId,
+      note: input.note ?? null,
+      createdAt: isoNow(),
+    };
+    db.insert(discordReactionRoles).values(row).run();
+
+    // Put the emoji on the message so players have something to click. A
+    // failure here is worth reporting but not worth losing the binding over —
+    // somebody can always react first.
+    const reacted = await discord
+      .addReaction(input.channelId, input.messageId, input.emoji)
+      .then(() => true)
+      .catch(() => false);
+
+    return { binding: row, reacted };
+  });
+
+  app.delete('/admin/discord/roles/reactions/:id', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+
+    const result = db.delete(discordReactionRoles).where(eq(discordReactionRoles.id, id)).run();
+    if (result.changes === 0) throw ApiError.notFound('That binding no longer exists');
+    return { deleted: true };
+  });
+
   /** Clearing a secret needs to be possible without a way to read it back. */
   app.delete('/admin/discord/secret/:which', async (request) => {
     const { which } = request.params as { which: string };
@@ -1090,6 +1236,23 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/discord/tickets', async (request) => {
     const { status } = request.query as { status?: string };
     return { tickets: discordBot.listTickets(status), counts: discordBot.ticketCounts() };
+  });
+
+  /**
+   * Close a ticket and drop the record of it.
+   *
+   * The in-Discord close button keeps the row on purpose, so there is still an
+   * account of who asked for what. This is for the ones an operator wants gone
+   * outright — spam, duplicates, anything long since dealt with.
+   */
+  app.delete('/admin/discord/tickets/:id', async (request, reply) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+
+    if (!(await discordBot.deleteTicket(id))) {
+      throw ApiError.notFound('That ticket no longer exists');
+    }
+    return reply.code(200).send({ deleted: true });
   });
 
   app.patch('/admin/discord/tickets/settings', async (request) => {

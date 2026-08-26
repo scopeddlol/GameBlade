@@ -344,6 +344,8 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     }
 
     patch.matchStatus = input.matchStatus ?? 'manual';
+    // Hand curation is exactly what the automatic pass must not undo.
+    patch.metadataLockedAt = isoNow();
 
     db.update(games).set(patch).where(eq(games.id, id)).run();
     return { ok: true };
@@ -500,6 +502,9 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
             selector: rule.selector,
             comparator: rule.comparator,
             value: rule.value ?? null,
+            // Stored as null rather than [] so a rule with no labels reads the
+            // same as every rule written before tags existed.
+            tags: rule.tags && rule.tags.length > 0 ? rule.tags : null,
             createdAt: isoNow(),
           })
           .run();

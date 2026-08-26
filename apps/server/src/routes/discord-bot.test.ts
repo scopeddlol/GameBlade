@@ -290,4 +290,97 @@ describe('the Discord bot', () => {
       expect(response.statusCode, `${method} ${url}`).toBe(401);
     }
   });
+
+  /**
+   * Roles handed out without anybody pressing anything in the panel.
+   *
+   * The binding is what the gateway matches a reaction against, so what
+   * matters here is that it is stored in the shape the gateway reports and
+   * that one emoji cannot be bound twice on a message.
+   */
+  describe('reaction roles', () => {
+    const bind = (over: Record<string, unknown> = {}) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/admin/discord/roles/reactions',
+        headers: auth(),
+        payload: {
+          channelId: '111',
+          messageId: '222',
+          emoji: '🎮',
+          roleId: '333',
+          ...over,
+        },
+      });
+
+    it('refuses a binding before the server ID is set', async () => {
+      app.gameblade.settings.update({ discordGuildId: null });
+      expect((await bind()).statusCode).toBe(400);
+    });
+
+    it('stores a binding and lists it back', async () => {
+      app.gameblade.settings.update({ discordGuildId: '999' });
+      expect((await bind()).statusCode).toBe(200);
+
+      const listed = await app.inject({
+        method: 'GET',
+        url: '/api/admin/discord/roles',
+        headers: auth(),
+      });
+      const body = listed.json() as { bindings: Array<{ emoji: string; roleId: string }> };
+      expect(body.bindings).toContainEqual(expect.objectContaining({ emoji: '🎮', roleId: '333' }));
+    });
+
+    it('refuses the same emoji twice on one message', async () => {
+      app.gameblade.settings.update({ discordGuildId: '999' });
+      await bind({ messageId: '444', emoji: '⭐' });
+      // Two roles on one emoji would make the outcome depend on row order.
+      expect((await bind({ messageId: '444', emoji: '⭐', roleId: '555' })).statusCode).toBe(409);
+    });
+
+    it('allows the same emoji on a different message', async () => {
+      app.gameblade.settings.update({ discordGuildId: '999' });
+      await bind({ messageId: '666', emoji: '🔥' });
+      expect((await bind({ messageId: '777', emoji: '🔥' })).statusCode).toBe(200);
+    });
+
+    it('removes a binding', async () => {
+      app.gameblade.settings.update({ discordGuildId: '999' });
+      const created = await bind({ messageId: '888', emoji: '💀' });
+      const { binding } = created.json() as { binding: { id: string } };
+
+      const removed = await app.inject({
+        method: 'DELETE',
+        url: `/api/admin/discord/roles/reactions/${binding.id}`,
+        headers: auth(),
+      });
+      expect(removed.statusCode).toBe(200);
+    });
+
+    it('saves the auto-role and reports that it needs the privileged intent', async () => {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/api/admin/discord/roles',
+        headers: auth(),
+        payload: { autoRoleId: '424242' },
+      });
+      expect(response.json()).toMatchObject({ autoRoleId: '424242', needsMembersIntent: true });
+    });
+
+    it('clears the auto-role with an empty string', async () => {
+      await app.inject({
+        method: 'PATCH',
+        url: '/api/admin/discord/roles',
+        headers: auth(),
+        payload: { autoRoleId: '424242' },
+      });
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/api/admin/discord/roles',
+        headers: auth(),
+        payload: { autoRoleId: '' },
+      });
+      expect(response.json()).toMatchObject({ autoRoleId: '', needsMembersIntent: false });
+    });
+  });
 });

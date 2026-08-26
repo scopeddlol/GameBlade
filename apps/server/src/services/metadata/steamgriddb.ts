@@ -1,4 +1,10 @@
-import { HttpError, REQUEST_TIMEOUT_MS, RateLimiter, withRetry } from '../../lib/ratelimit.js';
+import {
+  HttpError,
+  REQUEST_TIMEOUT_MS,
+  RateLimiter,
+  requestSignal,
+  withRetry,
+} from '../../lib/ratelimit.js';
 
 const API_URL = 'https://www.steamgriddb.com/api/v2';
 
@@ -38,7 +44,7 @@ export class SteamGridDbClient {
 
   constructor(private readonly apiKey: string) {}
 
-  private async request<T>(path: string): Promise<T | null> {
+  private async request<T>(path: string, signal?: AbortSignal): Promise<T | null> {
     return withRetry(() =>
       this.limiter.run(async () => {
         const response = await fetch(`${API_URL}${path}`, {
@@ -46,7 +52,7 @@ export class SteamGridDbClient {
             Authorization: `Bearer ${this.apiKey}`,
             Accept: 'application/json',
           },
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: requestSignal(REQUEST_TIMEOUT_MS, signal),
         });
 
         // A game with no artwork of a given kind is a normal, non-exceptional result.
@@ -70,8 +76,11 @@ export class SteamGridDbClient {
     );
   }
 
-  async search(term: string): Promise<SgdbGame[]> {
-    const data = await this.request<SgdbGame[]>(`/search/autocomplete/${encodeURIComponent(term)}`);
+  async search(term: string, signal?: AbortSignal): Promise<SgdbGame[]> {
+    const data = await this.request<SgdbGame[]>(
+      `/search/autocomplete/${encodeURIComponent(term)}`,
+      signal,
+    );
     return data ?? [];
   }
 

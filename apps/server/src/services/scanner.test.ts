@@ -22,7 +22,13 @@ function stubDb(pending: Game[]): Db {
   return { select: () => chain } as unknown as Db;
 }
 
-function stubMetadata(overrides: Partial<MetadataService> = {}): MetadataService {
+function stubMetadata(
+  overrides: Partial<{
+    hasIgdb: boolean;
+    hasSteamGridDb: boolean;
+    enrich: (game: Game, signal?: AbortSignal) => Promise<void>;
+  }> = {},
+): MetadataService {
   return {
     hasIgdb: true,
     hasSteamGridDb: false,
@@ -103,6 +109,17 @@ describe('matchPending on its own', () => {
     expect(scanner.getProgress().state).toBe('idle');
   });
 
+  it('records what it did in the activity log', async () => {
+    const scanner = new ScannerService(stubDb([game('a')]), stubMetadata(), silentLogger);
+
+    await scanner.matchPending();
+
+    // The panel reads this; an empty log is what "no logs to send you" was.
+    const log = scanner.getProgress().log;
+    expect(log.length).toBeGreaterThan(0);
+    expect(log.some((line) => line.message.includes('metadata'))).toBe(true);
+  });
+
   it('does not start a second run while one is in flight', async () => {
     let release = () => {};
     const blocked = new Promise<void>((resolve) => {
@@ -123,5 +140,52 @@ describe('matchPending on its own', () => {
     release();
     await first;
     expect(scanner.getProgress().state).toBe('idle');
+  });
+});
+
+/**
+ * Moving past a title the run is stuck on.
+ *
+ * The point of the abort is that the skip lands immediately rather than once
+ * the provider request finishes on its own, so the test holds `enrich` open
+ * until its signal fires.
+ */
+describe('skipping the current item', () => {
+  it('says so when there is nothing to skip', () => {
+    const scanner = new ScannerService(stubDb([]), stubMetadata(), silentLogger);
+    expect(scanner.skipCurrent()).toBe(false);
+  });
+
+  it('aborts the in-flight provider call and moves on', async () => {
+    let sawAbort = false;
+    const scanner = new ScannerService(
+      stubDb([game('stuck'), game('next')]),
+      stubMetadata({
+        enrich: (_game, signal) =>
+          new Promise((_resolve, reject) => {
+            if (!signal) return;
+            signal.addEventListener('abort', () => {
+              sawAbort = true;
+              reject(new Error('aborted'));
+            });
+          }),
+      }),
+      silentLogger,
+    );
+
+    const run = scanner.matchPending();
+    // Let the loop reach the first game and start waiting on the provider.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(scanner.skipCurrent()).toBe(true);
+
+    // The second game hangs too, so skip it as well to let the run finish.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    scanner.skipCurrent();
+    await run;
+
+    expect(sawAbort).toBe(true);
+    const progress = scanner.getProgress();
+    expect(progress.skipped).toBeGreaterThan(0);
+    expect(progress.state).toBe('idle');
   });
 });

@@ -164,6 +164,16 @@ export interface LibraryInfo {
 export interface ScanProgress {
   libraryId: string | null;
   state: 'idle' | 'scanning' | 'matching' | 'error';
+  /**
+   * What the run is doing right now, which `state` alone does not say.
+   *
+   * `reading` is the walk of a library root, which reports no count because it
+   * does not know one yet — the phase that used to be indistinguishable from a
+   * stall.
+   */
+  phase: 'reading' | 'indexing' | 'matching' | null;
+  /** Name of the library being worked on, for a run covering several. */
+  library: string | null;
   processed: number;
   total: number;
   currentItem: string | null;
@@ -173,6 +183,16 @@ export interface ScanProgress {
   added: number;
   updated: number;
   removed: number;
+  /** Most recent activity lines, newest last, for the admin panel to show. */
+  log: ScanLogEntry[];
+  /** How many items the operator has skipped in this run. */
+  skipped: number;
+}
+
+export interface ScanLogEntry {
+  at: string;
+  level: 'info' | 'warn';
+  message: string;
 }
 
 export interface InviteInfo {

@@ -85,6 +85,30 @@ export const invites = sqliteTable(
   (t) => [uniqueIndex('invites_code_idx').on(t.code)],
 );
 
+/**
+ * A single-use password reset an admin hands to a player who cannot sign in.
+ *
+ * Stored hashed, like a session token: the link is the credential, so a copy of
+ * the database must not yield working ones.
+ */
+export const passwordResets = sqliteTable(
+  'password_resets',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: text('created_at').notNull().default(now),
+    expiresAt: text('expires_at').notNull(),
+    usedAt: text('used_at'),
+  },
+  (t) => [
+    index('password_resets_user_idx').on(t.userId),
+    index('password_resets_expires_idx').on(t.expiresAt),
+  ],
+);
+
 export const libraries = sqliteTable(
   'libraries',
   {
@@ -153,12 +177,22 @@ export const games = sqliteTable(
     scannedAt: text('scanned_at'),
     /** Set when the files vanish; kept so metadata survives a temporary unmount. */
     missingAt: text('missing_at'),
+    /**
+     * Set the moment a provider writes metadata onto this game.
+     *
+     * Enrichment is a first-time job, not something every scan redoes. Once
+     * this is stamped the automatic pass leaves the row alone, so a title
+     * corrected by hand — or artwork chosen deliberately — survives the next
+     * scan. Clearing it puts the game back in the queue.
+     */
+    metadataLockedAt: text('metadata_locked_at'),
   },
   (t) => [
     uniqueIndex('games_library_relpath_idx').on(t.libraryId, t.relPath),
     index('games_sort_title_idx').on(t.sortTitle),
     index('games_match_status_idx').on(t.matchStatus),
     index('games_missing_idx').on(t.missingAt),
+    index('games_metadata_lock_idx').on(t.metadataLockedAt),
   ],
 );
 
@@ -873,6 +907,14 @@ export const gameAchievementRules = sqliteTable(
       .notNull()
       .default('truthy'),
     value: text('value'),
+    /**
+     * Operator labels for this rule.
+     *
+     * On the rule rather than the achievement on purpose: one achievement
+     * needs a rule per save layout it might be found in, and the tag is what
+     * distinguishes them.
+     */
+    tags: text('tags', { mode: 'json' }).$type<string[]>(),
     createdAt: text('created_at').notNull().default(now),
   },
   (t) => [
@@ -880,6 +922,31 @@ export const gameAchievementRules = sqliteTable(
     // Includes the source: a game needs one rule per candidate emulator
     // layout, since which one a given copy uses is not knowable up front.
     uniqueIndex('game_achievement_rules_key_idx').on(t.gameId, t.achievementKey, t.sourceTemplate),
+  ],
+);
+
+/**
+ * One emoji on one message, granting one role.
+ *
+ * Keyed on message and emoji together, because a single message normally
+ * carries several choices. The emoji is kept in the shape the gateway reports:
+ * a bare unicode character, or `name:id` for a custom one.
+ */
+export const discordReactionRoles = sqliteTable(
+  'discord_reaction_roles',
+  {
+    id: text('id').primaryKey(),
+    guildId: text('guild_id').notNull(),
+    channelId: text('channel_id').notNull(),
+    messageId: text('message_id').notNull(),
+    emoji: text('emoji').notNull(),
+    roleId: text('role_id').notNull(),
+    note: text('note'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('discord_reaction_roles_key_idx').on(t.messageId, t.emoji),
+    index('discord_reaction_roles_message_idx').on(t.messageId),
   ],
 );
 
