@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, CloudDownload, Eye, EyeOff, Search } from 'lucide-react';
+import { Check, CloudDownload, Eye, EyeOff, Search, Trophy } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Badge, EmptyState, FormError, Notice, Spinner, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
@@ -128,6 +128,8 @@ export function AdminSavePathsPage() {
         Where each game keeps its saves, matched against a public database of save locations rather
         than found by playing every title. Nothing is written until you tick it.
       </p>
+
+      <AchievementGaps />
 
       <FormError message={error} />
       <Notice
@@ -310,5 +312,180 @@ export function AdminSavePathsPage() {
         </>
       )}
     </div>
+  );
+}
+
+interface SaveGap {
+  gameId: string;
+  title: string;
+  achievementCount: number;
+  candidates: Array<{ pathTemplate: string; ruleCount: number }>;
+}
+
+/**
+ * Games whose achievements are read out of a folder nothing is syncing.
+ *
+ * This is the same information as the manifest suggester below, arrived at
+ * from the opposite direction and far more reliably. The manifest can only
+ * help with titles it recognises; this reads what an operator has already
+ * written down. An unlock rule points at a file the game wrote into its own
+ * save folder, so every one of these games has had its save location recorded
+ * — in the achievement column, where nothing syncs it.
+ *
+ * Left alone, those players lose their achievements along with their saves the
+ * first time they move machine, which is the worse half of the bug: a save can
+ * be copied back by hand, and an unlock cannot.
+ */
+function AchievementGaps() {
+  const queryClient = useQueryClient();
+  const [ticked, setTicked] = useState<Record<string, boolean>>({});
+  const [chosen, setChosen] = useState<Record<string, string>>({});
+  const [failure, setFailure] = useState<string | null>(null);
+  const [written, setWritten] = useState<number | null>(null);
+
+  const gapsQuery = useQuery({
+    queryKey: ['admin', 'save-gaps'],
+    queryFn: () =>
+      api.get<{ gaps: SaveGap[]; gamesWithoutSaveRule: number }>('/admin/save-rules/gaps'),
+  });
+
+  const apply = useMutation({
+    mutationFn: (rules: Array<{ gameId: string; pathTemplate: string; include: null }>) =>
+      api.post<{ applied: number }>('/admin/save-rules/from-achievements', { rules }),
+    onSuccess: (result) => {
+      setWritten(result.applied);
+      setTicked({});
+      setFailure(null);
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'save-gaps'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'save-manifest', 'suggestions'] });
+    },
+    onError: (caught) =>
+      setFailure(
+        caught instanceof ApiRequestError ? caught.message : 'Could not write those rules.',
+      ),
+  });
+
+  const gaps = gapsQuery.data?.gaps ?? [];
+  const orphaned = gapsQuery.data?.gamesWithoutSaveRule ?? 0;
+
+  const pathFor = (gap: SaveGap) => chosen[gap.gameId] ?? gap.candidates[0]?.pathTemplate ?? '';
+
+  const selected = gaps
+    .filter((gap) => ticked[gap.gameId])
+    .map((gap) => ({ gameId: gap.gameId, pathTemplate: pathFor(gap), include: null as null }))
+    .filter((rule) => rule.pathTemplate !== '');
+
+  if (gapsQuery.isLoading) return <SectionSkeletonFallback />;
+  if (gaps.length === 0) {
+    return orphaned > 0 ? (
+      <section className="gb-card p-4">
+        <p className="text-ink-400 text-xs">
+          {orphaned} {orphaned === 1 ? 'game has' : 'games have'} no save rule, and none of them has
+          achievement rules to derive one from. The suggestions below are where to start.
+        </p>
+      </section>
+    ) : null;
+  }
+
+  return (
+    <section className="gb-card space-y-3 p-5">
+      <div>
+        <h2 className="flex items-center gap-2 text-sm font-semibold tracking-wide uppercase">
+          <Trophy className="h-4 w-4" aria-hidden />
+          Achievements without cloud saves
+        </h2>
+        <p className="text-ink-400 mt-1 text-xs leading-relaxed">
+          These {gaps.length === 1 ? 'game reads its' : `${gaps.length} games read their`}{' '}
+          achievements out of a folder nothing is syncing — so the unlocks live on one machine and
+          vanish with it. The folder is taken from the unlock rules themselves, which is where it
+          was already written down.
+          {orphaned > gaps.length
+            ? ` ${orphaned} games have no save rule in total; these are the ones that can be fixed from what is already here.`
+            : ''}
+        </p>
+      </div>
+
+      <FormError message={failure} />
+      <Notice
+        message={written === null ? null : `${written} save ${written === 1 ? 'rule' : 'rules'} written.`}
+      />
+
+      <div className="divide-ink-700/70 divide-y">
+        {gaps.map((gap) => (
+          <label key={gap.gameId} className="flex items-start gap-3 py-2.5">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={Boolean(ticked[gap.gameId])}
+              onChange={(event) =>
+                setTicked((current) => ({ ...current, [gap.gameId]: event.target.checked }))
+              }
+            />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">
+                {gap.title}{' '}
+                <Badge tone="warning">
+                  {gap.achievementCount}{' '}
+                  {gap.achievementCount === 1 ? 'achievement' : 'achievements'}
+                </Badge>
+              </p>
+              {gap.candidates.length === 1 ? (
+                <p className="text-ink-400 mt-1 font-mono text-xs break-all">
+                  {gap.candidates[0]?.pathTemplate}
+                </p>
+              ) : (
+                // Two layouts — a retail install and an emulator, usually. The
+                // operator picks; guessing here writes a rule that syncs the
+                // wrong folder and looks like it worked.
+                <select
+                  className="gb-input mt-1.5 font-mono text-xs"
+                  value={pathFor(gap)}
+                  aria-label={`Save location for ${gap.title}`}
+                  onChange={(event) =>
+                    setChosen((current) => ({ ...current, [gap.gameId]: event.target.value }))
+                  }
+                >
+                  {gap.candidates.map((candidate) => (
+                    <option key={candidate.pathTemplate} value={candidate.pathTemplate}>
+                      {candidate.pathTemplate} ({candidate.ruleCount}{' '}
+                      {candidate.ruleCount === 1 ? 'rule' : 'rules'})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </label>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          className="gb-btn-primary"
+          disabled={selected.length === 0 || apply.isPending}
+          onClick={() => apply.mutate(selected)}
+        >
+          {apply.isPending ? <Spinner className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+          Create {selected.length} save {selected.length === 1 ? 'rule' : 'rules'}
+        </button>
+        <button
+          type="button"
+          className="gb-btn-ghost"
+          onClick={() =>
+            setTicked(Object.fromEntries(gaps.map((gap) => [gap.gameId, true])))
+          }
+        >
+          Select all
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function SectionSkeletonFallback() {
+  return (
+    <section className="gb-card p-5">
+      <RowSkeleton rows={3} />
+    </section>
   );
 }

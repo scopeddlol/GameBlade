@@ -4,23 +4,29 @@ import {
   DISCORD_PRESENCE_LABELS,
   DISCORD_PRESENCE_STATUS,
   MAX_DISCORD_ATTACHMENT_BYTES,
+  extractMentions,
+  mentionToken,
   type DiscordActivityType,
   type DiscordBotState,
   type DiscordPresenceStatus,
+  type MentionKind,
 } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  AtSign,
+  Hash,
   ImagePlus,
   LifeBuoy,
   Play,
   RefreshCw,
   Send,
+  Shield,
   Square,
   Ticket,
   Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Badge, EmptyState, Field, RowSkeleton, Spinner } from '../../components/ui.js';
 import { api, ApiRequestError, uploadFile } from '../../lib/api.js';
 import { formatBytes } from '../../lib/format.js';
@@ -389,7 +395,15 @@ export function PostSection({
   onNotice: (message: string | null) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [post, setPost] = useState({ title: '', message: '', asEmbed: true, channelId: '' });
+  const [post, setPost] = useState({
+    title: '',
+    message: '',
+    asEmbed: true,
+    channelId: '',
+    pingMentions: true,
+    allowEveryone: false,
+  });
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [image, setImage] = useState<{
     id: string;
     name: string;
@@ -436,11 +450,13 @@ export function PostSection({
         asEmbed: post.asEmbed,
         channelId: post.channelId || undefined,
         imageMediaId: image?.id,
+        pingMentions: post.pingMentions,
+        allowEveryone: post.allowEveryone,
       }),
     onSuccess: () => {
       onError(null);
       onNotice('Posted.');
-      setPost({ title: '', message: '', asEmbed: true, channelId: post.channelId });
+      setPost({ ...post, title: '', message: '' });
       setImage(null);
     },
     onError: (caught) =>
@@ -475,15 +491,27 @@ export function PostSection({
         />
       </Field>
 
-      <Field label="Message" htmlFor="a-body" hint="Optional when a picture is attached.">
+      <Field
+        label="Message"
+        htmlFor="a-body"
+        hint="Optional when a picture is attached. Use the buttons below to tag someone."
+      >
         <textarea
           id="a-body"
+          ref={bodyRef}
           className="gb-input min-h-28"
           maxLength={1800}
           value={post.message}
           onChange={(event) => setPost({ ...post, message: event.target.value })}
         />
       </Field>
+
+      <MentionBar
+        guild={guild}
+        onInsert={(token) =>
+          setPost((current) => ({ ...current, message: insertAt(bodyRef.current, current.message, token) }))
+        }
+      />
 
       {/* --------------------------------------------------------- image */}
       <Field
@@ -551,6 +579,14 @@ export function PostSection({
           (reads as the server speaking; unchecked reads as a person)
         </span>
       </label>
+
+      <MentionOptions
+        text={`${post.title} ${post.message}`}
+        asEmbed={post.asEmbed}
+        pingMentions={post.pingMentions}
+        allowEveryone={post.allowEveryone}
+        onChange={(patch) => setPost({ ...post, ...patch })}
+      />
 
       <button
         type="button"
@@ -1147,5 +1183,231 @@ export function RoleSection({
         ) : null}
       </div>
     </section>
+  );
+}
+
+/* ---------------------------------------------------------------- mentions */
+
+interface GuildMember {
+  id: string;
+  name: string;
+  /** Whether this person has linked their Discord to an account here. */
+  linked: boolean;
+}
+
+/**
+ * Inserts text where the cursor is, rather than at the end.
+ *
+ * Appending would make the buttons useless for the thing they are for:
+ * addressing a sentence to somebody halfway through writing it.
+ */
+function insertAt(field: HTMLTextAreaElement | null, current: string, token: string): string {
+  if (!field) return current ? `${current} ${token}` : token;
+
+  const start = field.selectionStart ?? current.length;
+  const end = field.selectionEnd ?? start;
+  const before = current.slice(0, start);
+  const after = current.slice(end);
+  const spacer = before && !before.endsWith(' ') ? ' ' : '';
+  const next = `${before}${spacer}${token} ${after}`;
+
+  // Put the caret after what was just inserted, so typing carries on from
+  // there instead of jumping to the end of the box.
+  const caret = before.length + spacer.length + token.length + 1;
+  queueMicrotask(() => {
+    field.focus();
+    field.setSelectionRange(caret, caret);
+  });
+
+  return next;
+}
+
+/**
+ * The three pickers that put a real mention into the message.
+ *
+ * Typing `<@&1234…>` by hand works and nobody does it: the snowflake has to be
+ * copied out of Discord with developer mode on, and a mistyped digit produces
+ * a post that looks fine and pings nobody. These read the guild the bot is
+ * already in.
+ */
+function MentionBar({
+  guild,
+  onInsert,
+}: {
+  guild: ReturnType<typeof useGuild>;
+  onInsert: (token: string) => void;
+}) {
+  const membersQuery = useQuery({
+    queryKey: ['admin', 'discord', 'members'],
+    queryFn: () => api.get<{ members: GuildMember[] }>('/admin/discord/members'),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+
+  const roles = guild.data?.roles ?? [];
+  const channels = (guild.data?.channels ?? []).filter((channel) =>
+    TEXT_CHANNEL_TYPES.includes(channel.type),
+  );
+  const members = membersQuery.data?.members ?? [];
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <MentionSelect
+        label="Tag someone"
+        icon={<AtSign className="h-3.5 w-3.5" aria-hidden />}
+        kind="user"
+        options={members.map((member) => ({
+          id: member.id,
+          // Marking who is linked here matters: those are the people this
+          // server can actually be sure about. The rest come from Discord.
+          label: member.linked ? `${member.name} (linked)` : member.name,
+        }))}
+        empty="Nobody has linked their Discord yet."
+        onPick={onInsert}
+      />
+      <MentionSelect
+        label="Tag a role"
+        icon={<Shield className="h-3.5 w-3.5" aria-hidden />}
+        kind="role"
+        options={roles.map((role) => ({ id: role.id, label: `@${role.name}` }))}
+        empty="The bot cannot see this server's roles."
+        onPick={onInsert}
+      />
+      <MentionSelect
+        label="Link a channel"
+        icon={<Hash className="h-3.5 w-3.5" aria-hidden />}
+        kind="channel"
+        options={channels.map((channel) => ({ id: channel.id, label: `#${channel.name}` }))}
+        empty="The bot cannot see this server's channels."
+        onPick={onInsert}
+      />
+    </div>
+  );
+}
+
+function MentionSelect({
+  label,
+  icon,
+  kind,
+  options,
+  empty,
+  onPick,
+}: {
+  label: string;
+  icon: ReactNode;
+  kind: MentionKind;
+  options: Array<{ id: string; label: string }>;
+  empty: string;
+  onPick: (token: string) => void;
+}) {
+  if (options.length === 0) {
+    return (
+      <span className="text-ink-500 text-xs" title={empty}>
+        {label}: unavailable
+      </span>
+    );
+  }
+
+  return (
+    <label className="flex items-center gap-1.5 text-xs">
+      <span className="text-ink-400 flex items-center gap-1">
+        {icon}
+        {label}
+      </span>
+      <select
+        className="gb-input py-1 text-xs"
+        value=""
+        onChange={(event) => {
+          if (!event.target.value) return;
+          onPick(mentionToken(kind, event.target.value));
+          // Reset so picking the same person twice inserts twice.
+          event.target.value = '';
+        }}
+      >
+        <option value="">Choose…</option>
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/**
+ * What the mentions in the draft will actually do.
+ *
+ * The thing worth saying out loud, because it surprises everyone: Discord does
+ * not notify for anything inside an embed. A role pill in a description looks
+ * exactly like a working mention and reaches nobody. The only fix is to repeat
+ * the tokens in the message content above the embed, so that is offered here
+ * rather than left as a discovery.
+ */
+function MentionOptions({
+  text,
+  asEmbed,
+  pingMentions,
+  allowEveryone,
+  onChange,
+}: {
+  text: string;
+  asEmbed: boolean;
+  pingMentions: boolean;
+  allowEveryone: boolean;
+  onChange: (patch: { pingMentions?: boolean; allowEveryone?: boolean }) => void;
+}) {
+  const found = extractMentions(text);
+  const tagged = found.users.length + found.roles.length;
+
+  if (tagged === 0 && !found.everyone) return null;
+
+  return (
+    <div className="bg-ink-800/50 space-y-2 rounded-lg p-3">
+      <p className="text-ink-300 text-xs">
+        {tagged > 0
+          ? `${tagged} ${tagged === 1 ? 'mention' : 'mentions'} in this post`
+          : 'This post says @everyone'}
+        {found.channels.length > 0
+          ? ` · ${found.channels.length} channel ${found.channels.length === 1 ? 'link' : 'links'}`
+          : ''}
+      </p>
+
+      {asEmbed && tagged > 0 ? (
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={pingMentions}
+            onChange={(event) => onChange({ pingMentions: event.target.checked })}
+          />
+          <span>
+            Notify the people tagged
+            <span className="text-ink-500 block text-xs">
+              Discord never sends a notification for a mention inside an embed — it renders the
+              pill and stops there. Ticking this repeats the tags on a line above the embed, which
+              is the only thing that reaches them.
+            </span>
+          </span>
+        </label>
+      ) : null}
+
+      {found.everyone ? (
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={allowEveryone}
+            onChange={(event) => onChange({ allowEveryone: event.target.checked })}
+          />
+          <span>
+            Really ping @everyone
+            <span className="text-ink-500 block text-xs">
+              Left off, the words stay in the post and notify nobody.
+            </span>
+          </span>
+        </label>
+      ) : null}
+    </div>
   );
 }

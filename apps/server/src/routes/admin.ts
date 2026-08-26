@@ -15,6 +15,7 @@ import {
   landingPageSchema,
   createLibrarySchema,
   databaseMaintenanceSchema,
+  deriveSaveTemplates,
   featuredArtworkSchema,
   featuredSchema,
   MAX_INSTALLER_BYTES,
@@ -41,11 +42,14 @@ import {
   discordRoleSettingsSchema,
   discordReactionRoleSchema,
   discordAnnounceSchema,
+  allowedMentions,
+  extractMentions,
+  pingLine,
   discordPresenceSchema,
   discordTicketSettingsSchema,
   MAX_DISCORD_ATTACHMENT_BYTES,
 } from '@gameblade/shared';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -56,6 +60,7 @@ import type { MediaStore } from '../services/media.js';
 import { toPublicUser } from '../auth/service.js';
 import {
   discordReactionRoles,
+  gameAchievementRules,
   gameFiles,
   gameSaveRules,
   games,
@@ -63,7 +68,7 @@ import {
   libraries,
   users,
 } from '../db/schema.js';
-import { maintain } from '../db/index.js';
+import { maintain, type Db } from '../db/index.js';
 import { ApiError } from '../lib/errors.js';
 import { isLikelyGameExecutable, listZipExecutables, sortCandidates } from '../lib/executables.js';
 import { newId, newInviteCode } from '../lib/ids.js';
@@ -1247,6 +1252,15 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
    * Every id on this page used to be a text box expecting a snowflake copied
    * out of a right-click menu, with no feedback until something failed to post.
    */
+  /**
+   * People the panel can offer as mention targets.
+   *
+   * Accounts linked here come from this server's own records; guild members
+   * come from Discord and only when the privileged Members intent is on. The
+   * service merges the two, so the picker works either way.
+   */
+  app.get('/admin/discord/members', async () => ({ members: await discord.listMembers() }));
+
   app.get('/admin/discord/channels', async () => {
     const [channels, roles] = await Promise.all([discord.listChannels(), discord.listRoles()]);
     return { channels, roles };
@@ -1356,9 +1370,25 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     const file = input.imageMediaId ? await readMedia(media, input.imageMediaId) : undefined;
 
+    // The permission list is built here rather than left to Discord's default,
+    // which is "notify anything that looks like a mention". Naming the exact
+    // ids the operator typed is what separates a deliberate tag from a string
+    // that merely resembles one.
+    const mentions = extractMentions(input.title, input.message);
+    const allowed = allowedMentions(mentions, { allowEveryone: input.allowEveryone });
+
     if (input.asEmbed) {
+      // Discord will not notify for anything inside an embed, whatever the
+      // token looks like — a role pill in a description reaches nobody. The
+      // fix, and the only one there is, is to repeat the mentions in the
+      // content that carries the embed.
+      const ping = input.pingMentions
+        ? pingLine(mentions, { allowEveryone: input.allowEveryone })
+        : null;
+
       await discord.postMessage(
         {
+          content: ping ?? undefined,
           embeds: [
             {
               title: input.title || undefined,
@@ -1369,13 +1399,14 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
               image: file ? { url: `attachment://${file.fileName}` } : undefined,
             },
           ],
+          allowed_mentions: allowed,
         },
         { channelId: input.channelId, file },
       );
     } else {
       const content = input.title ? `**${input.title}**\n${input.message}` : input.message;
       await discord.postMessage(
-        { content: content || undefined },
+        { content: content || undefined, allowed_mentions: allowed },
         {
           channelId: input.channelId,
           file,
@@ -1464,6 +1495,121 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
             include: entry.include ?? null,
             exclude: null,
             note: 'From the save-path manifest',
+            createdAt: isoNow(),
+          })
+          .run();
+        applied += 1;
+      }
+    });
+
+    return { applied };
+  });
+
+  /**
+   * Games whose achievements are being read out of a folder nobody is syncing.
+   *
+   * An unlock rule reads a file the game wrote into its own save directory —
+   * a Goldberg `achievements.json`, an emulator's progress log, a stats file
+   * next to the slots. So a game with unlock rules and no save rule is not a
+   * game whose save location is unknown: it is one whose save location was
+   * written down in the wrong column, and whose players will lose their
+   * achievements along with their saves the first time they move machine.
+   *
+   * The manifest suggester next door cannot help with these — it only knows
+   * titles it recognises, and this catalog's unmatched folder names are most
+   * of what it does not.
+   */
+  app.get('/admin/save-rules/gaps', async () => {
+    const withSaveRule = new Set(
+      db
+        .select({ gameId: gameSaveRules.gameId })
+        .from(gameSaveRules)
+        .all()
+        .map((row) => row.gameId),
+    );
+
+    const rules = db
+      .select({
+        gameId: gameAchievementRules.gameId,
+        sourceTemplate: gameAchievementRules.sourceTemplate,
+        achievementKey: gameAchievementRules.achievementKey,
+      })
+      .from(gameAchievementRules)
+      .all();
+
+    const sourcesByGame = new Map<string, string[]>();
+    const keysByGame = new Map<string, Set<string>>();
+    for (const rule of rules) {
+      if (withSaveRule.has(rule.gameId)) continue;
+      const list = sourcesByGame.get(rule.gameId) ?? [];
+      list.push(rule.sourceTemplate);
+      sourcesByGame.set(rule.gameId, list);
+
+      const keys = keysByGame.get(rule.gameId) ?? new Set<string>();
+      keys.add(rule.achievementKey);
+      keysByGame.set(rule.gameId, keys);
+    }
+
+    if (sourcesByGame.size === 0) {
+      return { gaps: [], gamesWithoutSaveRule: countGamesWithoutSaveRule(db, withSaveRule) };
+    }
+
+    const titles = new Map(
+      db
+        .select({ id: games.id, title: games.title })
+        .from(games)
+        .where(inArray(games.id, [...sourcesByGame.keys()]))
+        .all()
+        .map((row) => [row.id, row.title] as const),
+    );
+
+    const gaps = [...sourcesByGame.entries()]
+      .map(([gameId, sources]) => ({
+        gameId,
+        title: titles.get(gameId) ?? gameId,
+        achievementCount: keysByGame.get(gameId)?.size ?? 0,
+        candidates: deriveSaveTemplates(sources),
+      }))
+      // A game whose rules all read bare filenames yields nothing to propose,
+      // and offering a row with no action on it is just noise.
+      .filter((gap) => gap.candidates.length > 0 && titles.has(gap.gameId))
+      .sort((a, b) => a.title.localeCompare(b.title));
+
+    return { gaps, gamesWithoutSaveRule: countGamesWithoutSaveRule(db, withSaveRule) };
+  });
+
+  /** Writes the chosen folders as save rules. */
+  app.post('/admin/save-rules/from-achievements', async (request) => {
+    const input = applySaveSuggestionsSchema.parse(request.body);
+    let applied = 0;
+
+    db.transaction((tx) => {
+      for (const entry of input.rules) {
+        const game = tx
+          .select({ id: games.id })
+          .from(games)
+          .where(eq(games.id, entry.gameId))
+          .get();
+        if (!game) continue;
+
+        // Deliberately does not overwrite: this list is built from games with
+        // no rule, so a row that has gained one since the page loaded has been
+        // settled by somebody and should not be quietly replaced.
+        const existing = tx
+          .select({ id: gameSaveRules.id })
+          .from(gameSaveRules)
+          .where(eq(gameSaveRules.gameId, entry.gameId))
+          .get();
+        if (existing) continue;
+
+        tx.insert(gameSaveRules)
+          .values({
+            id: newId('svr'),
+            gameId: entry.gameId,
+            pathTemplate: entry.pathTemplate,
+            include: entry.include ?? null,
+            exclude: null,
+            note: 'Derived from this game\'s achievement rules',
             createdAt: isoNow(),
           })
           .run();
@@ -1595,4 +1741,20 @@ async function readMedia(store: MediaStore, mediaId: string): Promise<DiscordUpl
     contentType: record.contentType,
     bytes: Buffer.concat(chunks),
   };
+}
+
+/**
+ * How many live games have no save rule at all.
+ *
+ * The headline the gap list needs: "thirty of your games cannot sync" is the
+ * problem, and the rows below it are the share of that problem this page can
+ * do something about.
+ */
+function countGamesWithoutSaveRule(db: Db, withSaveRule: Set<string>): number {
+  return db
+    .select({ id: games.id })
+    .from(games)
+    .where(isNull(games.missingAt))
+    .all()
+    .filter((row) => !withSaveRule.has(row.id)).length;
 }

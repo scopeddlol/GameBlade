@@ -848,6 +848,23 @@ export const discordAnnounceSchema = z.object({
   channelId: z.string().trim().max(64).optional(),
   /** A media id already uploaded to this server, attached to the message. */
   imageMediaId: z.string().trim().max(64).optional(),
+  /**
+   * Repeat the embed's mentions above it, so they actually notify.
+   *
+   * Discord renders `<@&id>` inside an embed as a role pill and notifies
+   * nobody — that is its rule, not a formatting mistake. The only way an
+   * embed addressed to a role reaches that role is a content line carrying
+   * the same tokens, which is what this asks for. Meaningless without an
+   * embed, and ignored there: plain content already notifies.
+   */
+  pingMentions: z.boolean().default(true),
+  /**
+   * Permit `@everyone` and `@here`.
+   *
+   * Off unless asked for, and separate from the mentions above, because it is
+   * the one mention nobody should be able to send by accident.
+   */
+  allowEveryone: z.boolean().default(false),
 });
 export type DiscordAnnounceInput = z.infer<typeof discordAnnounceSchema>;
 
