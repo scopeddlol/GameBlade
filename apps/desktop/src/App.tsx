@@ -344,7 +344,11 @@ function Shell() {
         <UpdateBanner />
         <OfflineBanner />
 
-        <div className="scroll" ref={scrollRef}>
+        {/* Messages fills the window instead of flowing down it: the thread
+            and the conversation list each scroll inside themselves, so the
+            composer stays on the bottom edge rather than moving with however
+            much history happens to be above it. */}
+        <div className={clsx('scroll', tab === 'messages' && 'scroll-fill')} ref={scrollRef}>
           {/* Keyed on the tab so React remounts the wrapper and the enter
               animation actually replays; without the key the class is already
               on the element and the switch is a hard cut. */}

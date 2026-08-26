@@ -3600,7 +3600,7 @@ textarea::placeholder {
   cursor: pointer;
 }
 .discover-open:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--blade-500);
   outline-offset: 3px;
   border-radius: var(--radius-sm);
 }
@@ -3904,7 +3904,7 @@ textarea::placeholder {
 }
 .request-body-link:hover .request-title,
 .request-body-link:focus-visible .request-title {
-  color: var(--accent);
+  color: var(--blade-500);
 }
 
 /* --------------------------------------------------------- the media viewer */
@@ -4053,7 +4053,7 @@ textarea::placeholder {
 }
 .media-viewer-thumb.active {
   opacity: 1;
-  border-color: var(--accent);
+  border-color: var(--blade-500);
 }
 .media-viewer-thumb img,
 .media-viewer-thumb .skeleton {
@@ -4256,8 +4256,8 @@ textarea::placeholder {
   align-items: center;
   gap: 12px;
   padding: 10px 16px;
-  background: color-mix(in srgb, var(--warning, #f6c344) 12%, var(--ink-900));
-  border-bottom: 1px solid color-mix(in srgb, var(--warning, #f6c344) 35%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, var(--ink-900));
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
   color: var(--ink-100);
 }
 .offline-banner > span {
@@ -4276,59 +4276,66 @@ textarea::placeholder {
 
 /* -------------------------------------------------------------- messages */
 
-/* A list beside a thread, both filling the height: a chat that scrolls the
-   whole page puts the composer somewhere different depending on how much
-   history there is, which is the one place it must never move. */
-.messages-tab {
-  height: 100%;
-  min-height: 0;
+/* A tab that fills the window rather than flowing down it. The scroll
+   container the shell wraps every tab in is switched off for this one, so the
+   thread and the list scroll inside themselves and the composer sits on the
+   bottom edge — where it belongs whether there are two messages above it or
+   two thousand. */
+.scroll.scroll-fill {
+  overflow: hidden;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  min-height: 0;
 }
-.messages-layout {
+.scroll.scroll-fill > .tab-enter {
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
-  gap: 16px;
+  display: flex;
 }
+
+.messages-tab {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(210px, 290px) minmax(0, 1fr);
+}
+.messages-offline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------------------------------------------------------- the sidebar */
 
 .messages-sidebar {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  overflow-y: auto;
-  padding-right: 4px;
+  border-right: 1px solid var(--ink-800);
+  background: var(--ink-900);
 }
 .messages-sidebar-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid var(--ink-800);
 }
 .messages-sidebar-head h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 19px;
 }
-
-/* Said once, at the top, rather than left to be discovered — or not. */
-.messages-privacy {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-md);
-  background: var(--ink-850);
-  color: var(--ink-400);
-  font-size: 11px;
-  line-height: 1.4;
+.messages-sidebar-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  scrollbar-width: thin;
 }
-.messages-privacy svg {
-  flex-shrink: 0;
-  margin-top: 2px;
+.messages-sidebar-empty {
+  padding: 8px 6px;
+  line-height: 1.5;
 }
 
 .conversation-list {
@@ -4367,11 +4374,17 @@ textarea::placeholder {
   flex-direction: column;
   gap: 1px;
 }
-.conversation-row-text strong {
+/* Both lines are one line each, whatever is in them: a preview that wraps
+   makes the rows different heights and the list stops scanning cleanly. */
+.conversation-row-text strong,
+.conversation-row-text .muted {
   font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.conversation-row-text .muted {
+  font-size: 12px;
 }
 .conversation-group-icon {
   display: flex;
@@ -4385,53 +4398,53 @@ textarea::placeholder {
   color: var(--ink-300);
 }
 
+/* ----------------------------------------------------------- the thread */
+
 .messages-thread {
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--ink-800);
-  border-radius: var(--radius-lg);
-  background: var(--ink-900);
-  overflow: hidden;
+  background: var(--ink-950);
+}
+.messages-error {
+  padding: 10px 16px 0;
 }
 .thread-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--ink-800);
+}
+.thread-head-text {
+  min-width: 0;
 }
 .thread-head h2 {
   margin: 0;
   font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .thread-head p {
   margin: 0;
 }
 
-.thread-notice {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  padding: 10px 16px;
-  font-size: 12px;
-  background: color-mix(in srgb, var(--warning, #f6c344) 12%, transparent);
-  color: var(--ink-200);
-}
-.thread-notice.danger {
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-}
-
+/* The messages sit at the bottom of the space rather than the top, so a
+   conversation with three messages in it looks like a conversation rather
+   than three lines stranded under a header. */
 .thread-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
+  justify-content: flex-end;
   gap: 10px;
+  scrollbar-width: thin;
 }
 .thread-empty {
   margin: auto;
@@ -4443,7 +4456,9 @@ textarea::placeholder {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  max-width: 78%;
+  max-width: min(78%, 720px);
+  /* Never squashed by `justify-content: flex-end` on the column above. */
+  flex-shrink: 0;
 }
 /* Your own messages on the right, as every chat has done for twenty years. */
 .message-row.mine {
@@ -4465,11 +4480,11 @@ textarea::placeholder {
   padding: 8px 12px;
   border-radius: 14px;
   background: var(--ink-800);
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.45;
 }
 .message-row.mine .message-bubble {
-  background: color-mix(in srgb, var(--accent) 28%, var(--ink-800));
+  background: color-mix(in srgb, var(--blade-500) 30%, var(--ink-800));
 }
 .message-author {
   font-size: 11px;
@@ -4485,23 +4500,6 @@ textarea::placeholder {
 .message-withdrawn {
   font-style: italic;
 }
-.message-attachment {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  align-self: flex-start;
-  padding: 4px 8px;
-  border: 1px solid var(--ink-700);
-  border-radius: var(--radius-sm);
-  background: var(--ink-850);
-  color: inherit;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-.message-attachment:hover:not(:disabled) {
-  border-color: var(--ink-600, var(--ink-700));
-}
 .message-meta {
   display: flex;
   align-items: center;
@@ -4509,12 +4507,46 @@ textarea::placeholder {
   font-size: 10px;
 }
 
+.message-media {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.message-media-thumb {
+  width: 160px;
+  aspect-ratio: 16 / 10;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ink-850);
+  cursor: zoom-in;
+}
+.message-media-thumb img,
+.message-media-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.message-media-pending {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* --------------------------------------------------------- the composer */
+
+/* Pinned to the bottom edge of the window, always the same height until
+   somebody writes enough to grow it. */
 .message-composer {
   border-top: 1px solid var(--ink-800);
-  padding: 10px 12px;
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  background: var(--ink-900);
 }
 .composer-row {
   display: flex;
@@ -4523,9 +4555,25 @@ textarea::placeholder {
 }
 .composer-input {
   flex: 1;
-  min-height: 38px;
-  max-height: 140px;
-  resize: vertical;
+  min-width: 0;
+  min-height: 40px;
+  max-height: 180px;
+  padding: 10px 12px;
+  resize: none;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--ink-100);
+  background: var(--ink-850);
+  border: 1px solid var(--ink-700);
+  border-radius: var(--radius-md);
+}
+.composer-input:focus {
+  outline: none;
+  border-color: var(--blade-500);
+}
+.composer-input::placeholder {
+  color: var(--ink-500);
 }
 .composer-attachments {
   list-style: none;
@@ -4552,23 +4600,9 @@ textarea::placeholder {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   max-height: 340px;
   overflow-y: auto;
-}
-/* Monospaced and spaced out, because these exist to be read to somebody. */
-.fingerprint-list {
-  list-style: none;
-  margin: 4px 0 0 38px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.fingerprint-list code {
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  color: var(--ink-300);
 }
 
 .start-conversation-option {
@@ -4589,15 +4623,29 @@ textarea::placeholder {
   border-color: var(--ink-700);
 }
 .start-conversation-option.picked {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--ink-850));
+  border-color: var(--blade-500);
+  background: color-mix(in srgb, var(--blade-500) 14%, var(--ink-850));
+}
+.start-conversation-option span:first-of-type {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-@media (max-width: 900px) {
-  .messages-layout {
-    grid-template-columns: 1fr;
+@media (max-width: 820px) {
+  .messages-tab {
+    grid-template-columns: 74px minmax(0, 1fr);
   }
-  .messages-sidebar {
-    max-height: 200px;
+  /* Down to avatars only: the thread is what matters at this width, and a
+     240px list beside it would leave neither enough room. */
+  .messages-sidebar-head h1,
+  .conversation-row-text,
+  .messages-sidebar-empty {
+    display: none;
+  }
+  .conversation-row {
+    justify-content: center;
   }
 }

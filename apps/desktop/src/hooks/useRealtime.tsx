@@ -2,6 +2,7 @@ import type { RealtimeEvent } from '@gameblade/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { listen } from '@tauri-apps/api/event';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ipc } from '../lib/ipc.js';
 import { useAchievementCheck } from './useAchievementCheck.js';
 
 interface RealtimeContextValue {
@@ -54,6 +55,21 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       graceTimer = setTimeout(() => setConnected(false), DISCONNECT_GRACE_MS);
     };
 
+    /*
+     * Asked once on mount, because the connection is *announced* by an event
+     * and an event fires once. Registering a listener is itself a round trip
+     * through the IPC bridge, so a socket that connects quickly — the normal
+     * case — opens before anything is listening, the frame is gone for good,
+     * and the app reads as disconnected for the entire time it is connected.
+     * That is what the yellow crossed-out icon was.
+     */
+    void ipc
+      .realtimeConnected()
+      .then((open) => {
+        if (open) markConnected();
+      })
+      .catch(() => undefined);
+
     const unlisteners: Array<Promise<() => void>> = [
       listen('realtime://connected', markConnected),
       listen('realtime://disconnected', markDisconnected),
@@ -80,10 +96,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
             setLastAchievement(frame);
             void queryClient.invalidateQueries({ queryKey: ['achievements'] });
             break;
-          // A message arrives sealed, exactly as it was stored — the gateway
-          // is as unable to read it as the database is. So this refreshes the
-          // thread rather than inserting the frame: decryption belongs to the
-          // component that holds the conversation key.
+          // Refreshes the thread rather than splicing the frame in, so one
+          // source of truth draws the list however the message arrived.
           case 'message':
             void queryClient.invalidateQueries({
               queryKey: ['messages', 'thread', frame.message.conversationId],

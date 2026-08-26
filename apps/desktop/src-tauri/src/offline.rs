@@ -7,12 +7,15 @@
 //! either. A library of installed games sitting on the local disk was
 //! unreachable because a *catalog* was.
 //!
-//! So two caches, both write-through and both best-effort:
+//! What it keeps is the last successful answer to each GET, so the pages that
+//! only read the catalog still render what they last knew.
 //!
-//! * the last successful answer to each GET, so the pages that only read the
-//!   catalog still render what they last knew, and
-//! * artwork, as files, because a grid of covers is most of what the library
-//!   *is* and a hundred broken-image icons is not a usable offline mode.
+//! Artwork is deliberately *not* cached here. It briefly was, served to the web
+//! view over a custom URI scheme — which did not work in a packaged build and
+//! took every image in the app down with it. A cover that cannot be fetched now
+//! falls back to the initials placeholder the UI already draws, which is a
+//! plainer offline library than the one that was attempted and an enormously
+//! better one than no app at all.
 //!
 //! Nothing here is authoritative. A miss is a miss, and every caller treats a
 //! cached answer as what it is: the last thing the server said, not the truth.
@@ -25,12 +28,6 @@ use std::time::SystemTime;
 /// anywhere near it; the cap exists so an unexpected endpoint cannot quietly
 /// fill somebody's disk.
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
-
-/// The same, for one image.
-const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
-
-/// How much artwork is kept before the oldest is dropped.
-const IMAGE_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 
 /// A filename-safe, collision-resistant key for an arbitrary request path.
 fn key(value: &str) -> String {
@@ -56,16 +53,13 @@ pub fn is_cacheable(path: &str) -> bool {
 
 pub struct Cache {
     responses: PathBuf,
-    images: PathBuf,
 }
 
 impl Cache {
     pub fn new(app_data: &Path) -> Self {
         let responses = app_data.join("offline").join("responses");
-        let images = app_data.join("offline").join("images");
         std::fs::create_dir_all(&responses).ok();
-        std::fs::create_dir_all(&images).ok();
-        Self { responses, images }
+        Self { responses }
     }
 
     /* --------------------------------------------------------- responses */
@@ -103,76 +97,12 @@ impl Cache {
             .ok()
     }
 
-    /* ------------------------------------------------------------ images */
-
-    pub fn image_path(&self, media_path: &str) -> PathBuf {
-        self.images.join(key(media_path))
-    }
-
-    /// Stores one image, and takes the oldest ones out if the budget is blown.
-    pub fn put_image(&self, media_path: &str, bytes: &[u8]) {
-        if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
-            return;
-        }
-        if std::fs::write(self.image_path(media_path), bytes).is_ok() {
-            self.trim_images();
-        }
-    }
-
-    pub fn read_image(&self, media_path: &str) -> Option<Vec<u8>> {
-        std::fs::read(self.image_path(media_path)).ok()
-    }
-
-    /// Drops the least recently written artwork once the budget is exceeded.
-    ///
-    /// Least-recently-*written* rather than least-recently-used, because
-    /// reading a file does not reliably update its access time on Windows and
-    /// pretending otherwise would evict whatever was most looked at.
-    fn trim_images(&self) {
-        let Ok(entries) = std::fs::read_dir(&self.images) else {
-            return;
-        };
-
-        let mut files: Vec<(SystemTime, u64, PathBuf)> = entries
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let meta = entry.metadata().ok()?;
-                if !meta.is_file() {
-                    return None;
-                }
-                Some((
-                    meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-                    meta.len(),
-                    entry.path(),
-                ))
-            })
-            .collect();
-
-        let total: u64 = files.iter().map(|(_, size, _)| size).sum();
-        if total <= IMAGE_BUDGET_BYTES {
-            return;
-        }
-
-        files.sort_by_key(|(modified, _, _)| *modified);
-        let mut remaining = total;
-        for (_, size, path) in files {
-            if remaining <= IMAGE_BUDGET_BYTES {
-                break;
-            }
-            if std::fs::remove_file(&path).is_ok() {
-                remaining = remaining.saturating_sub(size);
-            }
-        }
-    }
-
     /// Forgets everything. Used on sign-out, so the next account does not open
     /// onto the previous one's library.
     pub fn clear(&self) {
-        for dir in [&self.responses, &self.images] {
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    std::fs::remove_file(entry.path()).ok();
-                }
+        if let Ok(entries) = std::fs::read_dir(&self.responses) {
+            for entry in entries.flatten() {
+                std::fs::remove_file(entry.path()).ok();
             }
         }
     }
@@ -246,29 +176,13 @@ mod tests {
     }
 
     #[test]
-    fn images_round_trip() {
-        let (cache, dir) = temp_cache("images");
-        assert_eq!(cache.read_image("/api/images/img_1"), None);
-
-        cache.put_image("/api/images/img_1", b"not really a png");
-
-        assert_eq!(
-            cache.read_image("/api/images/img_1"),
-            Some(b"not really a png".to_vec())
-        );
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
     fn clearing_leaves_nothing_of_the_previous_account_behind() {
         let (cache, dir) = temp_cache("clear");
         cache.put_json("/games", &serde_json::json!([1]));
-        cache.put_image("/api/images/img_1", b"bytes");
 
         cache.clear();
 
         assert_eq!(cache.get_json("/games"), None);
-        assert_eq!(cache.read_image("/api/images/img_1"), None);
         std::fs::remove_dir_all(dir).ok();
     }
 }
