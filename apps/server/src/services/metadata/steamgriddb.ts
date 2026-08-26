@@ -92,9 +92,13 @@ export class SteamGridDbClient {
     kind: 'grids' | 'heroes' | 'logos' | 'icons',
     gameId: number,
     query: Record<string, string> = {},
+    signal?: AbortSignal,
   ): Promise<SgdbAsset[]> {
     const params = new URLSearchParams({ nsfw: 'false', humor: 'false', ...query });
-    const data = await this.request<SgdbAsset[]>(`/${kind}/game/${gameId}?${params.toString()}`);
+    const data = await this.request<SgdbAsset[]>(
+      `/${kind}/game/${gameId}?${params.toString()}`,
+      signal,
+    );
     return (data ?? []).slice().sort((a, b) => b.score - a.score);
   }
 
@@ -106,33 +110,33 @@ export class SteamGridDbClient {
    * miss falls back to every grid, portrait first. Filtering on dimensions
    * alone silently returns an empty list, which reads as "no artwork exists".
    */
-  async grids(gameId: number): Promise<SgdbAsset[]> {
-    const posters = await this.assets('grids', gameId, { dimensions: '600x900,342x482' });
+  async grids(gameId: number, signal?: AbortSignal): Promise<SgdbAsset[]> {
+    const posters = await this.assets('grids', gameId, { dimensions: '600x900,342x482' }, signal);
     if (posters.length > 0) return posters;
 
-    const all = await this.assets('grids', gameId);
+    const all = await this.assets('grids', gameId, {}, signal);
     return all.slice().sort((a, b) => portraitRank(a) - portraitRank(b) || b.score - a.score);
   }
 
   /** Wide banner behind the game detail page. */
-  heroes(gameId: number) {
-    return this.assets('heroes', gameId);
+  heroes(gameId: number, signal?: AbortSignal) {
+    return this.assets('heroes', gameId, {}, signal);
   }
 
-  logos(gameId: number) {
-    return this.assets('logos', gameId);
+  logos(gameId: number, signal?: AbortSignal) {
+    return this.assets('logos', gameId, {}, signal);
   }
 
-  icons(gameId: number) {
-    return this.assets('icons', gameId);
+  icons(gameId: number, signal?: AbortSignal) {
+    return this.assets('icons', gameId, {}, signal);
   }
 
   /** Wide Steam capsules, for the banner slot. */
-  async banners(gameId: number): Promise<SgdbAsset[]> {
-    const wide = await this.assets('grids', gameId, { dimensions: BANNER_DIMENSIONS });
+  async banners(gameId: number, signal?: AbortSignal): Promise<SgdbAsset[]> {
+    const wide = await this.assets('grids', gameId, { dimensions: BANNER_DIMENSIONS }, signal);
     if (wide.length > 0) return wide;
 
-    const all = await this.assets('grids', gameId);
+    const all = await this.assets('grids', gameId, {}, signal);
     return all.slice().sort((a, b) => landscapeRank(a) - landscapeRank(b) || b.score - a.score);
   }
 

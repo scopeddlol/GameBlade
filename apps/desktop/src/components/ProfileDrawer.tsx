@@ -1,6 +1,17 @@
 import type { ProfileShowcase } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Clock, Gamepad2, MessageCircle, Trophy, UserPlus, UserX, X } from 'lucide-react';
+import {
+  Check,
+  Clock,
+  Gamepad2,
+  Link2,
+  MessageCircle,
+  Star,
+  Trophy,
+  UserPlus,
+  UserX,
+  X,
+} from 'lucide-react';
 import { formatDate, formatPlaytime, formatRelative } from '../lib/format.js';
 import { errorMessage, ipc } from '../lib/ipc.js';
 import { PostCard } from '../tabs/SocialTab.js';
@@ -51,7 +62,12 @@ export function ProfileDrawer({ userId, onClose }: { userId: string; onClose: ()
           <Loading label="Loading profile" />
         ) : (
           <>
-            <div className="profile-banner">
+            {/* The framing the owner chose. A banner is a wide crop of a much
+                taller picture, and left at dead centre it beheads people. */}
+            <div
+              className="profile-banner"
+              style={{ ['--banner-position' as string]: `${profile.bannerPosition}%` }}
+            >
               {profile.bannerUrl ? <Artwork path={profile.bannerUrl} alt="" /> : null}
               <div className="profile-banner-overlay" />
             </div>
@@ -66,7 +82,14 @@ export function ProfileDrawer({ userId, onClose }: { userId: string; onClose: ()
                   size={64}
                 />
                 <div>
-                  <h1>{profile.displayName}</h1>
+                  <h1>
+                    {profile.displayName}
+                    {/* Beside the name, because that is what it is for. */}
+                    {profile.pronouns ? (
+                      <span className="profile-pronouns">{profile.pronouns}</span>
+                    ) : null}
+                  </h1>
+                  {profile.tagline ? <p className="profile-tagline">{profile.tagline}</p> : null}
                   <p className="muted small">
                     @{profile.username}
                     {profile.presence === 'in-game' && profile.playingGameTitle
@@ -153,6 +176,44 @@ export function ProfileDrawer({ userId, onClose }: { userId: string; onClose: ()
                 <>
                   {profile.bio ? <p className="detail-summary">{profile.bio}</p> : null}
 
+                  {profile.links.length > 0 ? (
+                    <ul className="profile-links">
+                      {profile.links.map((link) => (
+                        <li key={link.url}>
+                          {/* Through the shell rather than the webview: these
+                              are somebody else's URLs, and the app is not a
+                              browser. */}
+                          <button
+                            type="button"
+                            className="chip"
+                            onClick={() => void ipc.openExternal(link.url)}
+                            title={link.url}
+                          >
+                            <Link2 size={12} aria-hidden />
+                            {link.label}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+
+                  {profile.favoriteGame ? (
+                    <section className="detail-section">
+                      <h3>
+                        <Star size={16} aria-hidden /> Their favourite
+                      </h3>
+                      <div className="favorite-game">
+                        <Artwork
+                          path={profile.favoriteGame.coverUrl}
+                          alt=""
+                          className="favorite-game-cover"
+                          fallbackText={profile.favoriteGame.title}
+                        />
+                        <span className="favorite-game-title">{profile.favoriteGame.title}</span>
+                      </div>
+                    </section>
+                  ) : null}
+
                   <div className="detail-stats">
                     <Stat label="Games" value={profile.gameCount.toLocaleString()} />
                     <Stat label="Hours played" value={formatPlaytime(profile.totalPlaySeconds)} />
@@ -163,8 +224,10 @@ export function ProfileDrawer({ userId, onClose }: { userId: string; onClose: ()
 
                   {showcaseQuery.data.topGames.length > 0 ? (
                     <section className="detail-section">
+                      {/* "Most played", which is what this actually is —
+                          "favourite" is the one above, which they chose. */}
                       <h3>
-                        <Gamepad2 size={16} aria-hidden /> Favorite games
+                        <Gamepad2 size={16} aria-hidden /> Most played
                       </h3>
                       <ul className="profile-game-list">
                         {showcaseQuery.data.topGames.map((entry) => (

@@ -67,6 +67,11 @@ export class ProfileService {
       bannerMediaId: null,
       visibility: 'friends' as const,
       showActivity: true,
+      pronouns: null,
+      tagline: null,
+      bannerPosition: 50,
+      links: null,
+      favoriteGameId: null,
       lastSeenAt: null,
       updatedAt: isoNow(),
     };
@@ -109,6 +114,24 @@ export class ProfileService {
     };
   }
 
+  /**
+   * Adds each profile's Discord handle, for the ones who have chosen to show it.
+   *
+   * A single batched lookup rather than one inside `summarize`, which runs per
+   * row on lists of hundreds. Every path that builds summaries goes through
+   * here now — the toggle used to be honoured only by `summarizeMany`, so
+   * turning "Show Discord on my profile" on changed the friends rail and
+   * nothing else, including the profile page it names.
+   */
+  private withDiscordHandles<T extends ProfileSummary>(summaries: T[]): T[] {
+    if (summaries.length === 0) return summaries;
+    const handles = this.discord.visibleHandlesFor(summaries.map((entry) => entry.userId));
+    return summaries.map((entry) => ({
+      ...entry,
+      discordUsername: handles.get(entry.userId) ?? null,
+    }));
+  }
+
   /** Batch variant that resolves friendship once for the whole set. */
   summarizeMany(userIds: string[], viewerId: string): Map<string, ProfileSummary> {
     const unique = [...new Set(userIds)].filter(Boolean);
@@ -130,22 +153,39 @@ export class ProfileService {
       .all();
 
     const friends = this.friendIds(viewerId);
-    // One lookup for the whole page rather than one per profile.
-    const handles = this.discord.visibleHandlesFor(rows.map((row) => row.userId));
-
-    return new Map(
-      rows.map((row) => [
-        row.userId,
-        {
-          ...this.summarize(row, { viewerId, areFriends: friends.has(row.userId) }),
-          discordUsername: handles.get(row.userId) ?? null,
-        },
-      ]),
+    const summaries = this.withDiscordHandles(
+      rows.map((row) => this.summarize(row, { viewerId, areFriends: friends.has(row.userId) })),
     );
+
+    return new Map(summaries.map((summary) => [summary.userId, summary]));
   }
 
   summarizeOne(userId: string, viewerId: string): ProfileSummary | null {
     return this.summarizeMany([userId], viewerId).get(userId) ?? null;
+  }
+
+  /**
+   * The game somebody pinned to their profile.
+   *
+   * Nulls out silently for a game that has gone from the catalog: a pin is a
+   * decoration, and a profile that will not load because a game was removed is
+   * a far worse outcome than one that quietly stops showing it.
+   */
+  private favoriteGame(
+    gameId: string | null,
+  ): { id: string; title: string; coverUrl: string | null } | null {
+    if (!gameId) return null;
+    const row = this.db
+      .select({ id: games.id, title: games.title, coverImageId: games.coverImageId })
+      .from(games)
+      .where(eq(games.id, gameId))
+      .get();
+    if (!row) return null;
+    return {
+      id: row.id,
+      title: row.title,
+      coverUrl: row.coverImageId ? `${this.config.basePath}/api/images/${row.coverImageId}` : null,
+    };
   }
 
   /** Accepted friends of a user, as a set for cheap membership tests. */
@@ -181,18 +221,23 @@ export class ProfileService {
     const friendship = isSelf ? null : this.friendshipView(viewerId, userId);
     const areFriends = friendship?.status === 'accepted';
 
-    const summary = this.summarize(
-      {
-        userId,
-        username: row.username,
-        displayName: row.profile.displayName,
-        avatarMediaId: row.profile.avatarMediaId,
-        accentColor: row.profile.accentColor,
-        visibility: row.profile.visibility,
-        showActivity: row.profile.showActivity,
-      },
-      { viewerId, areFriends },
-    );
+    // Through the decorator rather than `summarize` alone: this path built its
+    // own summary and skipped the Discord lookup entirely, which is why turning
+    // "Show Discord on my profile" on changed nothing on the profile page.
+    const summary = this.withDiscordHandles([
+      this.summarize(
+        {
+          userId,
+          username: row.username,
+          displayName: row.profile.displayName,
+          avatarMediaId: row.profile.avatarMediaId,
+          accentColor: row.profile.accentColor,
+          visibility: row.profile.visibility,
+          showActivity: row.profile.showActivity,
+        },
+        { viewerId, areFriends },
+      ),
+    ])[0] as ProfileSummary;
 
     const canViewDetail =
       isSelf ||
@@ -216,6 +261,15 @@ export class ProfileService {
       bio: canViewDetail ? row.profile.bio : null,
       bannerUrl: canViewDetail ? this.mediaUrl(row.profile.bannerMediaId) : null,
       country: canViewDetail ? row.profile.country : null,
+      // Pronouns are how somebody wants to be addressed, which is the one
+      // thing a stranger looking at a locked-down profile still needs — the
+      // "add friend" screen names them. Withholding it would make a private
+      // profile misgender its owner to everyone who visits.
+      pronouns: row.profile.pronouns,
+      tagline: canViewDetail ? row.profile.tagline : null,
+      bannerPosition: row.profile.bannerPosition,
+      links: canViewDetail ? (row.profile.links ?? []) : [],
+      favoriteGame: canViewDetail ? this.favoriteGame(row.profile.favoriteGameId) : null,
       visibility: row.profile.visibility,
       showActivity: row.profile.showActivity,
       createdAt: row.createdAt,
@@ -238,6 +292,26 @@ export class ProfileService {
     if (input.showActivity !== undefined) patch.showActivity = input.showActivity;
     if (input.avatarMediaId !== undefined) patch.avatarMediaId = input.avatarMediaId;
     if (input.bannerMediaId !== undefined) patch.bannerMediaId = input.bannerMediaId;
+    if (input.pronouns !== undefined) patch.pronouns = input.pronouns || null;
+    if (input.tagline !== undefined) patch.tagline = input.tagline || null;
+    if (input.bannerPosition !== undefined) patch.bannerPosition = input.bannerPosition;
+    // An empty list is stored as null rather than `[]`, so "has no links" is
+    // one state on the row instead of two that read the same.
+    if (input.links !== undefined) {
+      patch.links = input.links && input.links.length > 0 ? input.links : null;
+    }
+    if (input.favoriteGameId !== undefined) {
+      // Checked rather than trusted: a game id that does not exist would fail
+      // on the foreign key with an error nobody can act on, and one that has
+      // since been removed should clear the pin rather than reject the save.
+      patch.favoriteGameId = input.favoriteGameId
+        ? (this.db
+            .select({ id: games.id })
+            .from(games)
+            .where(eq(games.id, input.favoriteGameId))
+            .get()?.id ?? null)
+        : null;
+    }
 
     this.db.update(userProfiles).set(patch).where(eq(userProfiles.userId, userId)).run();
 
@@ -284,17 +358,16 @@ export class ProfileService {
       .all();
 
     const friends = this.friendIds(viewerId);
-    return (
-      rows
-        .filter((row) => row.userId !== viewerId)
-        // A private account is unlisted: it can only be added by exact username.
-        .filter(
-          (row) =>
-            row.visibility !== 'private' ||
-            row.username.toLowerCase() === term.trim().toLowerCase(),
-        )
-        .map((row) => this.summarize(row, { viewerId, areFriends: friends.has(row.userId) }))
-    );
+    const found = rows
+      .filter((row) => row.userId !== viewerId)
+      // A private account is unlisted: it can only be added by exact username.
+      .filter(
+        (row) =>
+          row.visibility !== 'private' || row.username.toLowerCase() === term.trim().toLowerCase(),
+      )
+      .map((row) => this.summarize(row, { viewerId, areFriends: friends.has(row.userId) }));
+
+    return this.withDiscordHandles(found);
   }
 
   /**
@@ -340,8 +413,8 @@ export class ProfileService {
       .all();
 
     const friends = this.friendIds(viewerId);
-    const items = rows.map((row) =>
-      this.summarize(row, { viewerId, areFriends: friends.has(row.userId) }),
+    const items = this.withDiscordHandles(
+      rows.map((row) => this.summarize(row, { viewerId, areFriends: friends.has(row.userId) })),
     );
 
     return { items, total: totalRow?.count ?? 0, offset: options.offset, limit: options.limit };

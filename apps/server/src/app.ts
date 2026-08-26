@@ -33,6 +33,7 @@ import { installerRoutes } from './routes/installer.js';
 import { playRoutes } from './routes/play.js';
 import { realtimeRoutes } from './routes/realtime.js';
 import { requestRoutes } from './routes/requests.js';
+import { messageRoutes } from './routes/messages.js';
 import { socialRoutes } from './routes/social.js';
 
 export async function buildApp(config: Config): Promise<FastifyInstance> {
@@ -185,6 +186,7 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
       await discordRoutes(api);
       await downloadRoutes(api);
       await socialRoutes(api);
+      await messageRoutes(api);
       await playRoutes(api);
       await realtimeRoutes(api);
       await requestRoutes(api);

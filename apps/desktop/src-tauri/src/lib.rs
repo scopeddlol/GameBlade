@@ -1,9 +1,11 @@
 mod api;
 mod credentials;
 mod download;
+mod e2ee;
 mod error;
 mod install;
 mod launcher;
+mod offline;
 mod realtime;
 mod saves;
 mod settings;
@@ -19,8 +21,9 @@ use saves::{LocalSave, SaveRule};
 use serde::Serialize;
 use settings::Settings;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tokio::sync::RwLock;
 
 /// The only server this client will talk to.
@@ -48,6 +51,12 @@ struct AppState {
     installs: Arc<InstallManager>,
     launcher: Arc<Launcher>,
     realtime: RealtimeClient,
+    /// Last known state of the server, from whichever request spoke to it most
+    /// recently. Not a ping: the app finds out the same way the user does.
+    online: Arc<AtomicBool>,
+    /// The last answer to each GET, and the artwork, kept so the client is
+    /// still a client with the server switched off.
+    cache: Arc<offline::Cache>,
 }
 
 impl AppState {
@@ -60,6 +69,29 @@ impl AppState {
     async fn install_dir(&self) -> PathBuf {
         self.settings.read().await.install_dir.clone()
     }
+
+    /// Records whether the server just answered, and says so once when it
+    /// changes.
+    ///
+    /// Emitted on the transition rather than per request: every page makes
+    /// several, and an event per response would either spam a banner into
+    /// existence or be ignored entirely.
+    fn set_online(&self, app: &tauri::AppHandle, online: bool) {
+        if self.online.swap(online, Ordering::SeqCst) != online {
+            let _ = app.emit(
+                if online {
+                    "net://online"
+                } else {
+                    "net://offline"
+                },
+                online,
+            );
+        }
+    }
+
+    fn is_online(&self) -> bool {
+        self.online.load(Ordering::SeqCst)
+    }
 }
 
 /// What the UI is told about the current session.
@@ -70,9 +102,44 @@ impl AppState {
 /// screenshot — by accident. Rust still holds it in `StoredSession`, which is
 /// where every request actually gets it from.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionInfo {
+    /// The account's own id.
+    ///
+    /// Needed by anything that has to recognise the caller in data the server
+    /// returns — "is this message mine" is answered by comparing ids, and
+    /// comparing usernames instead would be one rename away from wrong.
+    /// Empty only for a session stored before this was recorded, which the
+    /// next successful sign-in check fills in.
+    user_id: String,
     username: String,
     role: String,
+}
+
+/// The scheme artwork is served over inside the app.
+///
+/// On Windows and Android the webview rewrites this to
+/// `http://gbimg.localhost/...`, which the page's `img-src http:` already
+/// allows; elsewhere it stays `gbimg://localhost/...`, which the CSP names.
+const IMAGE_SCHEME: &str = "gbimg";
+
+/// Guesses a content type from the first few bytes.
+///
+/// The alternative is a sidecar file per image recording what the server said,
+/// which is a second write and a second read for something four magic numbers
+/// answer. Anything unrecognised is served as a generic image and left to the
+/// webview, which sniffs too.
+fn sniff_image_type(bytes: &[u8]) -> &'static str {
+    match bytes {
+        [0xFF, 0xD8, 0xFF, ..] => "image/jpeg",
+        [0x89, b'P', b'N', b'G', ..] => "image/png",
+        [b'G', b'I', b'F', ..] => "image/gif",
+        _ if bytes.len() > 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" => {
+            "image/webp"
+        }
+        _ if bytes.len() > 12 && &bytes[4..12] == b"ftypavif" => "image/avif",
+        _ => "application/octet-stream",
+    }
 }
 
 /* ------------------------------------------------------------------ session */
@@ -81,6 +148,7 @@ struct SessionInfo {
 async fn current_session(state: State<'_, AppState>) -> AppResult<Option<SessionInfo>> {
     let session = state.session.read().await;
     Ok(session.as_ref().map(|s| SessionInfo {
+        user_id: s.user_id.clone().unwrap_or_default(),
         username: s.username.clone(),
         role: s.role.clone(),
     }))
@@ -101,8 +169,12 @@ async fn sign_in(
         token: token.clone(),
         username: user.username.clone(),
         role: user.role.clone(),
+        user_id: Some(user.id.clone()),
     };
 
+    // A different account than last time gets a clean slate: the cache holds
+    // the previous one's library, friends and artwork.
+    state.cache.clear();
     credentials::save(&stored)?;
     state.realtime.start(app, stored.server_url.clone(), token);
     *state.session.write().await = Some(stored);
@@ -117,6 +189,15 @@ async fn sign_out(state: State<'_, AppState>) -> AppResult<()> {
     state.realtime.stop();
     credentials::clear()?;
     *state.session.write().await = None;
+    // The message identity goes with the session. It is the one secret that
+    // makes this account's conversations readable on this machine, and leaving
+    // it on a shared PC would throw away the entire point of encrypting them.
+    // Every conversation is re-keyed for whichever device signs in next.
+    let _ = e2ee::forget_identity();
+    // Everything the offline cache holds belongs to the account that just left:
+    // its library, its friends, its artwork. Whoever signs in next must not
+    // open onto it.
+    state.cache.clear();
     Ok(())
 }
 
@@ -125,27 +206,56 @@ async fn sign_out(state: State<'_, AppState>) -> AppResult<()> {
 async fn verify_session(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<UserInfo> {
     let client = state.client().await?;
     match client.session().await {
-            Ok(user) => {
-                // A restored session has no socket yet, so opening it here is what
-                // makes presence work after a restart rather than only after a login.
-                if !state.realtime.is_running() {
-                    if let Some(session) = state.session.read().await.as_ref() {
-                        state
-                            .realtime
-                            .start(app, session.server_url.clone(), session.token.clone());
-                    }
+        Ok(user) => {
+            state.set_online(&app, true);
+            // The id is only ever handed out here, and it is what lets a signed
+            // -in session be restored offline next time.
+            if let Some(session) = state.session.write().await.as_mut() {
+                if session.user_id.as_deref() != Some(user.id.as_str()) {
+                    session.user_id = Some(user.id.clone());
+                    let _ = credentials::save(session);
                 }
-                // Same for the download queue: a restored session means an
-                // interrupted transfer from the last run can pick up now.
-                state.downloads.wake().await;
-                Ok(user)
             }
+            // A restored session has no socket yet, so opening it here is what
+            // makes presence work after a restart rather than only after a login.
+            if !state.realtime.is_running() {
+                if let Some(session) = state.session.read().await.as_ref() {
+                    state
+                        .realtime
+                        .start(app, session.server_url.clone(), session.token.clone());
+                }
+            }
+            // Same for the download queue: a restored session means an
+            // interrupted transfer from the last run can pick up now.
+            state.downloads.wake().await;
+            Ok(user)
+        }
+
+        // The server is not there. That is not a reason to sign anybody out —
+        // and treating it as one is what made the whole client unusable
+        // offline: the check failed, the app fell back to the sign-in screen,
+        // and the sign-in screen could not reach the server either. The stored
+        // session is still valid; it simply cannot be confirmed right now.
+        Err(AppError::Network(_)) => {
+            state.set_online(&app, false);
+            let session = state.session.read().await;
+            match session.as_ref() {
+                Some(stored) => Ok(UserInfo {
+                    id: stored.user_id.clone().unwrap_or_default(),
+                    username: stored.username.clone(),
+                    role: stored.role.clone(),
+                }),
+                None => Err(AppError::NotSignedIn),
+            }
+        }
+
         Err(err) => {
             // The token is gone or revoked, so drop it rather than retrying forever.
             if matches!(err, AppError::Server(_)) {
                 let _ = credentials::clear();
                 *state.session.write().await = None;
                 state.realtime.stop();
+                state.cache.clear();
             }
             Err(err)
         }
@@ -158,52 +268,143 @@ async fn verify_session(app: tauri::AppHandle, state: State<'_, AppState>) -> Ap
 /// mirroring every endpoint in Rust would only create somewhere for the two to
 /// disagree.
 #[tauri::command]
-async fn api_get(state: State<'_, AppState>, path: String) -> AppResult<serde_json::Value> {
-    state.client().await?.get_json(&path).await
+async fn api_get(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<serde_json::Value> {
+    let client = state.client().await?;
+    match client.get_json(&path).await {
+        Ok(value) => {
+            state.set_online(&app, true);
+            state.cache.put_json(&path, &value);
+            Ok(value)
+        }
+        // Only a *network* failure falls back. A 404 or a 403 is the server
+        // answering, and serving a cached page over the top of it would hide a
+        // permissions change or a deleted game behind stale data.
+        Err(AppError::Network(err)) => {
+            state.set_online(&app, false);
+            match state.cache.get_json(&path) {
+                Some(cached) => Ok(cached),
+                None => Err(AppError::Offline(err.to_string())),
+            }
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Whether the server answered last time anybody asked, and what is on disk.
+///
+/// The client does not poll for this. Connectivity is discovered the same way
+/// the user discovers it — by something failing — and a heartbeat would only
+/// add traffic to a server that is either there or is not.
+#[tauri::command]
+async fn connectivity(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    // "Home", because it is the first thing every session asks for and so the
+    // most reliable evidence that this client has ever spoken to the server.
+    let cached_at = state
+        .cache
+        .cached_at("/home")
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_millis() as u64);
+
+    Ok(serde_json::json!({
+        "online": state.is_online(),
+        "cachedAtMs": cached_at,
+    }))
+}
+
+/// Ask the server whether it is there, and update the banner either way.
+///
+/// The one deliberate probe, behind the "try again" button — an app that has
+/// decided it is offline has no other way back to online until the next thing
+/// somebody clicks fails.
+#[tauri::command]
+async fn recheck_connection(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<bool> {
+    let client = state.client().await?;
+    let reachable = client.session().await.is_ok();
+    state.set_online(&app, reachable);
+    Ok(reachable)
+}
+
+/// Turns a transport failure into something the UI can say out loud.
+///
+/// A write has nothing to fall back on — there is no cached answer to
+/// "post this" — so the only useful thing to do is name the reason. "GameBlade
+/// cannot reach the server" is actionable; a TLS handshake error is not.
+fn offline_if_unreachable(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    result: AppResult<serde_json::Value>,
+    what: &str,
+) -> AppResult<serde_json::Value> {
+    match result {
+        Ok(value) => {
+            state.set_online(app, true);
+            Ok(value)
+        }
+        Err(AppError::Network(_)) => {
+            state.set_online(app, false);
+            Err(AppError::RequiresConnection(what.to_string()))
+        }
+        Err(other) => Err(other),
+    }
 }
 
 #[tauri::command]
 async fn api_post(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
     body: Option<serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    state
+    let result = state
         .client()
         .await?
         .post_json(&path, &body.unwrap_or(serde_json::Value::Null))
-        .await
+        .await;
+    offline_if_unreachable(&app, &state, result, "That")
 }
 
 #[tauri::command]
 async fn api_put(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
     body: Option<serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    state
+    let result = state
         .client()
         .await?
         .put_json(&path, &body.unwrap_or(serde_json::Value::Null))
-        .await
+        .await;
+    offline_if_unreachable(&app, &state, result, "That")
 }
 
 #[tauri::command]
 async fn api_patch(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
     body: Option<serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    state
+    let result = state
         .client()
         .await?
         .patch_json(&path, &body.unwrap_or(serde_json::Value::Null))
-        .await
+        .await;
+    offline_if_unreachable(&app, &state, result, "That")
 }
 
 #[tauri::command]
-async fn api_delete(state: State<'_, AppState>, path: String) -> AppResult<serde_json::Value> {
-    state.client().await?.delete_json(&path).await
+async fn api_delete(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<serde_json::Value> {
+    let result = state.client().await?.delete_json(&path).await;
+    offline_if_unreachable(&app, &state, result, "That")
 }
 
 /// Artwork needs the device token, which an `<img>` tag cannot send, so the URL
@@ -217,13 +418,22 @@ async fn api_delete(state: State<'_, AppState>, path: String) -> AppResult<serde
 /// assumed.
 #[tauri::command]
 async fn image_url(state: State<'_, AppState>, path: String) -> AppResult<String> {
-    let session = state.session.read().await;
-    let session = session.as_ref().ok_or(AppError::NotSignedIn)?;
-    let separator = if path.contains('?') { '&' } else { '?' };
-    Ok(format!(
-        "{}{}{}token={}",
-        session.server_url, path, separator, session.token
-    ))
+    // Through this client's own scheme rather than straight at the server.
+    //
+    // Two things fall out of that. Artwork is on disk after the first look, so
+    // a library of four hundred covers opens from local files instead of four
+    // hundred round trips — and it still opens with the server switched off,
+    // which is most of what "the library must work offline" means. And the
+    // device token stops being pasted into every `src` attribute in the page.
+    let _ = state
+        .session
+        .read()
+        .await
+        .as_ref()
+        .ok_or(AppError::NotSignedIn)?;
+    // The server path is carried through verbatim, query string and all, so
+    // the handler has exactly what to ask the server for if it has to.
+    Ok(format!("{IMAGE_SCHEME}://localhost{path}"))
 }
 
 /// The version this client was built as, for comparing against the server's.
@@ -254,7 +464,12 @@ async fn run_client_installer(
     // comfortably in memory, and the old in-memory path silently returned
     // nothing past its cap and reported "no installer published".
     client.download_file("/client/download", &target).await?;
-    if tokio::fs::metadata(&target).await.map(|m| m.len()).unwrap_or(0) == 0 {
+    if tokio::fs::metadata(&target)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0)
+        == 0
+    {
         let _ = tokio::fs::remove_file(&target).await;
         return Err(AppError::Other(
             "The server has no client installer published.".to_string(),
@@ -321,10 +536,12 @@ async fn update_settings(state: State<'_, AppState>, patch: Settings) -> AppResu
     // Transfer preferences reach the queue immediately rather than being read
     // once at startup — historically these two saved a value and changed
     // nothing, which is worse than not offering them.
-    state.downloads.set_transfer_options(download::TransferOptions {
-        connections: sanitised.download_concurrency,
-        verify: sanitised.verify_downloads,
-    });
+    state
+        .downloads
+        .set_transfer_options(download::TransferOptions {
+            connections: sanitised.download_concurrency,
+            verify: sanitised.verify_downloads,
+        });
 
     Ok(sanitised)
 }
@@ -775,6 +992,209 @@ async fn running_game(state: State<'_, AppState>) -> AppResult<Option<RunningGam
     Ok(state.launcher.current().await)
 }
 
+/// Closes the running game from the app, rather than from the game.
+///
+/// The button this backs used to be a greyed-out "Running" — accurate, and no
+/// help at all to somebody whose game has hung behind a fullscreen window they
+/// cannot get back to. It asks the process to close first and kills it if it
+/// will not, so a game that handles the request still gets to save.
+///
+/// `game_id` is optional because the client is single-slot: the player pressing
+/// Stop on the title bar means "the one that is running", and making the UI
+/// look up an id to say that is ceremony.
+#[tauri::command]
+async fn stop_game(state: State<'_, AppState>, game_id: Option<String>) -> AppResult<bool> {
+    match game_id {
+        Some(id) => Ok(state.launcher.stop(&id).await),
+        None => Ok(state.launcher.stop_current().await.is_some()),
+    }
+}
+
+/* ------------------------------------------------------------------ messages */
+
+/// This device's message identity, generating one the first time.
+///
+/// The private half never leaves this machine — not to the server, not to the
+/// webview. Everything the UI is given is the public key and its fingerprint.
+#[tauri::command]
+async fn message_identity() -> AppResult<e2ee::Identity> {
+    let (_, identity) = e2ee::identity()?;
+    Ok(identity)
+}
+
+/// The fingerprint of somebody else's published key, for comparing by voice.
+#[tauri::command]
+async fn key_fingerprint(public_key: String) -> AppResult<String> {
+    e2ee::fingerprint(&public_key)
+}
+
+/// A fresh conversation key, sealed for each device that should hold it.
+///
+/// Both halves happen here so the plaintext key exists only inside this
+/// command: the webview is handed the wraps and never the key itself, which is
+/// what stops a compromised page from leaking one.
+#[tauri::command]
+async fn seal_conversation_key(recipients: Vec<String>) -> AppResult<serde_json::Value> {
+    let key = e2ee::new_conversation_key();
+    let mut wraps = Vec::with_capacity(recipients.len());
+
+    for public_key in &recipients {
+        let wrapped = e2ee::wrap_key(&key, public_key)?;
+        wraps.push(serde_json::json!({
+            "publicKey": public_key,
+            "ephemeralPublic": wrapped.ephemeral_public,
+            "nonce": wrapped.nonce,
+            "ciphertext": wrapped.ciphertext,
+        }));
+    }
+
+    // The key comes back too, because the caller has to encrypt its first
+    // message with it. Held in the UI for the session and never persisted.
+    Ok(serde_json::json!({ "key": key, "wraps": wraps }))
+}
+
+/// Re-seals a conversation key this device can already open, for more devices.
+///
+/// Used when somebody adds a member, or signs in on a second machine: any
+/// existing member can supply the wrap, because they can already read the
+/// conversation.
+#[tauri::command]
+async fn rewrap_conversation_key(
+    conversation_key: String,
+    recipients: Vec<String>,
+) -> AppResult<Vec<serde_json::Value>> {
+    recipients
+        .iter()
+        .map(|public_key| {
+            let wrapped = e2ee::wrap_key(&conversation_key, public_key)?;
+            Ok(serde_json::json!({
+                "publicKey": public_key,
+                "ephemeralPublic": wrapped.ephemeral_public,
+                "nonce": wrapped.nonce,
+                "ciphertext": wrapped.ciphertext,
+            }))
+        })
+        .collect()
+}
+
+/// Opens a conversation key that was sealed for this device.
+#[tauri::command]
+async fn open_conversation_key(wrapped: e2ee::WrappedKey) -> AppResult<String> {
+    let (secret, _) = e2ee::identity()?;
+    e2ee::unwrap_key(&secret, &wrapped)
+}
+
+#[tauri::command]
+async fn seal_message(conversation_key: String, plaintext: String) -> AppResult<e2ee::Sealed> {
+    e2ee::seal_message(&conversation_key, &plaintext)
+}
+
+#[tauri::command]
+async fn open_message(conversation_key: String, sealed: e2ee::Sealed) -> AppResult<String> {
+    e2ee::open_message(&conversation_key, &sealed)
+}
+
+/// Encrypts a file and writes the ciphertext somewhere the uploader can read.
+///
+/// Written to a temporary file rather than returned as bytes: a clip is tens of
+/// megabytes, and moving that through the IPC bridge as a base64 string costs
+/// three copies and a third again in size for nothing.
+#[tauri::command]
+async fn seal_file(
+    state: State<'_, AppState>,
+    conversation_key: String,
+    file_path: String,
+) -> AppResult<serde_json::Value> {
+    let plaintext = tokio::fs::read(&file_path).await?;
+    let sealed = e2ee::seal_attachment(&conversation_key, &plaintext)?;
+
+    let staging = state.app_data.join("message-uploads");
+    tokio::fs::create_dir_all(&staging).await?;
+    let target = staging.join(format!("{}.sealed", staging_name()));
+
+    // The nonce rides with the ciphertext rather than in the message body: an
+    // attachment has to be openable from its own bytes, so that a client
+    // fetching one does not need the message row as well.
+    let mut bytes = base64_decode(&sealed.nonce)?;
+    bytes.extend_from_slice(&base64_decode(&sealed.ciphertext)?);
+    tokio::fs::write(&target, &bytes).await?;
+
+    let name = Path::new(&file_path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "attachment".to_string());
+
+    Ok(serde_json::json!({
+        "path": target.to_string_lossy(),
+        "name": name,
+        "sizeBytes": plaintext.len(),
+        "contentType": guess_content_type(&name),
+    }))
+}
+
+/// Fetches a sealed attachment, opens it, and writes the plaintext to a file.
+///
+/// The plaintext lands in the offline cache directory so the viewer can point
+/// an `<img>` or `<video>` at it through the app's own image scheme, and so
+/// scrolling back through a conversation does not re-download and re-decrypt
+/// everything each time.
+#[tauri::command]
+async fn open_attachment(
+    state: State<'_, AppState>,
+    conversation_key: String,
+    media_id: String,
+    url: String,
+    content_type: String,
+) -> AppResult<String> {
+    let cached = state.app_data.join("message-media").join(&media_id);
+    if !cached.is_file() {
+        let client = state.client().await?;
+        let session = state
+            .session
+            .read()
+            .await
+            .clone()
+            .ok_or(AppError::NotSignedIn)?;
+
+        let separator = if url.contains('?') { '&' } else { '?' };
+        let full = format!(
+            "{}{url}{separator}token={}",
+            session.server_url, session.token
+        );
+        let response = client.http().get(full).send().await?;
+        if !response.status().is_success() {
+            return Err(AppError::Other(
+                "That attachment is no longer there".to_string(),
+            ));
+        }
+
+        let bytes = response.bytes().await?;
+        if bytes.len() < 24 {
+            return Err(AppError::Other("That attachment is truncated".to_string()));
+        }
+
+        // The first 24 bytes are the nonce this was sealed with; the rest is
+        // the ciphertext.
+        let sealed = e2ee::Sealed {
+            nonce: base64_encode(&bytes[..24]),
+            ciphertext: base64_encode(&bytes[24..]),
+        };
+        let plaintext = e2ee::open_attachment(&conversation_key, &sealed)?;
+
+        tokio::fs::create_dir_all(cached.parent().unwrap_or(&state.app_data)).await?;
+        tokio::fs::write(&cached, &plaintext).await?;
+    }
+
+    let _ = content_type;
+    // Through the app's own image scheme rather than as a file path: the
+    // webview cannot load `C:\Users\...` from a page, and routing it here
+    // means the decrypted bytes are served from local disk without ever
+    // becoming a URL that points at the server.
+    Ok(format!(
+        "{IMAGE_SCHEME}://localhost/local/message-media/{media_id}"
+    ))
+}
+
 /* -------------------------------------------------------------- cloud saves */
 
 #[derive(Debug, Serialize)]
@@ -947,14 +1367,30 @@ async fn upload_media(
     kind: String,
 ) -> AppResult<serde_json::Value> {
     let path = PathBuf::from(&file_path);
-    let content_type = content_type_for(&path)
-        .ok_or_else(|| AppError::Other("That file type cannot be uploaded".to_string()))?;
 
-    state
+    // A sealed upload is ciphertext, so there is no file type to recognise —
+    // and saying otherwise would be a lie the server could not check anyway.
+    // What it actually is travels inside the encrypted message body.
+    let content_type = if kind == "sealed" {
+        "application/octet-stream"
+    } else {
+        content_type_for(&path)
+            .ok_or_else(|| AppError::Other("That file type cannot be uploaded".to_string()))?
+    };
+
+    let result = state
         .client()
         .await?
         .upload_file(&format!("/media?kind={kind}"), &path, content_type)
-        .await
+        .await;
+
+    // The staged ciphertext exists only to be uploaded; leaving it behind
+    // would grow a folder of encrypted duplicates for every attachment sent.
+    if kind == "sealed" {
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    result
 }
 
 /* ------------------------------------------------------------------ helpers */
@@ -995,6 +1431,152 @@ async fn file_sha256(path: &std::path::Path) -> AppResult<String> {
 
 /// Percent-encodes the few characters that would break a query string. These
 /// values are ISO timestamps and digests, so a full encoder would be overkill.
+/// Answers one artwork request: from disk if it is there, from the server if
+/// not, and with a 404 if neither can help.
+///
+/// Deliberately silent about failure. Artwork is decoration — a cover that
+/// cannot be fetched should leave the initials placeholder the UI already
+/// draws, not raise anything.
+async fn serve_image(
+    app: &tauri::AppHandle,
+    request: &tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let uri = request.uri();
+    let path = match uri.query() {
+        Some(query) => format!("{}?{}", uri.path(), query),
+        None => uri.path().to_string(),
+    };
+
+    let missing = || {
+        tauri::http::Response::builder()
+            .status(404)
+            .body(Vec::new())
+            .unwrap_or_default()
+    };
+
+    let Some(state) = app.try_state::<AppState>() else {
+        return missing();
+    };
+
+    let served = |bytes: Vec<u8>| {
+        let content_type = sniff_image_type(&bytes);
+        tauri::http::Response::builder()
+            .status(200)
+            .header("Content-Type", content_type)
+            // The bytes behind one of these ids never change — a new cover is
+            // a new id — so the webview can hold on to it for as long as it
+            // likes.
+            .header("Cache-Control", "public, max-age=31536000, immutable")
+            .body(bytes)
+            .unwrap_or_else(|_| missing())
+    };
+
+    // A `/local/` path is something this client decrypted for itself — a
+    // message attachment — and is never fetched from the server. It is served
+    // from the app's own data directory, and only from inside it: the id is
+    // checked so a crafted URL cannot walk out with `..`.
+    if let Some(rest) = path.strip_prefix("/local/message-media/") {
+        let id = rest.split('/').next().unwrap_or_default();
+        if id.is_empty()
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return missing();
+        }
+        return match tokio::fs::read(state.app_data.join("message-media").join(id)).await {
+            Ok(bytes) => served(bytes),
+            Err(_) => missing(),
+        };
+    }
+
+    if let Some(bytes) = state.cache.read_image(&path) {
+        return served(bytes);
+    }
+
+    let Ok(client) = state.client().await else {
+        return missing();
+    };
+    let Some(session) = state.session.read().await.clone() else {
+        return missing();
+    };
+
+    let separator = if path.contains('?') { '&' } else { '?' };
+    let url = format!(
+        "{}{path}{separator}token={}",
+        session.server_url, session.token
+    );
+
+    match client.http().get(url).send().await {
+        Ok(response) if response.status().is_success() => match response.bytes().await {
+            Ok(bytes) => {
+                state.set_online(app, true);
+                state.cache.put_image(&path, &bytes);
+                served(bytes.to_vec())
+            }
+            Err(_) => missing(),
+        },
+        Ok(_) => missing(),
+        Err(err) => {
+            // A transport failure here is the same signal as one from any other
+            // request, and artwork is usually the first thing to notice.
+            if err.is_connect() || err.is_timeout() {
+                state.set_online(app, false);
+            }
+            missing()
+        }
+    }
+}
+
+/// A unique name for one staged upload.
+///
+/// A timestamp plus a counter rather than a random id: these files live for the
+/// length of one upload, and the only thing that has to be true of the name is
+/// that two attachments queued in the same millisecond do not collide.
+fn staging_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis())
+        .unwrap_or(0);
+    format!("{now}-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    STANDARD.encode(bytes)
+}
+
+fn base64_decode(value: &str) -> AppResult<Vec<u8>> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    STANDARD
+        .decode(value)
+        .map_err(|_| AppError::Other("That attachment is malformed".to_string()))
+}
+
+/// What a decrypted attachment is, from its file name.
+///
+/// The server cannot say — it only ever held ciphertext — so this is the only
+/// place the question can be answered at all. Falls back to a generic type the
+/// webview will sniff for itself.
+fn guess_content_type(name: &str) -> &'static str {
+    let lower = name.to_ascii_lowercase();
+    match () {
+        _ if lower.ends_with(".png") => "image/png",
+        _ if lower.ends_with(".jpg") || lower.ends_with(".jpeg") => "image/jpeg",
+        _ if lower.ends_with(".webp") => "image/webp",
+        _ if lower.ends_with(".gif") => "image/gif",
+        _ if lower.ends_with(".avif") => "image/avif",
+        _ if lower.ends_with(".mp4") || lower.ends_with(".m4v") => "video/mp4",
+        _ if lower.ends_with(".webm") => "video/webm",
+        _ => "application/octet-stream",
+    }
+}
+
 fn urlencode(value: &str) -> String {
     value
         .chars()
@@ -1031,6 +1613,16 @@ fn sanitise_folder_name(title: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Artwork comes through here rather than straight from the server, so
+        // it is on local disk after the first look — which is both faster on
+        // every subsequent launch and the reason a library still renders with
+        // the server switched off.
+        .register_asynchronous_uri_scheme_protocol(IMAGE_SCHEME, |context, request, responder| {
+            let app = context.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                responder.respond(serve_image(&app, &request).await);
+            });
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -1083,6 +1675,8 @@ pub fn run() {
             });
             downloads.start_scheduler(app.handle().clone());
 
+            let cache = Arc::new(offline::Cache::new(&app_data));
+
             app.manage(AppState {
                 session,
                 settings: RwLock::new(loaded),
@@ -1091,6 +1685,11 @@ pub fn run() {
                 downloads,
                 launcher: Arc::new(Launcher::default()),
                 realtime: RealtimeClient::default(),
+                // Optimistic until something says otherwise: assuming the
+                // server is down before anybody has tried would put an offline
+                // banner over a perfectly healthy first launch.
+                online: Arc::new(AtomicBool::new(true)),
+                cache,
             });
             Ok(())
         })
@@ -1100,11 +1699,22 @@ pub fn run() {
             sign_out,
             verify_session,
             api_get,
+            connectivity,
+            recheck_connection,
             api_post,
             api_put,
             api_patch,
             api_delete,
             image_url,
+            message_identity,
+            key_fingerprint,
+            seal_conversation_key,
+            rewrap_conversation_key,
+            open_conversation_key,
+            seal_message,
+            open_message,
+            seal_file,
+            open_attachment,
             read_rule_file,
             client_version,
             run_client_installer,
@@ -1127,6 +1737,7 @@ pub fn run() {
             uninstall_game,
             launch_game,
             running_game,
+            stop_game,
             save_status,
             push_save,
             pull_save,

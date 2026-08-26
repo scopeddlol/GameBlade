@@ -17,6 +17,7 @@ import { FriendService } from './services/friends.js';
 import { GameRequestService } from './services/gameRequests.js';
 import { InstallerService } from './services/installer.js';
 import { MediaStore } from './services/media.js';
+import { MessagingService } from './services/messaging.js';
 import { ImageCache } from './services/metadata/images.js';
 import { DiscordService } from './services/discord.js';
 import { DiscordBotService } from './services/discordBot.js';
@@ -39,6 +40,14 @@ import { BugService } from './services/bugs.js';
 export interface GamebladeContext {
   config: Config;
   db: Db;
+  /**
+   * The raw handle, for pragmas and maintenance the query builder cannot say.
+   *
+   * Everything that reads or writes rows goes through `db`; this is only for
+   * VACUUM, ANALYZE and checkpoints — statements that act on the file rather
+   * than on any table in it.
+   */
+  sqlite: Database.Database;
   auth: AuthService;
   settings: SettingsService;
   metadata: MetadataService;
@@ -74,6 +83,8 @@ export interface GamebladeContext {
   friends: FriendService;
   media: MediaStore;
   social: SocialService;
+  /** Conversations the server routes and cannot read. */
+  messaging: MessagingService;
   playtime: PlaytimeService;
   achievements: AchievementService;
   saves: SaveService;
@@ -129,6 +140,7 @@ export function createContext(
   const friends = new FriendService(db, profiles, notifications, activity, realtime);
   const media = new MediaStore(db, config, logger);
   const social = new SocialService(db, config, profiles, friends, media, notifications, activity);
+  const messaging = new MessagingService(db, profiles, friends, media, realtime);
   // After profiles and media: `/profile` reads both.
   const discordBot = new DiscordBotService(db, settings, discord, profiles, media, logger);
   const playtime = new PlaytimeService(db, config, presence, activity);
@@ -157,6 +169,7 @@ export function createContext(
   return {
     config,
     db,
+    sqlite,
     auth,
     settings,
     metadata,
@@ -186,6 +199,7 @@ export function createContext(
     friends,
     media,
     social,
+    messaging,
     playtime,
     achievements,
     saves,

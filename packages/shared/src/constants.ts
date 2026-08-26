@@ -182,7 +182,14 @@ export const PRESENCE_STATUS = ['offline', 'online', 'away', 'in-game'] as const
  */
 export const POST_KIND = ['text', 'image', 'clip', 'announcement'] as const;
 
-export const MEDIA_KIND = ['avatar', 'banner', 'image', 'clip'] as const;
+/**
+ * `sealed` is an encrypted message attachment.
+ *
+ * Its bytes are ciphertext, so its recorded content type says nothing about
+ * what is inside — what it actually is travels in the sealed message body,
+ * where only the conversation's members can read it.
+ */
+export const MEDIA_KIND = ['avatar', 'banner', 'image', 'clip', 'sealed'] as const;
 
 /** Everything that can land in a friend's activity feed. */
 export const ACTIVITY_KIND = [

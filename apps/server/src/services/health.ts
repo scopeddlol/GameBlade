@@ -135,6 +135,29 @@ export class HealthService {
       });
     }
 
+    /**
+     * The half of that which is not a guess.
+     *
+     * An unlock rule reads a file the game wrote into its own save folder, so
+     * these games have had their save location recorded already — in the
+     * achievement column, where nothing syncs it. Called out separately from
+     * the count above because it is the actionable subset: the fix is one
+     * button rather than a title-by-title hunt, and until it is pressed those
+     * players lose their unlocks along with their saves.
+     */
+    const achievementsWithoutSaves = this.gamesWithAchievementRulesButNoSaveRule();
+    if (achievementsWithoutSaves > 0) {
+      findings.push({
+        id: 'achievements-without-saves',
+        severity: 'warning',
+        title: `${achievementsWithoutSaves} ${plural(achievementsWithoutSaves, 'game tracks', 'games track')} achievements it cannot sync`,
+        detail:
+          'Their unlocks are read out of a save folder nothing backs up, so both are lost when a player changes machine. The folder can be taken straight from the unlock rules.',
+        count: achievementsWithoutSaves,
+        href: '/admin/save-paths',
+      });
+    }
+
     const unmatched = this.countGames(
       or(eq(games.matchStatus, 'unmatched'), isNull(games.summary)),
     );
@@ -254,6 +277,29 @@ export class HealthService {
       .where(and(isNull(games.missingAt), isNull(gameSaveRules.id)))
       .get();
     return Number(row?.n ?? 0);
+  }
+
+  /**
+   * Games with unlock rules and no save rule.
+   *
+   * Deliberately not "games with achievements": an achievement imported from a
+   * Steam schema has no local file behind it and implies nothing about where
+   * the game saves. Only a rule that actually reads a path does.
+   */
+  private gamesWithAchievementRulesButNoSaveRule(): number {
+    return (
+      this.db
+        .select({ value: count() })
+        .from(games)
+        .where(
+          and(
+            isNull(games.missingAt),
+            sql`EXISTS (SELECT 1 FROM game_achievement_rules r WHERE r.game_id = ${games.id})`,
+            sql`NOT EXISTS (SELECT 1 FROM game_save_rules s WHERE s.game_id = ${games.id})`,
+          ),
+        )
+        .get()?.value ?? 0
+    );
   }
 
   private lastScanAt(): string | null {

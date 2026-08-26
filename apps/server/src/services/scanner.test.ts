@@ -8,18 +8,36 @@ const silentLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.f
 
 /**
  * The scanner reaches the database through a long drizzle chain, and enrichment
- * is the only part of it these tests exercise. A stub that answers the one
- * query `runMatchPending` makes is enough, and keeps the test about progress
- * rather than about SQL.
+ * is the only part of it these tests exercise. A stub that answers the queries
+ * `runMatchPending` makes is enough, and keeps the test about progress rather
+ * than about SQL.
+ *
+ * Two shapes go through `select`: a bare one that claims a batch of rows, and
+ * a projected one that counts how many are outstanding. They are told apart by
+ * whether a projection was passed, which is the only thing distinguishing them
+ * at this level.
  */
 function stubDb(pending: Game[]): Db {
-  const chain = {
-    from: () => chain,
-    where: () => chain,
-    limit: () => chain,
-    all: () => pending,
+  const chain = (rows: unknown[], single: unknown) => {
+    const link: Record<string, unknown> = {
+      all: () => rows,
+      get: () => single,
+    };
+    for (const method of ['from', 'where', 'limit', 'orderBy']) {
+      link[method] = () => link;
+    }
+    return link;
   };
-  return { select: () => chain } as unknown as Db;
+
+  return {
+    select: (projection?: unknown) =>
+      projection === undefined
+        ? // The batch query, and the per-row re-read that follows each title.
+          // `get` answering undefined is what marks a row as having had its
+          // turn, so a stubbed run does not re-claim the same batch for ever.
+          chain(pending, undefined)
+        : chain([], { count: pending.length }),
+  } as unknown as Db;
 }
 
 function stubMetadata(
@@ -187,5 +205,70 @@ describe('skipping the current item', () => {
     const progress = scanner.getProgress();
     expect(progress.skipped).toBeGreaterThan(0);
     expect(progress.state).toBe('idle');
+  });
+});
+
+/**
+ * Stopping the run outright.
+ *
+ * Skip is the wrong tool when the problem is the run rather than one title in
+ * it; before this the only way out of a wedged scan was restarting the server.
+ */
+describe('cancelling a run', () => {
+  it('says so when there is nothing to cancel', () => {
+    const scanner = new ScannerService(stubDb([]), stubMetadata(), silentLogger);
+    expect(scanner.cancel()).toBe(false);
+  });
+
+  it('stops the run and settles on canceled', async () => {
+    const scanner = new ScannerService(
+      stubDb([game('a'), game('b'), game('c')]),
+      stubMetadata({
+        enrich: (_game, signal) =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          }),
+      }),
+      silentLogger,
+    );
+
+    const run = scanner.matchPending();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(scanner.cancel()).toBe(true);
+    await run;
+
+    const progress = scanner.getProgress();
+    expect(progress.state).toBe('canceled');
+    expect(progress.canceling).toBe(false);
+    expect(scanner.isRunning).toBe(false);
+  });
+});
+
+/**
+ * The readout that sent this whole rewrite: a run part-way through its second
+ * library reported "25 / 25" — the first library's finished tally — for as long
+ * as the second one took to read.
+ */
+describe('progress counters', () => {
+  it('stamps a heartbeat as it works', async () => {
+    const scanner = new ScannerService(stubDb([game('a')]), stubMetadata(), silentLogger);
+
+    await scanner.matchPending();
+
+    expect(scanner.getProgress().heartbeatAt).not.toBeNull();
+  });
+
+  it('counts the enrichment pass against the pending total, not a leftover one', async () => {
+    const scanner = new ScannerService(
+      stubDb([game('a'), game('b')]),
+      stubMetadata(),
+      silentLogger,
+    );
+
+    await scanner.matchPending();
+
+    const progress = scanner.getProgress();
+    expect(progress.total).toBe(2);
+    expect(progress.processed).toBe(2);
   });
 });

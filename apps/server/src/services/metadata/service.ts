@@ -103,6 +103,14 @@ export function similarity(a: string, b: string): number {
 /** Above this, a search result is accepted without a human confirming it. */
 const AUTO_MATCH_THRESHOLD = 0.86;
 
+/**
+ * How many of a game's screenshots are cached.
+ *
+ * The gallery shows a strip; nobody scrolls to the thirtieth. Each one past
+ * this is a download the first scan of a library pays for, per game.
+ */
+const MAX_SCREENSHOTS = 12;
+
 /** The artwork slots IGDB can contribute to; it publishes no logos or icons. */
 const IGDB_KINDS = ['cover', 'banner', 'hero'] as const;
 
@@ -402,17 +410,24 @@ export class MetadataService {
       throw ApiError.unavailable('IGDB is not configured. Add credentials in Settings.');
     }
 
-    const raw = await igdb.getById(igdbId);
+    const raw = await igdb.getById(igdbId, options.signal);
     if (!raw) throw ApiError.notFound('That IGDB entry no longer exists');
 
     const meta = normalizeIgdbGame(raw);
-    const coverImageId = meta.coverUrl ? await this.imageCache.cache(meta.coverUrl, 'cover') : null;
+    const coverImageId = meta.coverUrl
+      ? await this.imageCache.cache(meta.coverUrl, 'cover', options.signal)
+      : null;
 
-    const screenshotIds: string[] = [];
-    for (const url of meta.screenshotUrls) {
-      const id = await this.imageCache.cache(url, 'screenshot');
-      if (id) screenshotIds.push(id);
-    }
+    // Capped, and abortable. Uncapped this was the single worst thing one game
+    // could do to a scan: IGDB publishes dozens of screenshots for a big title,
+    // each downloaded in turn with a minute-long deadline and a retry behind
+    // it, and none of it interruptible. A gallery nobody scrolls past the first
+    // screen of is not worth an hour of the run.
+    const screenshotIds = await this.imageCache.cacheMany(
+      meta.screenshotUrls.slice(0, MAX_SCREENSHOTS),
+      'screenshot',
+      options.signal,
+    );
 
     this.db
       .update(games)
@@ -466,11 +481,11 @@ export class MetadataService {
       if (!best || similarity(title, best.name) < 0.7) return;
 
       const [grids, banners, heroes, logos, icons] = await Promise.all([
-        sgdb.grids(best.id).catch(() => []),
-        sgdb.banners(best.id).catch(() => []),
-        sgdb.heroes(best.id).catch(() => []),
-        sgdb.logos(best.id).catch(() => []),
-        sgdb.icons(best.id).catch(() => []),
+        sgdb.grids(best.id, signal).catch(() => []),
+        sgdb.banners(best.id, signal).catch(() => []),
+        sgdb.heroes(best.id, signal).catch(() => []),
+        sgdb.logos(best.id, signal).catch(() => []),
+        sgdb.icons(best.id, signal).catch(() => []),
       ]);
 
       const patch: Partial<typeof games.$inferInsert> = {
@@ -483,27 +498,27 @@ export class MetadataService {
 
       const gridUrl = grids[0]?.url;
       if (gridUrl) {
-        const id = await this.imageCache.cache(gridUrl, 'cover');
+        const id = await this.imageCache.cache(gridUrl, 'cover', signal);
         if (id) patch.coverImageId = id;
       }
       const bannerUrl = banners[0]?.url;
       if (bannerUrl) {
-        const id = await this.imageCache.cache(bannerUrl, 'banner');
+        const id = await this.imageCache.cache(bannerUrl, 'banner', signal);
         if (id) patch.bannerImageId = id;
       }
       const heroUrl = heroes[0]?.url;
       if (heroUrl) {
-        const id = await this.imageCache.cache(heroUrl, 'hero');
+        const id = await this.imageCache.cache(heroUrl, 'hero', signal);
         if (id) patch.heroImageId = id;
       }
       const logoUrl = logos[0]?.url;
       if (logoUrl) {
-        const id = await this.imageCache.cache(logoUrl, 'logo');
+        const id = await this.imageCache.cache(logoUrl, 'logo', signal);
         if (id) patch.logoImageId = id;
       }
       const iconUrl = icons[0]?.url;
       if (iconUrl) {
-        const id = await this.imageCache.cache(iconUrl, 'icon');
+        const id = await this.imageCache.cache(iconUrl, 'icon', signal);
         if (id) patch.iconImageId = id;
       }
 

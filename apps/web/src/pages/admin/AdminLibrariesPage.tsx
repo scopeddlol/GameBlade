@@ -1,7 +1,7 @@
 import type { LibraryInfo, ScanProgress } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FolderPlus, RefreshCw, SkipForward, Trash2 } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { AlertTriangle, FolderPlus, RefreshCw, SkipForward, Square, Trash2 } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Badge, Field, FormError, Spinner, RowSkeleton } from '../../components/ui.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 import { formatBytes, formatRelative } from '../../lib/format.js';
@@ -55,19 +55,33 @@ export function AdminLibrariesPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'scan'] }),
   });
 
+  const cancelMutation = useMutation({
+    mutationFn: () => api.post('/admin/scan/cancel'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'scan'] }),
+  });
+
   const progress = progressQuery.data;
   const scanning = progress?.state === 'scanning' || progress?.state === 'matching';
 
-  // "Reading" reports no count, because the walk does not know one yet. Saying
-  // which library is being read is what distinguishes it from a stall.
+  // Each phase counts its own work, and a run over several roots says which
+  // one it is on. Both exist because the readout used to carry the previous
+  // library's finished tally into the next one's walk, so a scan part-way
+  // through its second root sat on "25 / 25" — complete-looking, and wrong.
+  const where =
+    progress && progress.libraryCount > 1 && progress.library
+      ? `${progress.library} (${progress.libraryIndex} of ${progress.libraryCount})`
+      : (progress?.library ?? 'library');
+
   const phaseLabel =
     progress?.phase === 'reading'
-      ? `Reading ${progress.library ?? 'library'}`
+      ? `Reading ${where}`
       : progress?.phase === 'indexing'
-        ? `Indexing ${progress.library ?? 'library'}`
+        ? `Indexing ${where}`
         : progress?.phase === 'matching'
           ? 'Fetching metadata'
           : null;
+
+  const stalledFor = useStallSeconds(progress?.heartbeatAt ?? null, scanning);
 
   return (
     <div className="gb-page">
@@ -103,16 +117,32 @@ export function AdminLibrariesPage() {
               {scanning && progress.total > 0 ? (
                 <span>
                   {progress.processed} / {progress.total}
+                  {progress.phase === 'reading' ? ' folders' : ''}
                 </span>
               ) : null}
               {scanning && progress.currentItem ? (
                 <span className="truncate">{progress.currentItem}</span>
               ) : null}
               {scanning && progress.skipped > 0 ? <span>{progress.skipped} skipped</span> : null}
+              {scanning && progress.failed > 0 ? (
+                <span className="text-amber-400">{progress.failed} failed</span>
+              ) : null}
+              {progress.canceling ? <span className="text-amber-400">stopping…</span> : null}
               {progress.finishedAt && !scanning ? (
                 <span>Last finished {formatRelative(progress.finishedAt)}</span>
               ) : null}
             </div>
+
+            {/* A working scan and a wedged one look identical from a progress
+                bar. Saying how long nothing has moved is what tells an operator
+                which one they are looking at — and gives them a reason to press
+                Skip or Stop rather than waiting another hour. */}
+            {scanning && stalledFor !== null ? (
+              <p className="flex items-center gap-1.5 text-xs text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+                No progress for {formatDuration(stalledFor)}. Skip this item, or stop the scan.
+              </p>
+            ) : null}
 
             {scanning && progress.total > 0 ? (
               <div className="bg-ink-700 h-1.5 w-full overflow-hidden rounded-full">
@@ -126,7 +156,7 @@ export function AdminLibrariesPage() {
             ) : null}
 
             {scanning ? (
-              <div>
+              <div className="flex gap-2">
                 <button
                   type="button"
                   className="gb-btn-ghost text-xs"
@@ -135,6 +165,15 @@ export function AdminLibrariesPage() {
                 >
                   <SkipForward className="h-3.5 w-3.5" />
                   Skip this one
+                </button>
+                <button
+                  type="button"
+                  className="gb-btn-ghost text-xs"
+                  onClick={() => cancelMutation.mutate()}
+                  disabled={cancelMutation.isPending || progress.canceling}
+                >
+                  <Square className="h-3.5 w-3.5" />
+                  {progress.canceling ? 'Stopping…' : 'Stop the scan'}
                 </button>
               </div>
             ) : null}
@@ -169,8 +208,10 @@ export function AdminLibrariesPage() {
 
             {!scanning && progress.finishedAt ? (
               <p className="text-ink-400 text-xs">
+                {progress.state === 'canceled' ? 'Stopped early — ' : ''}
                 {progress.added} added · {progress.updated} updated · {progress.removed} missing
                 {progress.skipped > 0 ? ` · ${progress.skipped} skipped` : ''}
+                {progress.failed > 0 ? ` · ${progress.failed} failed` : ''}
               </p>
             ) : null}
           </div>
@@ -274,4 +315,31 @@ export function AdminLibrariesPage() {
       </section>
     </div>
   );
+}
+
+/**
+ * How long the run's counters have been still, once that is long enough to be
+ * worth saying. Null while everything is moving normally.
+ */
+function useStallSeconds(heartbeatAt: string | null, active: boolean): number | null {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+
+  if (!active || !heartbeatAt) return null;
+  const seconds = Math.floor((now - new Date(heartbeatAt).getTime()) / 1000);
+  // A provider call can legitimately take twenty seconds, and a big folder
+  // longer; below this a warning would be crying wolf on a healthy run.
+  return seconds >= 45 ? seconds : null;
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 90) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `${minutes} minutes`;
+  return `${Math.round(minutes / 60)} hours`;
 }

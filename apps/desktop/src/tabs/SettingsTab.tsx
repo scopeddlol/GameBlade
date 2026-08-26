@@ -1,9 +1,13 @@
 import {
+  MAX_PROFILE_LINKS,
   resolveTheme,
   THEME_PRESETS,
   THEMES,
   type DeviceInfo,
+  type GameSummary,
+  type Paginated,
   type ProfileDetail,
+  type ProfileLink,
   type PublicServerInfo,
   type SaveSlotInfo,
   type ThemePreset,
@@ -20,12 +24,15 @@ import {
   FolderPlus,
   HardDrive,
   LogOut,
+  Link2,
   MonitorSmartphone,
   Palette,
+  Plus,
   RotateCcw,
   Star,
   Trash2,
   UserRound,
+  X,
 } from 'lucide-react';
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import {
@@ -152,10 +159,53 @@ export function SettingsTab() {
 
               <Toggle
                 label="Sync saves automatically"
-                hint="Pull before launching and push after quitting."
+                hint="Keeps this machine's saves and the cloud's in step without you thinking about it. Turning it off leaves the buttons on each game's page working."
                 checked={draft.syncSaves}
                 onChange={(syncSaves) => update({ syncSaves })}
               />
+
+              {/* Nested under the master switch: these describe *when* it
+                  syncs, and offering them while syncing is off would be four
+                  controls that do nothing. */}
+              {draft.syncSaves ? (
+                <div className="settings-subgroup">
+                  <Toggle
+                    label="Upload when a game closes"
+                    hint="The other half of automatic. Without it the cloud copy stays at whenever you last pressed Upload."
+                    checked={draft.autoSyncOnExit}
+                    onChange={(autoSyncOnExit) => update({ autoSyncOnExit })}
+                  />
+
+                  <Toggle
+                    label="Catch up on sign-in"
+                    hint="Uploads anything this machine is ahead on when the app starts — a crash or a power cut ends a session with nothing sent."
+                    checked={draft.autoSyncOnStart}
+                    onChange={(autoSyncOnStart) => update({ autoSyncOnStart })}
+                  />
+
+                  <label className="field">
+                    <span>Back up while playing</span>
+                    <select
+                      className="input"
+                      value={draft.autoSyncIntervalMinutes}
+                      onChange={(event) =>
+                        update({ autoSyncIntervalMinutes: Number(event.target.value) })
+                      }
+                    >
+                      <option value={0}>Only when the game closes</option>
+                      <option value={5}>Every 5 minutes</option>
+                      <option value={15}>Every 15 minutes</option>
+                      <option value={30}>Every 30 minutes</option>
+                      <option value={60}>Every hour</option>
+                    </select>
+                    <span className="muted small">
+                      A long session that ends in a crash loses everything since it started.
+                      Uploading part-way through costs bandwidth and, for a game that keeps its save
+                      file open, can capture a half-written one.
+                    </span>
+                  </label>
+                </div>
+              ) : null}
 
               <Toggle
                 label="Ask before overwriting"
@@ -560,6 +610,10 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
   const [bio, setBio] = useState('');
   const [accent, setAccent] = useState('#7c5cff');
   const [country, setCountry] = useState('');
+  const [pronouns, setPronouns] = useState('');
+  const [tagline, setTagline] = useState('');
+  const [bannerPosition, setBannerPosition] = useState(50);
+  const [links, setLinks] = useState<ProfileLink[]>([]);
   const [seeded, setSeeded] = useState(false);
 
   useEffect(() => {
@@ -569,6 +623,10 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
     setBio(profile.bio ?? '');
     setAccent(profile.accentColor);
     setCountry(profile.country ?? '');
+    setPronouns(profile.pronouns ?? '');
+    setTagline(profile.tagline ?? '');
+    setBannerPosition(profile.bannerPosition ?? 50);
+    setLinks(profile.links ?? []);
     setSeeded(true);
   }, [profileQuery.data, seeded]);
 
@@ -616,12 +674,34 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
         subtitle="Shown to friends and anyone who opens your profile from a post or the member list."
       />
 
-      <div className="settings-banner">
+      <div
+        className="settings-banner"
+        style={{ ['--banner-position' as string]: `${bannerPosition}%` }}
+      >
         {profile?.bannerUrl ? <Artwork path={profile.bannerUrl} alt="" /> : null}
         <button type="button" className="btn btn-ghost" onClick={changeBanner}>
           {profile?.bannerUrl ? 'Change banner' : 'Add a banner'}
         </button>
       </div>
+
+      {/* A banner is a wide crop of a much taller picture, and which band of it
+          survives is the whole difference between a good one and a beheading.
+          Only offered once there is a banner to frame. */}
+      {profile?.bannerUrl ? (
+        <label className="field">
+          <span>Banner framing</span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={bannerPosition}
+            onChange={(e) => setBannerPosition(Number(e.target.value))}
+            onMouseUp={() => saveMutation.mutate({ bannerPosition })}
+            onKeyUp={() => saveMutation.mutate({ bannerPosition })}
+          />
+          <span className="muted small">Drag to choose which part of the picture shows.</span>
+        </label>
+      ) : null}
 
       <div className="profile-row">
         <Avatar
@@ -651,6 +731,37 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
         />
       </label>
 
+      <div className="field-row">
+        <label className="field">
+          <span>Pronouns</span>
+          <input
+            className="input"
+            value={pronouns}
+            maxLength={32}
+            placeholder="they/them"
+            onChange={(e) => setPronouns(e.target.value)}
+            onBlur={() => saveMutation.mutate({ pronouns: pronouns || null })}
+          />
+          {/* Free text rather than a list of options: no list is complete, and
+              one that is not gets it wrong for exactly the people it matters
+              most to. */}
+          <span className="muted small">Shown next to your name. Leave it blank to skip it.</span>
+        </label>
+
+        <label className="field">
+          <span>Status</span>
+          <input
+            className="input"
+            value={tagline}
+            maxLength={80}
+            placeholder="Grinding for the last achievement"
+            onChange={(e) => setTagline(e.target.value)}
+            onBlur={() => saveMutation.mutate({ tagline: tagline || null })}
+          />
+          <span className="muted small">One line under your name.</span>
+        </label>
+      </div>
+
       <label className="field">
         <span>Bio</span>
         <textarea
@@ -661,6 +772,19 @@ function ProfileSection({ onError }: { onError: (message: string) => void }) {
           onBlur={() => saveMutation.mutate({ bio: bio || null })}
         />
       </label>
+
+      <FavoriteGameField
+        current={profile?.favoriteGame ?? null}
+        onChange={(favoriteGameId) => saveMutation.mutate({ favoriteGameId })}
+      />
+
+      <ProfileLinksField
+        links={links}
+        onChange={(next) => {
+          setLinks(next);
+          saveMutation.mutate({ links: next });
+        }}
+      />
 
       <label className="field">
         <span>Accent color</span>
@@ -828,5 +952,181 @@ function MyReportsSection() {
         </ul>
       )}
     </section>
+  );
+}
+
+/**
+ * One game, pinned to a profile.
+ *
+ * Every other thing a profile shows about games is derived — most played, most
+ * recent, most achievements — and none of those is necessarily the game
+ * somebody actually wants to be known for. This is the one they choose.
+ */
+function FavoriteGameField({
+  current,
+  onChange,
+}: {
+  current: { id: string; title: string; coverUrl: string | null } | null;
+  onChange: (gameId: string | null) => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const [term, setTerm] = useState('');
+
+  // Only queried once the picker is open, so the settings page does not fetch
+  // a library of thousands for a field most people will never touch.
+  const gamesQuery = useQuery({
+    queryKey: ['profile', 'favorite-picker', term],
+    queryFn: () =>
+      ipc.get<Paginated<GameSummary>>(
+        `/games?limit=24&sort=title${term.trim() ? `&search=${encodeURIComponent(term.trim())}` : ''}`,
+      ),
+    enabled: picking,
+  });
+
+  return (
+    <div className="field">
+      <span>Favourite game</span>
+
+      {current ? (
+        <div className="favorite-game">
+          <Artwork path={current.coverUrl} alt="" className="favorite-game-cover" />
+          <span className="favorite-game-title">{current.title}</span>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={`Remove ${current.title} from your profile`}
+            onClick={() => onChange(null)}
+          >
+            <X size={14} aria-hidden />
+          </button>
+        </div>
+      ) : null}
+
+      {picking ? (
+        <div className="favorite-picker">
+          <input
+            className="input"
+            value={term}
+            placeholder="Search your archive…"
+            aria-label="Search for a game"
+            onChange={(event) => setTerm(event.target.value)}
+          />
+          <div className="favorite-picker-results">
+            {(gamesQuery.data?.items ?? []).map((game) => (
+              <button
+                key={game.id}
+                type="button"
+                className="favorite-picker-option"
+                onClick={() => {
+                  onChange(game.id);
+                  setPicking(false);
+                  setTerm('');
+                }}
+              >
+                <Artwork path={game.art.cover} alt="" className="favorite-game-cover" />
+                <span>{game.title}</span>
+              </button>
+            ))}
+          </div>
+          <button type="button" className="btn btn-ghost" onClick={() => setPicking(false)}>
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button type="button" className="btn btn-ghost" onClick={() => setPicking(true)}>
+          <Star size={14} aria-hidden />
+          {current ? 'Pick a different one' : 'Pick a game'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A handful of links on a profile.
+ *
+ * Capped, and each one labelled: an uncapped list becomes a link farm, and an
+ * unlabelled URL on somebody's profile is something nobody clicks because they
+ * cannot tell where it goes.
+ */
+function ProfileLinksField({
+  links,
+  onChange,
+}: {
+  links: ProfileLink[];
+  onChange: (links: ProfileLink[]) => void;
+}) {
+  const [label, setLabel] = useState('');
+  const [url, setUrl] = useState('');
+
+  const trimmedUrl = url.trim();
+  // The same check the server makes, made here so the reason is visible while
+  // typing rather than arriving as a rejected save.
+  const valid = /^https?:\/\//i.test(trimmedUrl) && label.trim().length > 0;
+
+  return (
+    <div className="field">
+      <span>Links</span>
+
+      {links.length > 0 ? (
+        <ul className="profile-links-edit">
+          {links.map((link, index) => (
+            <li key={`${link.label}-${link.url}`}>
+              <Link2 size={13} aria-hidden />
+              <strong>{link.label}</strong>
+              <span className="muted small">{link.url}</span>
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label={`Remove ${link.label}`}
+                onClick={() => onChange(links.filter((_, position) => position !== index))}
+              >
+                <X size={13} aria-hidden />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {links.length < MAX_PROFILE_LINKS ? (
+        <form
+          className="profile-links-add"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!valid) return;
+            onChange([...links, { label: label.trim(), url: trimmedUrl }]);
+            setLabel('');
+            setUrl('');
+          }}
+        >
+          <input
+            className="input"
+            value={label}
+            maxLength={24}
+            placeholder="Label"
+            aria-label="Link label"
+            onChange={(event) => setLabel(event.target.value)}
+          />
+          <input
+            className="input"
+            value={url}
+            maxLength={300}
+            placeholder="https://…"
+            aria-label="Link address"
+            onChange={(event) => setUrl(event.target.value)}
+          />
+          <button type="submit" className="btn btn-ghost" disabled={!valid}>
+            <Plus size={14} aria-hidden />
+            Add
+          </button>
+        </form>
+      ) : (
+        <span className="muted small">That is all {MAX_PROFILE_LINKS} of them.</span>
+      )}
+
+      {trimmedUrl && !/^https?:\/\//i.test(trimmedUrl) ? (
+        <span className="muted small">A link has to start with http:// or https://</span>
+      ) : null}
+    </div>
   );
 }

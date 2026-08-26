@@ -48,20 +48,23 @@ export function RequestRow({
         <span>{request.votes}</span>
       </button>
 
-      <span className="request-body">
-        <span className="request-title">
-          {request.title}
-          <span className={`badge ${TONES[request.status]}`}>
-            {GAME_REQUEST_STATUS_LABELS[request.status]}
-          </span>
+      {/* Once a request has been added, the row is the way to the game — the
+          whole body, not only the small button on the right, because that is
+          what anybody reading a row called "Added" reaches for. */}
+      {request.status === 'added' && request.gameId && onOpenGame ? (
+        <button
+          type="button"
+          className="request-body request-body-link"
+          onClick={() => onOpenGame(request.gameId as string)}
+          title={`Open ${request.title}`}
+        >
+          <RequestBody request={request} />
+        </button>
+      ) : (
+        <span className="request-body">
+          <RequestBody request={request} />
         </span>
-        {request.adminNote ? (
-          <span className="muted small">{request.adminNote}</span>
-        ) : request.note ? (
-          <span className="muted small">{request.note}</span>
-        ) : null}
-        <span className="muted small">asked {formatRelative(request.createdAt)}</span>
-      </span>
+      )}
 
       {request.status === 'added' && request.gameId && onOpenGame ? (
         <button
@@ -73,6 +76,26 @@ export function RequestRow({
         </button>
       ) : null}
     </li>
+  );
+}
+
+/** The text of a row, shared by its clickable and inert forms. */
+function RequestBody({ request }: { request: GameRequestInfo }) {
+  return (
+    <>
+      <span className="request-title">
+        {request.title}
+        <span className={`badge ${TONES[request.status]}`}>
+          {GAME_REQUEST_STATUS_LABELS[request.status]}
+        </span>
+      </span>
+      {request.adminNote ? (
+        <span className="muted small">{request.adminNote}</span>
+      ) : request.note ? (
+        <span className="muted small">{request.note}</span>
+      ) : null}
+      <span className="muted small">asked {formatRelative(request.createdAt)}</span>
+    </>
   );
 }
 

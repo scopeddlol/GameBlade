@@ -193,3 +193,95 @@ export function evaluateRules(rules: AchievementRule[], contents: string | null)
 export function sourcesFor(rules: AchievementRule[]): string[] {
   return [...new Set(rules.map((rule) => rule.sourceTemplate))];
 }
+
+/* ------------------------------------------------- saves from achievements */
+
+/**
+ * The save folder an achievement rule implies.
+ *
+ * Almost every unlock rule reads a file the game wrote *into its own save
+ * directory* — a Goldberg `achievements.json`, an emulator's `.sav`, a
+ * progress log next to the slots. So a game with unlock rules and no cloud
+ * save rule is not a game whose save location is unknown: it is a game whose
+ * save location has already been written down in the wrong column. This turns
+ * the one into the other.
+ *
+ * Returns null only when there is nothing above the file to point at — a
+ * template that is a bare filename says where to look relative to nothing, and
+ * a save rule made from it would sync the wrong thing.
+ */
+export function saveTemplateFromSource(sourceTemplate: string): string | null {
+  // Templates are authored Windows-style but may arrive either way, and the
+  // separator has to survive into the rule the client will resolve.
+  const normalized = sourceTemplate.trim().replace(/\//g, '\\');
+  const segments = normalized.split('\\').filter((segment) => segment.length > 0);
+  if (segments.length < 2) return null;
+
+  // Everything from the first wildcard on is a pattern, not a location: a rule
+  // reading `{appdata}\Game\*\progress.json` describes a folder per profile,
+  // and the folder worth syncing is the one above them all.
+  const wildcardAt = segments.findIndex(
+    (segment) => segment.includes('*') || segment.includes('?'),
+  );
+  const upTo = wildcardAt === -1 ? segments.length - 1 : wildcardAt;
+  if (upTo < 1) return null;
+
+  return segments.slice(0, upTo).join('\\');
+}
+
+/**
+ * One save rule proposed for a game, from everything its unlock rules read.
+ *
+ * A game usually has several unlock rules pointing into the same folder, and
+ * occasionally into two — a retail layout and an emulator's. The shallowest
+ * common folder is the honest answer for the first case; the second is
+ * reported as what it is, so an operator picks rather than being given one at
+ * random.
+ */
+export interface DerivedSaveTemplate {
+  /** The folder to sync. */
+  pathTemplate: string;
+  /** How many unlock rules pointed inside it. */
+  ruleCount: number;
+}
+
+/**
+ * Groups a game's unlock-rule sources into the folders worth syncing.
+ *
+ * Sources that sit under a folder already proposed are folded into it rather
+ * than listed separately: `…\Saves` and `…\Saves\slot1` are one location, and
+ * offering both invites an operator to create two rules that copy the same
+ * files twice.
+ */
+export function deriveSaveTemplates(sourceTemplates: string[]): DerivedSaveTemplate[] {
+  const counts = new Map<string, number>();
+
+  for (const source of sourceTemplates) {
+    const derived = saveTemplateFromSource(source);
+    if (derived) counts.set(derived, (counts.get(derived) ?? 0) + 1);
+  }
+
+  // Shallowest first, so a parent is always seen before anything nested in it.
+  const ordered = [...counts.entries()].sort(
+    (a, b) => a[0].split('\\').length - b[0].split('\\').length || a[0].localeCompare(b[0]),
+  );
+
+  const kept: DerivedSaveTemplate[] = [];
+  for (const [pathTemplate, ruleCount] of ordered) {
+    const parent = kept.find((entry) => isUnder(pathTemplate, entry.pathTemplate));
+    if (parent) {
+      parent.ruleCount += ruleCount;
+      continue;
+    }
+    kept.push({ pathTemplate, ruleCount });
+  }
+
+  return kept.sort(
+    (a, b) => b.ruleCount - a.ruleCount || a.pathTemplate.localeCompare(b.pathTemplate),
+  );
+}
+
+/** Whether `candidate` sits inside `ancestor`, comparing whole segments. */
+function isUnder(candidate: string, ancestor: string): boolean {
+  return candidate.toLowerCase().startsWith(`${ancestor.toLowerCase()}\\`);
+}

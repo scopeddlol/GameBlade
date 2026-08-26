@@ -86,6 +86,172 @@ packages/
 
 ---
 
+## Version 0.5.3 - August 26, 2026
+
+The release the scanner gets fixed, the client stops needing the server to be
+alive, and messages arrive.
+
+### The library scanner
+
+Three separate faults, all of which looked like the same symptom: a scan that
+started at boot and never finished.
+
+- **The progress readout carried counters between phases.** A run part-way
+  through its second library reported the _first_ library's finished tally —
+  "25 / 25" — for as long as the second one took to read, which is
+  indistinguishable from a scan that has completed and hung. Counters are
+  cleared when the phase or the library changes, and the reading walk now
+  publishes what it has found so far.
+- **The reading walk never yielded.** On a large share on a spinning disk that
+  is minutes during which the server answers nothing — including the progress
+  endpoint the operator is refreshing to find out what is happening. It hands
+  the loop back every two hundred entries now, and the whole walk carries a
+  thirty-minute deadline so a share that stops answering ends the library
+  rather than the run.
+- **Enrichment could genuinely take an hour on one game.** A matched title
+  downloads its cover and then every screenshot IGDB publishes — dozens, each
+  with a minute-long deadline and a retry behind it — and none of it was
+  interruptible, because the abort signal stopped at the provider call and
+  never reached the image cache. Screenshots are capped at twelve, the signal
+  is threaded all the way down, and a title that has not finished in ninety
+  seconds is abandoned with a line saying so.
+
+Around that: a **Stop** control, since Skip is no help when the problem is the
+run itself and restarting the container was the only other way out; a
+**heartbeat**, so the panel says "no progress for four minutes" rather than
+leaving somebody watching a spinner; and **batched enrichment** that keeps
+going until nothing is left, where one fixed limit of 500 quietly abandoned
+everything past it.
+
+`withRetry` also treated a caller's own abort as retryable, so pressing Skip
+cost three rounds of backoff before anything visibly happened.
+
+### The database
+
+The pragmas assumed a small database or a fast disk, and this is neither. A
+64 MiB page cache, a memory map, 8 KiB pages on a new file, and a
+write-ahead log that checkpoints a quarter as often. Statistics and a
+checkpoint now run hourly — SQLite only gathers them when asked, so a catalog
+that grew from fifty games to five thousand was still being planned as if it
+were small.
+
+Ten indexes for queries that had none. Every shelf and library page filters on
+"not missing" and then sorts, which a single-column index on `missing_at` only
+half satisfies; leading each composite with it removes the sort. Also the
+enrichment queue's exact filter, playtime grouped by game, and unlock counts by
+achievement — all of which were table scans.
+
+**Insights → Health** gains what the file costs, what a rebuild would reclaim,
+and buttons for both jobs.
+
+### Messages
+
+Direct messages and group chats, end-to-end encrypted. The server routes them
+and cannot read them: every body and every attachment reaches it already
+sealed, and it holds no key that opens one — because it is never asked to make
+one. A conversation key is generated and wrapped on a client, since the moment
+the server could seal it, it could read it.
+
+Each device has a long-lived X25519 identity kept in the OS credential store,
+which never leaves that machine and never crosses into the web view. The
+conversation key is wrapped per device with ECDH and HKDF-SHA256; bodies and
+attachments are XChaCha20-Poly1305 with a fresh nonce each time. The plaintext
+is a JSON envelope rather than bare text, so an attachment's name and type are
+encrypted too — the server can say a file was sent, not that it was a
+screenshot whose filename gives away which game.
+
+The limits are on the screen rather than only in a design document: the server
+distributes the public keys, so fingerprints exist for two people to compare by
+voice; there is no ratchet, so no forward secrecy; and who talks to whom is
+visible whatever the content says. Groups up to 32, friends-only, withdrawal
+that clears the ciphertext rather than hiding the row.
+
+### The client works offline
+
+Any outage used to take the whole client with it: the sign-in check failed, the
+app fell back to the login screen, and the login screen could not reach the
+server either. A library of installed games sitting on the local disk was
+unreachable because a _catalog_ was.
+
+An unreachable server and a revoked device are no longer the same answer. The
+client caches the last response to each read and every piece of artwork, so
+pages already visited still render and covers come off local disk — which also
+makes every launch after the first much faster. The library falls back to the
+install records themselves, so changing the sort does not empty the page. A
+banner says what still works rather than only that something is wrong.
+
+### Cloud saves, finished
+
+The setting has said "pull before launching and push after quitting" since the
+client was written, and only the pull was ever implemented — so a player who
+turned it on had a cloud copy frozen at whenever they last pressed Upload, and
+a fresh install would then restore that over their real progress.
+
+Uploading now happens at the three moments a save is actually lost: when the
+game closes, optionally every few minutes during a long session, and on
+sign-in for whatever the previous session never managed to send.
+
+### Achievements that cannot sync
+
+A game with unlock rules and no save rule is not a game whose save location is
+unknown. An unlock rule reads a file the game wrote into its own save folder,
+so the location has already been written down — in a column that syncs nothing.
+**Save paths** now derives them, folding rules that share a folder into one
+proposal and offering genuinely separate layouts as a choice. Health calls it
+out separately, because those players lose their unlocks along with their
+saves, and an unlock cannot be copied back by hand.
+
+### Discord
+
+**Tagging people, roles and channels.** Three pickers insert a real mention at
+the cursor — typing a snowflake by hand works and nobody does it. And the thing
+that surprises everyone: Discord never notifies for a mention inside an embed,
+so the composer offers to repeat the tags on a line above it and explains why.
+
+Every outgoing message now carries an explicit permission list naming exactly
+the ids the text contains, so a game summary containing the word `@everyone`
+cannot ping a server. `@everyone` itself is opt-in with its own tick.
+
+### Stopping a game
+
+The Play button became a greyed-out "Running", which is true and no help at all
+to somebody whose game has hung behind a fullscreen window. Stop is on the
+game's page, the right-click menu and the title bar; the process is asked to
+close first so it can save, and killed if it will not answer.
+
+### Media and profiles
+
+Screenshots opened into the 440-pixel dialog used for confirmation prompts.
+There is now a full-viewport viewer with arrow keys, a filmstrip and a
+fit/full-size toggle; trailers play inline; clips play where they sit.
+
+Profiles gain pronouns (free text, because no fixed list is complete), a status
+line, banner framing, up to five labelled links, and one pinned game — as
+distinct from "most played", which is what the section calling itself
+_Favorite games_ actually was.
+
+**Show Discord on Profile** changed the friends rail and nothing else,
+including the profile page it is named after. Every path that builds a profile
+now resolves the handle the same way.
+
+### Requests
+
+Covers rendered at whatever size the provider sent, because the aspect ratio
+was on the image, whose height resolved against nothing while it was loading.
+Clicking a card did nothing, although everything the provider sent was already
+on the client. And the delay before the tab appeared was the shelves: hovering
+prefetched the digest and nothing else, so the slowest query did not start
+until the tab was already open. All three are fixed.
+
+### Documentation
+
+The README was 938 lines. It is now 120, covering what it takes to get a server
+running, and the manual moved to **`Docs.html`** at the repository root — one
+self-contained file with no build step, whose contents list builds itself from
+the headings so adding a section is writing a `<section>` and nothing else.
+
+---
+
 ## Build Session - August 25, 2026 (Discord bot)
 
 ## Version 0.5.2 - August 25, 2026

@@ -339,9 +339,10 @@ export class IgdbClient {
     return images;
   }
 
-  async getById(id: number): Promise<IgdbGame | null> {
+  async getById(id: number, signal?: AbortSignal): Promise<IgdbGame | null> {
     const results = await this.queryGames(
       (fields) => `fields ${fields}; where id = ${Math.trunc(id)}; limit 1;`,
+      signal,
     );
     return results[0] ?? null;
   }

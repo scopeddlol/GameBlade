@@ -2,12 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CircleAlert,
   CircleCheck,
+  Database,
   Download,
   HardDrive,
   Info,
   Save,
   Trash2,
   TriangleAlert,
+  Wand2,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
@@ -35,6 +37,13 @@ interface BackupInfo {
   name: string;
   sizeBytes: number;
   createdAt: string;
+}
+
+interface DatabaseInfo {
+  sizeBytes: number;
+  pageSize: number;
+  freeBytes: number;
+  journalMode: string;
 }
 
 const SEVERITY = {
@@ -223,6 +232,114 @@ export function AdminHealthPage() {
           </div>
         )}
       </section>
+
+      <DatabaseSection />
+    </div>
+  );
+}
+
+/**
+ * What the catalog costs on disk, and the two jobs that keep it quick.
+ *
+ * Both run hourly on their own. This is here for the moment they need to run
+ * *now* — right after importing a few thousand games, when the planner's idea
+ * of how big each table is has just become badly wrong and every page in the
+ * panel is paying for it.
+ */
+function DatabaseSection() {
+  const queryClient = useQueryClient();
+  const [notice, setNotice] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const infoQuery = useQuery({
+    queryKey: ['admin', 'database'],
+    queryFn: () => api.get<DatabaseInfo>('/admin/database'),
+  });
+
+  const maintain = useMutation({
+    mutationFn: (vacuum: boolean) =>
+      api.post<{ vacuumed: boolean; sizeBytes: number; tookMs: number }>(
+        '/admin/database/maintenance',
+        { vacuum },
+      ),
+    onSuccess: (result) => {
+      setFailure(null);
+      setNotice(
+        `${result.vacuumed ? 'Rebuilt' : 'Refreshed'} in ${(result.tookMs / 1000).toFixed(1)}s — ` +
+          `now ${formatBytes(result.sizeBytes)}.`,
+      );
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'database'] });
+    },
+    onError: (caught) =>
+      setFailure(
+        caught instanceof ApiRequestError ? caught.message : 'Maintenance could not finish.',
+      ),
+  });
+
+  const info = infoQuery.data;
+  // Only worth offering the expensive rebuild when there is something to
+  // reclaim. Below this it costs minutes on a spinning disk to save nothing.
+  const worthVacuuming = info ? info.freeBytes > 8 * 1024 * 1024 : false;
+
+  return (
+    <section className="gb-card p-5">
+      <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold tracking-wide uppercase">
+        <Database className="h-4 w-4" aria-hidden />
+        Database
+      </h2>
+      <p className="text-ink-400 mb-3 text-xs leading-relaxed">
+        Statistics and a log checkpoint run hourly by themselves. Refresh them by hand after
+        importing a large library, when the query planner's picture of the catalog has just gone
+        stale. A rebuild reclaims unused space and puts the file back in order, which is worth real
+        time on a spinning disk — but it holds a write lock while it runs.
+      </p>
+
+      {info ? (
+        <dl className="text-ink-300 mb-3 grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
+          <Metric label="On disk" value={formatBytes(info.sizeBytes)} />
+          <Metric label="Reclaimable" value={formatBytes(info.freeBytes)} />
+          <Metric label="Page size" value={`${(info.pageSize / 1024).toFixed(0)} KiB`} />
+          <Metric label="Journal" value={info.journalMode.toUpperCase()} />
+        </dl>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="gb-btn-ghost"
+          onClick={() => maintain.mutate(false)}
+          disabled={maintain.isPending}
+        >
+          {maintain.isPending ? <Spinner className="h-4 w-4" /> : <Wand2 className="h-4 w-4" />}
+          Refresh statistics
+        </button>
+        <button
+          type="button"
+          className="gb-btn-ghost"
+          onClick={() => {
+            if (!confirm('Rebuild the database? It will be locked for writes until this finishes.'))
+              return;
+            maintain.mutate(true);
+          }}
+          disabled={maintain.isPending}
+          title={worthVacuuming ? undefined : 'Nothing much to reclaim right now.'}
+        >
+          <Database className="h-4 w-4" aria-hidden />
+          Rebuild and compact
+        </button>
+      </div>
+
+      {notice ? <p className="text-ink-400 mt-2 text-xs">{notice}</p> : null}
+      <FormError message={failure} />
+    </section>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-ink-500 text-xs">{label}</dt>
+      <dd className="font-medium">{value}</dd>
     </div>
   );
 }

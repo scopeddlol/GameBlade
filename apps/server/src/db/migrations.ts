@@ -782,4 +782,179 @@ export const migrations: Migration[] = [
       CREATE INDEX discord_reaction_roles_message_idx ON discord_reaction_roles(message_id);
     `,
   },
+  {
+    id: '0020_query_indexes',
+    sql: /* sql */ `
+      -- Indexes for the queries this server actually runs, rather than for the
+      -- columns that looked worth indexing when the tables were written.
+      --
+      -- Every shelf, every library page and every filter starts with
+      -- "missing_at IS NULL" and then sorts. A single-column index on
+      -- missing_at satisfies only the first half of that: SQLite finds the
+      -- live rows and then sorts them itself, which on a catalog of thousands
+      -- is a temporary B-tree built per request. Leading each of these with
+      -- missing_at means the index is already in the order the query wants,
+      -- so the sort disappears.
+      CREATE INDEX IF NOT EXISTS games_live_sort_title_idx ON games(missing_at, sort_title);
+      CREATE INDEX IF NOT EXISTS games_live_added_idx ON games(missing_at, added_at DESC);
+      CREATE INDEX IF NOT EXISTS games_live_rating_idx ON games(missing_at, rating DESC);
+      CREATE INDEX IF NOT EXISTS games_live_size_idx ON games(missing_at, size_bytes DESC);
+      CREATE INDEX IF NOT EXISTS games_live_released_idx ON games(missing_at, release_date DESC);
+
+      -- The enrichment queue's exact filter. Without it the pass that runs at
+      -- the end of every scan reads the whole catalog to find the handful of
+      -- rows still waiting on a provider.
+      CREATE INDEX IF NOT EXISTS games_pending_meta_idx
+        ON games(missing_at, metadata_locked_at, match_status);
+
+      -- Matching an imported achievement schema back to a game.
+      CREATE INDEX IF NOT EXISTS games_igdb_idx ON games(igdb_id);
+      CREATE INDEX IF NOT EXISTS games_steam_app_idx ON games(steam_app_id);
+
+      -- "How many people have this one?" reads by achievement, but the only
+      -- index on that table leads with the user, so the count scanned every
+      -- unlock on the server.
+      CREATE INDEX IF NOT EXISTS user_achievements_achievement_idx
+        ON user_achievements(achievement_id);
+
+      -- The most-played shelf groups playtime by game across every account;
+      -- the two existing indexes both lead with the user.
+      CREATE INDEX IF NOT EXISTS user_game_stats_game_idx ON user_game_stats(game_id);
+
+      -- Sweeping expired rows, which otherwise walks the whole table.
+      CREATE INDEX IF NOT EXISTS devices_last_seen_idx ON devices(last_seen_at);
+      CREATE INDEX IF NOT EXISTS save_versions_created_idx ON save_versions(created_at);
+    `,
+  },
+  {
+    id: '0021_profile_customisation',
+    sql: /* sql */ `
+      -- Room for a profile to be somebody's rather than a name and an avatar.
+      --
+      -- Pronouns are free text rather than an enum on purpose: no fixed list
+      -- is complete, and one that is not gets it wrong for exactly the people
+      -- it matters most to.
+      ALTER TABLE user_profiles ADD COLUMN pronouns TEXT;
+
+      -- One line under the name — "what, right now", as distinct from the bio.
+      ALTER TABLE user_profiles ADD COLUMN tagline TEXT;
+
+      -- Which band of a tall image survives the banner's wide crop, 0-100.
+      ALTER TABLE user_profiles ADD COLUMN banner_position INTEGER NOT NULL DEFAULT 50;
+
+      -- A handful of labelled links, as JSON. They are only ever read as a
+      -- set and never queried across, so a table would buy a join on every
+      -- profile read for something capped at five rows.
+      ALTER TABLE user_profiles ADD COLUMN links TEXT;
+
+      -- A game they want on their profile, whatever their playtime says.
+      -- Nullable and cleared rather than cascading: losing a game from the
+      -- catalog should not delete somebody's profile.
+      ALTER TABLE user_profiles ADD COLUMN favorite_game_id TEXT
+        REFERENCES games(id) ON DELETE SET NULL;
+    `,
+  },
+  {
+    id: '0022_messaging',
+    sql: /* sql */ `
+      -- Private conversations, which the server routes and cannot read.
+      --
+      -- Everything here is either ciphertext or metadata. What the server
+      -- knows: who is in a conversation, when a message was sent, and how
+      -- large it was. What it does not: a single word of any of them.
+
+      -- One published key per device, so a message can be sealed for each
+      -- machine somebody uses rather than for an account in the abstract.
+      CREATE TABLE device_keys (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        -- Ties a key to the device that owns it, so signing out on one laptop
+        -- retires that key and leaves the phone's alone.
+        device_id TEXT REFERENCES devices(id) ON DELETE CASCADE,
+        public_key TEXT NOT NULL,
+        -- The operator-visible label, for a "your devices" list that can say
+        -- which key is which.
+        label TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        last_seen_at TEXT
+      );
+      CREATE UNIQUE INDEX device_keys_public_idx ON device_keys(user_id, public_key);
+      CREATE INDEX device_keys_user_idx ON device_keys(user_id);
+
+      CREATE TABLE conversations (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL DEFAULT 'direct',
+        -- Only groups carry one. A direct conversation is named by whoever is
+        -- in it, which each side renders for itself.
+        title TEXT,
+        created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        -- Denormalised so the conversation list sorts without touching the
+        -- messages table, which is by far the largest thing here.
+        last_message_at TEXT
+      );
+      CREATE INDEX conversations_recent_idx ON conversations(last_message_at DESC);
+
+      CREATE TABLE conversation_members (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member',
+        joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        -- How far this member has read, so an unread count needs no per-user
+        -- row per message.
+        last_read_at TEXT,
+        left_at TEXT
+      );
+      CREATE UNIQUE INDEX conversation_members_pk
+        ON conversation_members(conversation_id, user_id);
+      CREATE INDEX conversation_members_user_idx ON conversation_members(user_id, left_at);
+
+      -- The conversation key, sealed once per member device.
+      --
+      -- Separate from the membership row because one member may have several
+      -- devices, each needing its own wrap, and because a new device joining
+      -- must not disturb the membership record.
+      CREATE TABLE conversation_keys (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        -- The device public key this wrap was made for; the client matches on
+        -- it to find the one it can open.
+        public_key TEXT NOT NULL,
+        ephemeral_public TEXT NOT NULL,
+        nonce TEXT NOT NULL,
+        ciphertext TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX conversation_keys_pk
+        ON conversation_keys(conversation_id, public_key);
+      CREATE INDEX conversation_keys_user_idx ON conversation_keys(conversation_id, user_id);
+
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        sender_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        -- The sealed body: a nonce and a ciphertext, both base64. The server
+        -- stores these and never looks inside.
+        nonce TEXT NOT NULL,
+        ciphertext TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        edited_at TEXT,
+        -- Tombstoned rather than deleted, so every client agrees the message
+        -- is gone instead of one that missed the event still showing it.
+        deleted_at TEXT
+      );
+      CREATE INDEX messages_conversation_idx ON messages(conversation_id, created_at);
+
+      -- Attachments, which are rows in "media" holding ciphertext.
+      CREATE TABLE message_media (
+        message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (message_id, media_id)
+      );
+      CREATE INDEX message_media_media_idx ON message_media(media_id);
+    `,
+  },
 ];

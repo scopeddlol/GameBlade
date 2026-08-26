@@ -174,6 +174,26 @@ const hexColor = z
   .trim()
   .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex color such as #7c5cff');
 
+/** How many labelled links a profile may carry. */
+export const MAX_PROFILE_LINKS = 5;
+
+/**
+ * One link on a profile.
+ *
+ * The scheme is checked rather than trusted: this string ends up in an
+ * `href`, and `javascript:` there is a script somebody else wrote running on
+ * the page of whoever opened their profile.
+ */
+export const profileLinkSchema = z.object({
+  label: z.string().trim().min(1).max(24),
+  url: z
+    .string()
+    .trim()
+    .max(300)
+    .refine((value) => /^https?:\/\//i.test(value), 'A link has to start with http:// or https://'),
+});
+export type ProfileLinkInput = z.infer<typeof profileLinkSchema>;
+
 export const updateProfileSchema = z.object({
   displayName: z.string().trim().min(1).max(48).optional(),
   bio: z.string().trim().max(500).nullable().optional(),
@@ -183,6 +203,12 @@ export const updateProfileSchema = z.object({
   showActivity: z.boolean().optional(),
   avatarMediaId: z.string().trim().max(64).nullable().optional(),
   bannerMediaId: z.string().trim().max(64).nullable().optional(),
+  pronouns: z.string().trim().max(32).nullable().optional(),
+  tagline: z.string().trim().max(80).nullable().optional(),
+  /** Where the banner is cropped, as a percentage down the source image. */
+  bannerPosition: z.coerce.number().int().min(0).max(100).optional(),
+  links: z.array(profileLinkSchema).max(MAX_PROFILE_LINKS).nullable().optional(),
+  favoriteGameId: z.string().trim().max(64).nullable().optional(),
 });
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 
@@ -709,6 +735,19 @@ export const scanRequestSchema = z.object({
 });
 export type ScanRequestInput = z.infer<typeof scanRequestSchema>;
 
+/** Upkeep run from the panel rather than waiting for the hourly one. */
+export const databaseMaintenanceSchema = z.object({
+  /**
+   * Rewrite the file with its pages in order.
+   *
+   * Off by default because it is the expensive half: it needs room for a
+   * second copy of the database on the same disk and holds a write lock for
+   * as long as it takes. Worth it after a large deletion, and not otherwise.
+   */
+  vacuum: z.boolean().default(false),
+});
+export type DatabaseMaintenanceInput = z.infer<typeof databaseMaintenanceSchema>;
+
 export const purgeMissingSchema = z.object({
   /**
    * Only purge entries missing for at least this long. The default of 0 means
@@ -835,6 +874,23 @@ export const discordAnnounceSchema = z.object({
   channelId: z.string().trim().max(64).optional(),
   /** A media id already uploaded to this server, attached to the message. */
   imageMediaId: z.string().trim().max(64).optional(),
+  /**
+   * Repeat the embed's mentions above it, so they actually notify.
+   *
+   * Discord renders `<@&id>` inside an embed as a role pill and notifies
+   * nobody — that is its rule, not a formatting mistake. The only way an
+   * embed addressed to a role reaches that role is a content line carrying
+   * the same tokens, which is what this asks for. Meaningless without an
+   * embed, and ignored there: plain content already notifies.
+   */
+  pingMentions: z.boolean().default(true),
+  /**
+   * Permit `@everyone` and `@here`.
+   *
+   * Off unless asked for, and separate from the mentions above, because it is
+   * the one mention nobody should be able to send by accident.
+   */
+  allowEveryone: z.boolean().default(false),
 });
 export type DiscordAnnounceInput = z.infer<typeof discordAnnounceSchema>;
 

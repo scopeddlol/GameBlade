@@ -15,6 +15,7 @@ import {
   HardDrive,
   Lock,
   Play,
+  Square,
   Trash2,
   Trophy,
   X,
@@ -35,11 +36,11 @@ import {
   ErrorNote,
   GameCapabilities,
   Loading,
-  Modal,
   ProgressBar,
   Spinner,
 } from './ui.js';
 import { InstallDialog } from './InstallDialog.js';
+import { MediaViewer, type MediaItem } from './MediaViewer.js';
 
 interface Rules {
   save: SaveRule[];
@@ -155,6 +156,24 @@ export function GameDetailPanel({
   // the same way.
   const addMutation = useAddToLibrary();
 
+  /**
+   * Closes the running game from here.
+   *
+   * The button this replaces was a greyed-out "Running" — true, and useless to
+   * somebody whose game has hung behind a fullscreen window with no way back
+   * to the desktop. The process is asked to close and killed if it does not
+   * answer, so a game that handles the request still gets to save first.
+   */
+  const stopMutation = useMutation({
+    mutationFn: () => ipc.stopGame(gameId),
+    onSuccess: () => {
+      setError(null);
+      setNotice('Closing the game…');
+      void queryClient.invalidateQueries({ queryKey: ['running'] });
+    },
+    onError: (caught) => setError(errorMessage(caught)),
+  });
+
   const uninstallMutation = useMutation({
     mutationFn: () => ipc.uninstall(gameId),
     onSuccess: () => {
@@ -207,15 +226,25 @@ export function GameDetailPanel({
               {notice ? <p className="notice">{notice}</p> : null}
 
               <div className="detail-actions">
-                {installed ? (
+                {installed && isRunning ? (
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-lg"
+                    onClick={() => stopMutation.mutate()}
+                    disabled={stopMutation.isPending}
+                  >
+                    <Square size={16} aria-hidden />
+                    {stopMutation.isPending ? 'Closing…' : 'Stop'}
+                  </button>
+                ) : installed ? (
                   <button
                     type="button"
                     className="btn btn-primary btn-lg"
                     onClick={() => launchMutation.mutate()}
-                    disabled={isRunning || launchMutation.isPending}
+                    disabled={launchMutation.isPending}
                   >
                     <Play size={16} aria-hidden />
-                    {isRunning ? 'Running' : launchMutation.isPending ? 'Starting…' : 'Play'}
+                    {launchMutation.isPending ? 'Starting…' : 'Play'}
                   </button>
                 ) : (
                   <button
@@ -326,11 +355,11 @@ export function GameDetailPanel({
                 </div>
               ) : null}
 
-              {game.screenshots.length > 0 ? (
-                <ScreenshotGallery screenshots={game.screenshots} title={game.title} />
-              ) : null}
-
-              {game.videos.length > 0 ? <TrailerList videoIds={game.videos} /> : null}
+              <MediaGallery
+                screenshots={game.screenshots}
+                videoIds={game.videos}
+                title={game.title}
+              />
 
               {installed && saveRule ? (
                 <SaveSyncSection gameId={gameId} rule={saveRule} onError={setError} />
@@ -374,81 +403,88 @@ export function GameDetailPanel({
   );
 }
 
-function ScreenshotGallery({ screenshots, title }: { screenshots: string[]; title: string }) {
+/**
+ * A game's screenshots and trailers, as one gallery.
+ *
+ * They were two lists that behaved differently: a screenshot opened into the
+ * 440-pixel dialog the app uses for confirmation prompts — so a 1080p capture
+ * rendered at about a fifth of its size, with text buttons for Previous and
+ * Next — and a trailer left the app entirely for a browser. Both now open the
+ * same full-screen viewer, and arrow keys move between all of them.
+ */
+function MediaGallery({
+  screenshots,
+  videoIds,
+  title,
+}: {
+  screenshots: string[];
+  videoIds: string[];
+  title: string;
+}) {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
+
+  // Trailers first: a moving picture of the game says more than a still, and
+  // it is what somebody deciding whether to install is looking for.
+  const items: MediaItem[] = [
+    ...videoIds.map((id, index) => ({
+      kind: 'youtube' as const,
+      path: id,
+      label: `${title} — trailer ${index + 1}`,
+    })),
+    ...screenshots.map((path, index) => ({
+      kind: 'image' as const,
+      path,
+      label: `${title} — screenshot ${index + 1}`,
+    })),
+  ];
+
+  if (items.length === 0) return null;
 
   return (
     <section className="detail-section">
-      <h3>Screenshots</h3>
+      <h3>
+        <Film size={16} aria-hidden /> Media
+        <span className="muted small">
+          {videoIds.length > 0
+            ? `${videoIds.length} ${videoIds.length === 1 ? 'trailer' : 'trailers'}`
+            : ''}
+          {videoIds.length > 0 && screenshots.length > 0 ? ' · ' : ''}
+          {screenshots.length > 0
+            ? `${screenshots.length} ${screenshots.length === 1 ? 'screenshot' : 'screenshots'}`
+            : ''}
+        </span>
+      </h3>
+
       <div className="screenshot-strip">
-        {screenshots.map((path, index) => (
+        {items.map((item, index) => (
           <button
-            key={path}
+            key={`${item.kind}-${item.path}`}
             type="button"
             className="screenshot-thumb"
             onClick={() => setOpenIndex(index)}
+            title={item.label}
           >
-            <Artwork path={path} alt={`${title} screenshot ${index + 1}`} />
+            {item.kind === 'youtube' ? (
+              <>
+                <img
+                  src={`https://img.youtube.com/vi/${item.path}/hqdefault.jpg`}
+                  alt=""
+                  loading="lazy"
+                />
+                <span className="trailer-play">
+                  <Play size={20} aria-hidden />
+                </span>
+              </>
+            ) : (
+              <Artwork path={item.path} alt={item.label} />
+            )}
           </button>
         ))}
       </div>
 
       {openIndex !== null ? (
-        <Modal
-          title={`${title} — screenshot ${openIndex + 1} of ${screenshots.length}`}
-          onClose={() => setOpenIndex(null)}
-        >
-          <div className="screenshot-lightbox">
-            <Artwork path={screenshots[openIndex]} alt="" />
-          </div>
-          {screenshots.length > 1 ? (
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() =>
-                  setOpenIndex((openIndex - 1 + screenshots.length) % screenshots.length)
-                }
-              >
-                Previous
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => setOpenIndex((openIndex + 1) % screenshots.length)}
-              >
-                Next
-              </button>
-            </div>
-          ) : null}
-        </Modal>
+        <MediaViewer items={items} startIndex={openIndex} onClose={() => setOpenIndex(null)} />
       ) : null}
-    </section>
-  );
-}
-
-function TrailerList({ videoIds }: { videoIds: string[] }) {
-  return (
-    <section className="detail-section">
-      <h3>
-        <Film size={16} aria-hidden /> Trailers
-      </h3>
-      <div className="trailer-strip">
-        {videoIds.map((id) => (
-          <button
-            key={id}
-            type="button"
-            className="trailer-card"
-            onClick={() => void ipc.openExternal(`https://www.youtube.com/watch?v=${id}`)}
-            title="Watch on YouTube"
-          >
-            <img src={`https://img.youtube.com/vi/${id}/hqdefault.jpg`} alt="" loading="lazy" />
-            <span className="trailer-play">
-              <Play size={20} aria-hidden />
-            </span>
-          </button>
-        ))}
-      </div>
     </section>
   );
 }

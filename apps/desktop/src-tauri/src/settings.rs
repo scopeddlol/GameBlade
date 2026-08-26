@@ -18,8 +18,39 @@ pub struct Settings {
     #[serde(default)]
     pub extra_install_dirs: Vec<PathBuf>,
 
-    /// Pull the cloud save before launching and push it after quitting.
+    /// The master switch for cloud saves on this machine.
+    ///
+    /// With it off nothing is read or written automatically; the buttons on a
+    /// game's page still work, because turning off *automatic* syncing is not
+    /// the same as refusing to sync at all.
     pub sync_saves: bool,
+
+    /// Upload the save once the game closes.
+    ///
+    /// This is the half that makes syncing automatic, and the half that was
+    /// missing: the client pulled a newer cloud save before launching and then
+    /// never sent anything back, so a player who never pressed Upload had a
+    /// cloud copy frozen at whenever they last thought to. Default on, because
+    /// a player who has turned cloud saves on has already said what they want.
+    #[serde(default = "default_true")]
+    pub auto_sync_on_exit: bool,
+
+    /// Upload every this many minutes while a game is running. 0 disables it.
+    ///
+    /// A crash, a power cut or a force-quit all end a session with nothing
+    /// uploaded, and for a long session that is the whole evening. Off by
+    /// default: it costs an upload per interval, and a game that keeps its
+    /// save file open while writing can be packed mid-write.
+    #[serde(default)]
+    pub auto_sync_interval_minutes: u32,
+
+    /// On sign-in, upload anything this machine is ahead on.
+    ///
+    /// The safety net for the case above: whatever the last session failed to
+    /// send goes up the next time the app starts, rather than waiting for the
+    /// game to be played again.
+    #[serde(default = "default_true")]
+    pub auto_sync_on_start: bool,
 
     /// Ask before overwriting when local and remote saves have both changed.
     /// Turning this off always prefers whichever side was captured later.
@@ -82,6 +113,9 @@ impl Default for Settings {
             install_dir: default_install_dir(),
             extra_install_dirs: Vec::new(),
             sync_saves: true,
+            auto_sync_on_exit: true,
+            auto_sync_interval_minutes: 0,
+            auto_sync_on_start: true,
             prompt_on_save_conflict: true,
             share_activity: true,
             minimize_on_launch: true,
@@ -99,6 +133,12 @@ impl Settings {
     /// Clamp anything a hand-edited file could get wrong.
     pub fn sanitised(mut self) -> Self {
         self.download_concurrency = self.download_concurrency.clamp(1, 16);
+
+        // A one-minute interval would spend a session packing and uploading
+        // the same folder over and over; an eight-hour one is not a backup.
+        if self.auto_sync_interval_minutes != 0 {
+            self.auto_sync_interval_minutes = self.auto_sync_interval_minutes.clamp(5, 120);
+        }
 
         // A hand-edited file could name a layout the client has no code for,
         // which would leave the Library rendering nothing at all.
@@ -237,6 +277,55 @@ mod tests {
             settings.sanitised().theme_accent,
             Some("#ff0066".to_string())
         );
+    }
+
+    #[test]
+    fn sanitised_keeps_the_periodic_sync_interval_usable() {
+        let too_often = Settings {
+            auto_sync_interval_minutes: 1,
+            ..Settings::default()
+        };
+        assert_eq!(too_often.sanitised().auto_sync_interval_minutes, 5);
+
+        let too_rare = Settings {
+            auto_sync_interval_minutes: 10_000,
+            ..Settings::default()
+        };
+        assert_eq!(too_rare.sanitised().auto_sync_interval_minutes, 120);
+
+        // Zero means off, and must survive as zero rather than being clamped
+        // up into "every five minutes" — which would switch on a feature the
+        // player deliberately left alone.
+        let off = Settings {
+            auto_sync_interval_minutes: 0,
+            ..Settings::default()
+        };
+        assert_eq!(off.sanitised().auto_sync_interval_minutes, 0);
+    }
+
+    #[test]
+    fn a_settings_file_saved_before_automatic_syncing_still_loads() {
+        let dir = std::env::temp_dir().join(format!(
+            "gameblade-autosync-test-{}-{}",
+            std::process::id(),
+            "a"
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            settings_path(&dir),
+            r#"{"installDir":"/games","syncSaves":true,"promptOnSaveConflict":true,"shareActivity":true,"minimizeOnLaunch":true,"downloadConcurrency":4,"verifyDownloads":true}"#,
+        )
+        .unwrap();
+
+        let loaded = load(&dir);
+
+        // The new fields take their defaults rather than failing the parse and
+        // resetting every other preference along with them.
+        assert!(loaded.auto_sync_on_exit);
+        assert!(loaded.auto_sync_on_start);
+        assert_eq!(loaded.auto_sync_interval_minutes, 0);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

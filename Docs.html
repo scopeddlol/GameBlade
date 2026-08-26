@@ -1,0 +1,2552 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GameBlade — Documentation</title>
+    <meta
+      name="description"
+      content="Everything about running GameBlade: the server, the admin panel, the desktop client, and the pieces that connect them."
+    />
+
+    <!--
+      ===================================================================
+        HOW TO EDIT THIS FILE
+      ===================================================================
+
+      It is one file with no build step. Open it in a browser to read it;
+      open it in an editor to change it. There is nothing to install and
+      nothing to run.
+
+      To add a section, write it:
+
+          <section id="something">
+            <h2>Something</h2>
+            <p>…</p>
+          </section>
+
+      That is the whole procedure. The contents list on the left is built
+      from the headings when the page loads, so it is never edited by hand
+      and can never disagree with the page.
+
+      A few classes are available where they help. None is required:
+
+          <div class="note">…</div>        an aside
+          <div class="warn">…</div>        something that will bite
+          <div class="new">…</div>         new in this version
+          <table>…</table>                 styled automatically
+          <pre><code>…</code></pre>        gets a copy button
+
+      Everything else is ordinary HTML, and it is meant to stay that way:
+      documentation that needs a toolchain to change is documentation that
+      stops being changed.
+    -->
+
+    <style>
+      /* --------------------------------------------------------------
+         Colour, as tokens. Two themes: the page follows the operating
+         system unless the toggle says otherwise, and the toggle's choice
+         is remembered.
+         -------------------------------------------------------------- */
+      :root {
+        --bg: #0d1017;
+        --bg-raised: #141821;
+        --bg-sunken: #0a0d13;
+        --border: #232936;
+        --border-strong: #303849;
+        --text: #e6e9ef;
+        --text-dim: #9aa3b2;
+        --text-faint: #6b7383;
+        --accent: #2bb7f5;
+        --accent-soft: rgba(43, 183, 245, 0.14);
+        --warn: #f6c344;
+        --warn-soft: rgba(246, 195, 68, 0.12);
+        --new: #4ade80;
+        --new-soft: rgba(74, 222, 128, 0.12);
+        --code-bg: #0a0d13;
+        --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+
+        --sidebar: 280px;
+        --measure: 74ch;
+        --radius: 10px;
+        --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
+        --mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+      }
+
+      [data-theme='light'] {
+        --bg: #fbfcfd;
+        --bg-raised: #ffffff;
+        --bg-sunken: #f2f4f7;
+        --border: #e2e6ec;
+        --border-strong: #cbd2dc;
+        --text: #16191f;
+        --text-dim: #5a6270;
+        --text-faint: #858c99;
+        --accent: #0b74a8;
+        --accent-soft: rgba(11, 116, 168, 0.1);
+        --warn: #9a6800;
+        --warn-soft: rgba(154, 104, 0, 0.1);
+        --new: #157f3d;
+        --new-soft: rgba(21, 127, 61, 0.1);
+        --code-bg: #f4f6f9;
+        --shadow: 0 10px 30px rgba(16, 24, 40, 0.08);
+      }
+
+      @media (prefers-color-scheme: light) {
+        :root:not([data-theme='dark']) {
+          --bg: #fbfcfd;
+          --bg-raised: #ffffff;
+          --bg-sunken: #f2f4f7;
+          --border: #e2e6ec;
+          --border-strong: #cbd2dc;
+          --text: #16191f;
+          --text-dim: #5a6270;
+          --text-faint: #858c99;
+          --accent: #0b74a8;
+          --accent-soft: rgba(11, 116, 168, 0.1);
+          --warn: #9a6800;
+          --warn-soft: rgba(154, 104, 0, 0.1);
+          --new: #157f3d;
+          --new-soft: rgba(21, 127, 61, 0.1);
+          --code-bg: #f4f6f9;
+          --shadow: 0 10px 30px rgba(16, 24, 40, 0.08);
+        }
+      }
+
+      /* ------------------------------------------------------ skeleton */
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+        /* So an anchor does not land under the sticky header. */
+        scroll-padding-top: 84px;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font);
+        font-size: 15px;
+        line-height: 1.65;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* Nothing may widen the page. A documentation site that scrolls
+         sideways on a phone is one people give up on. */
+      body {
+        overflow-x: hidden;
+      }
+
+      header.top {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 12px 20px;
+        background: color-mix(in srgb, var(--bg) 88%, transparent);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .brand {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        font-size: 16px;
+      }
+      .brand .version {
+        font: 500 11px/1 var(--mono);
+        color: var(--accent);
+        background: var(--accent-soft);
+        padding: 4px 7px;
+        border-radius: 999px;
+      }
+
+      .top .spacer {
+        flex: 1;
+      }
+
+      .top a,
+      .top button {
+        color: var(--text-dim);
+        font: inherit;
+        font-size: 13px;
+        text-decoration: none;
+        background: none;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        padding: 5px 10px;
+        cursor: pointer;
+      }
+      .top a:hover,
+      .top button:hover {
+        color: var(--text);
+        border-color: var(--border-strong);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: var(--sidebar) minmax(0, 1fr);
+        gap: 40px;
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 0 24px 96px;
+      }
+
+      /* -------------------------------------------------------- contents */
+
+      nav.contents {
+        position: sticky;
+        top: 68px;
+        align-self: start;
+        max-height: calc(100vh - 84px);
+        overflow-y: auto;
+        padding: 24px 0 40px;
+        scrollbar-width: thin;
+      }
+
+      .filter {
+        position: relative;
+        margin-bottom: 14px;
+      }
+      .filter input {
+        width: 100%;
+        padding: 8px 10px;
+        font: inherit;
+        font-size: 13px;
+        color: var(--text);
+        background: var(--bg-sunken);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+      .filter input:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+
+      nav.contents ol {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      nav.contents a {
+        display: block;
+        padding: 4px 10px 4px 12px;
+        color: var(--text-dim);
+        text-decoration: none;
+        font-size: 13px;
+        border-left: 2px solid transparent;
+        border-radius: 0 6px 6px 0;
+      }
+      nav.contents a:hover {
+        color: var(--text);
+        background: var(--bg-raised);
+      }
+      nav.contents a.sub {
+        padding-left: 26px;
+        font-size: 12.5px;
+        color: var(--text-faint);
+      }
+      nav.contents a.current {
+        color: var(--accent);
+        border-left-color: var(--accent);
+        background: var(--accent-soft);
+      }
+      nav.contents li.hidden {
+        display: none;
+      }
+
+      /* ------------------------------------------------------------ body */
+
+      main {
+        min-width: 0;
+        padding-top: 24px;
+      }
+
+      main > section {
+        max-width: var(--measure);
+        padding-bottom: 12px;
+        margin-bottom: 44px;
+        border-bottom: 1px solid var(--border);
+      }
+      main > section:last-child {
+        border-bottom: 0;
+      }
+
+      h1 {
+        font-size: 34px;
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+        margin: 0 0 12px;
+      }
+      h2 {
+        font-size: 23px;
+        letter-spacing: -0.015em;
+        margin: 0 0 14px;
+        scroll-margin-top: 84px;
+      }
+      h3 {
+        font-size: 17px;
+        margin: 30px 0 10px;
+        scroll-margin-top: 84px;
+      }
+      h4 {
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-dim);
+        margin: 24px 0 8px;
+      }
+
+      p,
+      ul,
+      ol.prose {
+        margin: 0 0 14px;
+      }
+      main ul,
+      main ol.prose {
+        padding-left: 22px;
+      }
+      main li {
+        margin-bottom: 5px;
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+        text-underline-offset: 2px;
+      }
+
+      /* A heading you can link to, without a permanent hash cluttering it. */
+      .anchor {
+        margin-left: 8px;
+        color: var(--text-faint);
+        text-decoration: none;
+        opacity: 0;
+        font-weight: 400;
+        transition: opacity 120ms ease;
+      }
+      h2:hover .anchor,
+      h3:hover .anchor,
+      .anchor:focus {
+        opacity: 1;
+      }
+
+      .lede {
+        font-size: 17px;
+        color: var(--text-dim);
+        max-width: 62ch;
+      }
+
+      code {
+        font-family: var(--mono);
+        font-size: 0.87em;
+        background: var(--code-bg);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 1px 5px;
+      }
+
+      pre {
+        position: relative;
+        margin: 0 0 16px;
+        padding: 14px 16px;
+        background: var(--code-bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow-x: auto;
+      }
+      pre code {
+        background: none;
+        border: 0;
+        padding: 0;
+        font-size: 12.5px;
+        line-height: 1.6;
+      }
+      pre .copy {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        font: 500 11px/1 var(--font);
+        color: var(--text-faint);
+        background: var(--bg-raised);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 4px 8px;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 120ms ease;
+      }
+      pre:hover .copy,
+      pre .copy:focus {
+        opacity: 1;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 0 0 18px;
+        font-size: 13.5px;
+      }
+      /* A wide table scrolls inside itself rather than pushing the page
+         sideways, which is the one thing a documentation page must not do. */
+      .scroller {
+        overflow-x: auto;
+        margin-bottom: 18px;
+      }
+      .scroller table {
+        margin-bottom: 0;
+        min-width: 520px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+      }
+      th {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-dim);
+        border-bottom-color: var(--border-strong);
+      }
+      tbody tr:last-child td {
+        border-bottom: 0;
+      }
+      td code {
+        white-space: nowrap;
+      }
+
+      .note,
+      .warn,
+      .new {
+        margin: 0 0 18px;
+        padding: 12px 16px;
+        border-radius: var(--radius);
+        border-left: 3px solid var(--accent);
+        background: var(--accent-soft);
+        font-size: 14px;
+      }
+      .note > :last-child,
+      .warn > :last-child,
+      .new > :last-child {
+        margin-bottom: 0;
+      }
+      .warn {
+        border-left-color: var(--warn);
+        background: var(--warn-soft);
+      }
+      .new {
+        border-left-color: var(--new);
+        background: var(--new-soft);
+      }
+      .note::before,
+      .warn::before,
+      .new::before {
+        display: block;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 5px;
+        color: var(--accent);
+      }
+      .note::before {
+        content: 'Note';
+      }
+      .warn::before {
+        content: 'Watch out';
+        color: var(--warn);
+      }
+      .new::before {
+        content: 'New in 0.5.3';
+        color: var(--new);
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+      .card {
+        padding: 14px 16px;
+        background: var(--bg-raised);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+      }
+      .card h4 {
+        margin: 0 0 4px;
+        text-transform: none;
+        letter-spacing: 0;
+        font-size: 14px;
+        color: var(--text);
+      }
+      .card p {
+        margin: 0;
+        font-size: 13px;
+        color: var(--text-dim);
+      }
+
+      footer.page {
+        max-width: var(--measure);
+        color: var(--text-faint);
+        font-size: 13px;
+      }
+
+      /* ------------------------------------------------------- narrow */
+
+      .menu-toggle {
+        display: none;
+      }
+
+      /* The header's secondary links are the first thing to give at a narrow
+         width: the title and the theme toggle are what somebody needs on a
+         phone, and the rest pushing the page sideways is worse than absent. */
+      @media (max-width: 620px) {
+        .top .external {
+          display: none;
+        }
+        .brand {
+          font-size: 15px;
+        }
+      }
+
+      @media (max-width: 940px) {
+        .layout {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 0;
+          padding: 0 18px 72px;
+        }
+        nav.contents {
+          position: fixed;
+          inset: 56px 0 0 0;
+          z-index: 25;
+          max-height: none;
+          padding: 20px;
+          background: var(--bg);
+          border-right: 1px solid var(--border);
+          display: none;
+        }
+        nav.contents.open {
+          display: block;
+        }
+        .menu-toggle {
+          display: inline-block;
+        }
+        h1 {
+          font-size: 27px;
+        }
+      }
+
+      /* Printed, the navigation and the chrome are noise. */
+      @media print {
+        header.top,
+        nav.contents,
+        pre .copy,
+        .anchor {
+          display: none;
+        }
+        .layout {
+          display: block;
+          padding: 0;
+        }
+        main > section {
+          max-width: none;
+          break-inside: avoid;
+        }
+        body {
+          background: #fff;
+          color: #000;
+          font-size: 11pt;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+        * {
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <header class="top">
+      <button class="menu-toggle" id="menu-toggle" aria-expanded="false">Contents</button>
+      <span class="brand">GameBlade <span class="version">0.5.3</span></span>
+      <span class="spacer"></span>
+      <a class="external" href="https://github.com/scopeddlol/GameBlade">GitHub</a>
+      <a class="external" href="docs/API.md">API reference</a>
+      <button id="theme-toggle" aria-label="Switch between light and dark">Theme</button>
+    </header>
+
+    <div class="layout">
+      <nav class="contents" id="contents" aria-label="Contents">
+        <div class="filter">
+          <input id="filter" type="search" placeholder="Filter these headings…" aria-label="Filter" />
+        </div>
+        <ol id="toc"></ol>
+      </nav>
+
+      <main>
+        <section id="what-it-is">
+          <h1>GameBlade</h1>
+          <p class="lede">
+            A self-hosted platform for preserving free-to-play and DRM-free games: a Docker server
+            that holds the archive, and a Windows desktop client that makes playing from it feel
+            like a modern game launcher.
+          </p>
+
+          <p>
+            This page is the whole manual. The README is deliberately short — it exists to get a
+            server running and to point here. Everything below is one file with no build step: open
+            it in a browser to read it, open it in an editor to change it.
+          </p>
+
+          <div class="cards">
+            <div class="card">
+              <h4>Server, not a web app</h4>
+              <p>
+                The server hosts the files, a public landing page and an admin panel. Everything a
+                player does happens in the desktop client.
+              </p>
+            </div>
+            <div class="card">
+              <h4>Read-only by design</h4>
+              <p>
+                Your library is mounted <code>:ro</code>. GameBlade indexes and serves it; it never
+                writes to it.
+              </p>
+            </div>
+            <div class="card">
+              <h4>Invite-only</h4>
+              <p>
+                Self-registration is off by default. Accounts come from invite codes an
+                administrator generates.
+              </p>
+            </div>
+            <div class="card">
+              <h4>Small</h4>
+              <p>One Alpine container, SQLite, no external database or cache.</p>
+            </div>
+          </div>
+
+          <div class="new">
+            <p><strong>0.5.3 at a glance.</strong> The larger changes are described in their own sections:</p>
+            <ul>
+              <li><a href="#scanning">The library scanner</a>, rebuilt — the run that never finished.</li>
+              <li><a href="#messages">Encrypted direct messages and group chats</a>.</li>
+              <li><a href="#offline">The client works offline</a>, where it previously refused to start.</li>
+              <li><a href="#database">Database tuning</a> for a catalog on a spinning disk.</li>
+              <li><a href="#save-paths">Save rules derived from achievement rules</a>.</li>
+              <li><a href="#discord-posting">Tagging people, roles and channels</a> in what the bot posts.</li>
+              <li><a href="#media">A real media viewer</a>, and <a href="#profiles">more on a profile</a>.</li>
+            </ul>
+          </div>
+        </section>
+
+        <section id="pieces">
+          <h2>How the pieces fit</h2>
+
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr>
+                  <th>Piece</th>
+                  <th>Who uses it</th>
+                  <th>What it does</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Server</strong> (Docker)</td>
+                  <td>You</td>
+                  <td>Reads the library from disk, serves the API, stores saves and profiles</td>
+                </tr>
+                <tr>
+                  <td><strong>Landing page</strong> (<code>/</code>)</td>
+                  <td>Everyone</td>
+                  <td>Explains the archive and links the Windows client download</td>
+                </tr>
+                <tr>
+                  <td><strong>Admin panel</strong> (<code>/admin</code>)</td>
+                  <td>Administrator</td>
+                  <td>Invites, users, catalog, metadata, featured games, settings</td>
+                </tr>
+                <tr>
+                  <td><strong>Desktop client</strong> (Windows)</td>
+                  <td>Players</td>
+                  <td>Home, Library, Store, Requests, News, Social, Messages and Settings</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p>
+            There is deliberately no web library browser — that lives entirely in the desktop
+            client. A player who signs in on the web lands on an account page (username, email,
+            password, signed-in devices) instead.
+          </p>
+
+          <h3 id="where-to-get-it">Where to get it</h3>
+          <p>
+            Both halves are published together by CI — an image without a matching client leaves you
+            nothing to connect with.
+          </p>
+          <div class="scroller">
+            <table>
+              <tbody>
+                <tr>
+                  <td><strong>Server image</strong></td>
+                  <td>
+                    <code>ghcr.io/scopeddlol/gameblade</code> — <code>latest</code>, plus a tag per
+                    release. Built for <code>linux/amd64</code> and <code>linux/arm64</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <td><strong>Windows client</strong></td>
+                  <td>
+                    The <code>.exe</code> on the
+                    <a href="https://github.com/scopeddlol/GameBlade/releases/latest">latest release</a>.
+                    An <code>.msi</code> is there too for deployment tooling.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="quick-start">
+          <h2>Getting it running</h2>
+
+          <pre><code>git clone https://github.com/scopeddlol/GameBlade.git
+cd GameBlade
+cp .env.example .env</code></pre>
+
+          <p>Edit <code>.env</code> and set at least <code>LIBRARY_PATH</code>. Then:</p>
+
+          <pre><code>docker compose up -d</code></pre>
+
+          <p>
+            Open <code>http://&lt;host&gt;:8080</code> and create the first administrator account.
+            That first-run screen is only available while the database has no users.
+          </p>
+          <p>
+            Once the library has scanned, upload a client build from <strong>Admin → Settings</strong>
+            (or point <code>CLIENT_DOWNLOAD_URL</code> at one hosted elsewhere) and invite people
+            from <strong>Admin → Players → Invites</strong>.
+          </p>
+
+          <div class="warn">
+            <p>
+              <strong>If it fails to start with a database error</strong>, the <code>data</code>
+              folder is almost certainly owned by root while the container runs as uid 1000. SQLite
+              is built into the image — nothing to install — it just cannot create its file:
+            </p>
+            <pre><code>sudo chown -R 1000:1000 ./data</code></pre>
+            <p>
+              Alternatively set <code>user: "1000:1000"</code> on the service to match your own
+              <code>id -u</code>/<code>id -g</code>.
+            </p>
+          </div>
+
+          <h3 id="library-layout">What a library looks like</h3>
+          <p>
+            Anything at the top level of a library root is treated as one game — either a directory
+            or an archive. Nested folders are indexed as that game's files, not as separate games.
+          </p>
+
+          <pre><code>/mnt/games/
+├── Hollow Knight/            &lt;- folder game
+│   ├── hollow_knight.exe
+│   └── data/
+├── Stardew_Valley_v1.6.8/    &lt;- folder game; version stripped from the title
+│   └── Stardew Valley.exe
+└── Celeste v1.4.0.0.zip      &lt;- archive game</code></pre>
+
+          <p>
+            Titles are cleaned before metadata lookup: version markers (<code>v1.6.8</code>,
+            <code>Build 12345</code>), bracketed tags (<code>[GOG]</code>, <code>(2015)</code>) and
+            release-group noise (<code>Repack</code>, <code>FitGirl</code>) are removed. Dotted
+            acronyms such as <code>S.T.A.L.K.E.R.</code> survive intact. Anything matched wrongly can
+            be corrected by hand from the game's page.
+          </p>
+        </section>
+
+        <section id="configuration">
+          <h2>Configuration</h2>
+          <p>
+            Everything is optional except a library path. Values set in the admin UI take precedence
+            over environment variables, so you can seed credentials via compose and change them
+            later without touching the stack.
+          </p>
+
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr>
+                  <th>Variable</th>
+                  <th>Default</th>
+                  <th>Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td><code>LIBRARY_PATHS</code></td><td>—</td><td>Comma-separated library roots <strong>inside the container</strong></td></tr>
+                <tr><td><code>DATA_DIR</code></td><td><code>/data</code></td><td>Database, artwork, uploads, cloud saves, client installer</td></tr>
+                <tr><td><code>PORT</code> / <code>HOST</code></td><td><code>8080</code> / <code>0.0.0.0</code></td><td>Listen address</td></tr>
+                <tr><td><code>BASE_PATH</code></td><td>—</td><td>Sub-path to host under, e.g. <code>/gameblade</code></td></tr>
+                <tr><td><code>TRUST_PROXY</code></td><td><code>false</code></td><td><code>true</code>, a hop count, or a CIDR list</td></tr>
+                <tr><td><code>SECURE_COOKIES</code></td><td><code>auto</code></td><td><code>auto</code> follows <code>X-Forwarded-Proto</code></td></tr>
+                <tr><td><code>ADMIN_USERNAME</code> / <code>ADMIN_PASSWORD</code></td><td>—</td><td>Creates the first admin, only while no users exist</td></tr>
+                <tr><td><code>ALLOW_SELF_REGISTRATION</code></td><td><code>false</code></td><td>Invite-only when false</td></tr>
+                <tr><td><code>IGDB_CLIENT_ID</code> / <code>IGDB_CLIENT_SECRET</code></td><td>—</td><td>Twitch application credentials</td></tr>
+                <tr><td><code>STEAMGRIDDB_API_KEY</code></td><td>—</td><td>SteamGridDB API key</td></tr>
+                <tr><td><code>STEAM_API_KEY</code></td><td>—</td><td>Reads published achievement schemas; no player data</td></tr>
+                <tr><td><code>CLIENT_DOWNLOAD_URL</code></td><td>—</td><td>Download-button fallback when no installer is uploaded</td></tr>
+                <tr><td><code>MEDIA_QUOTA_MB</code></td><td><code>20480</code></td><td>Per-account ceiling for avatars, screenshots, clips and message attachments</td></tr>
+                <tr><td><code>SAVE_QUOTA_MB</code></td><td><code>10240</code></td><td>Per-account ceiling for cloud saves</td></tr>
+                <tr><td><code>SCAN_ON_START</code></td><td><code>true</code></td><td>Scan shortly after boot</td></tr>
+                <tr><td><code>SCAN_INTERVAL_MINUTES</code></td><td><code>360</code></td><td>Scheduled rescan interval; <code>0</code> disables</td></tr>
+                <tr><td><code>LOG_LEVEL</code></td><td><code>info</code></td><td><code>fatal</code> … <code>trace</code></td></tr>
+                <tr><td><code>SESSION_SECRET</code></td><td>generated</td><td>Download-token signing key; set only for multiple replicas</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="proxy">
+          <h2>Running behind a reverse proxy</h2>
+
+          <h3 id="proxy-required">Required in every case</h3>
+          <p>
+            Set <code>TRUST_PROXY=true</code>. Without it every request appears to come from the
+            proxy, which breaks per-client rate limiting and logs the wrong address.
+          </p>
+          <p>
+            <code>SECURE_COOKIES=auto</code> (the default) marks session cookies
+            <code>Secure</code> when the proxy reports <code>X-Forwarded-Proto: https</code>.
+          </p>
+
+          <h3 id="proxy-hostname">On its own hostname</h3>
+          <p>
+            Nothing else to configure. Point the proxy at <code>http://gameblade:8080</code> and
+            leave <code>BASE_PATH</code> empty.
+          </p>
+
+          <h3 id="proxy-subpath">Under a sub-path</h3>
+          <p>
+            Set <code>BASE_PATH=/gameblade</code>. The web client ships relative asset URLs and reads
+            its own base path from a <code>&lt;base href&gt;</code> tag the server rewrites per
+            request, so the same image works at <code>/</code> and at any sub-path with no rebuild.
+          </p>
+          <div class="warn">
+            <p>Do <strong>not</strong> strip the prefix at the proxy — GameBlade expects the full path.</p>
+          </div>
+
+          <h3 id="proxy-pangolin">Pangolin</h3>
+          <p>
+            Pangolin tunnels traffic over WireGuard and terminates it in Traefik, so the container
+            needs no published ports at all. Remove the <code>ports:</code> block from
+            <code>docker-compose.yml</code> and point the Pangolin resource at
+            <code>gameblade:8080</code> on the shared Docker network.
+          </p>
+          <p>Two things matter for large downloads through a tunnel:</p>
+          <ul>
+            <li>
+              <strong>Do not enable response buffering or compression.</strong> Game data is already
+              compressed, so buffering only adds latency and memory pressure. GameBlade sets
+              <code>Cache-Control: no-transform</code> and <code>X-Accel-Buffering: no</code> on
+              download responses to say so explicitly.
+            </li>
+            <li>
+              <strong>Allow long-lived responses.</strong> A multi-gigabyte transfer can run for
+              hours. GameBlade itself applies no request timeout; make sure the proxy doesn't either.
+            </li>
+          </ul>
+          <p>
+            Tunnel throughput is the usual bottleneck on a large download. That is precisely what
+            <a href="#downloads">the desktop client's downloader</a> is for.
+          </p>
+        </section>
+
+        <section id="providers">
+          <h2>Metadata providers</h2>
+          <p>
+            Both are optional — GameBlade runs fine without them, it just shows titles and file sizes
+            instead of artwork. Add credentials in <strong>Admin → Settings</strong>, or via
+            environment variables.
+          </p>
+
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr><th>Provider</th><th>What it supplies</th><th>Credentials</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>IGDB</strong></td>
+                  <td>Summaries, release dates, genres, ratings</td>
+                  <td>Create an app at <a href="https://dev.twitch.tv/console/apps">dev.twitch.tv</a> — IGDB uses Twitch OAuth</td>
+                </tr>
+                <tr>
+                  <td><strong>SteamGridDB</strong></td>
+                  <td>Posters, capsules, hero art, logos, icons</td>
+                  <td>Your <a href="https://www.steamgriddb.com/profile/preferences/api">SteamGridDB API preferences</a></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p>
+            IGDB enforces 4 requests/second; GameBlade rate-limits itself to stay under that, so a
+            first scan of a large library takes a while but never gets throttled out. Artwork is
+            downloaded once and cached locally, so the library keeps rendering if a provider is
+            unreachable — and no client IP is ever exposed to a provider.
+          </p>
+        </section>
+        <section id="admin-panel">
+          <h2>The admin panel</h2>
+          <p>
+            Everything an operator needs, at <code>/admin</code> — and it works on a phone: below the
+            large breakpoint the sidebar becomes a drawer, and tables and charts stay inside the
+            viewport rather than forcing the page sideways.
+          </p>
+          <p>
+            Six sections, each with its own sub-tabs. Pointing at one starts fetching what it needs
+            before the click lands, and a page waiting on data draws its own shape rather than a
+            spinner. The flat URLs the sections used to live at still work and redirect.
+          </p>
+
+          <h3 id="admin-overview">Overview</h3>
+          <p>
+            Catalog health, connected clients, scan progress, and a broadcast announcement box that
+            pushes a notification to every account.
+          </p>
+
+          <h3 id="admin-catalog">Catalog</h3>
+          <ul>
+            <li>
+              <strong>Games</strong> — a worklist of every game, filterable by match status and by
+              what an entry is still missing: no launch executable, no cloud-save rule, no artwork,
+              no achievements, no metadata. Each filter carries a server-wide count, and every row
+              shows the same four things as <code>EXE / SAVE / ART / ACH</code> markers, so a scan
+              down the list says where the holes are without opening anything. Opening one gives a
+              full metadata editor: fields, artwork slots, screenshots, Steam achievement import,
+              and the launch and save rules the desktop client needs.
+            </li>
+            <li>
+              <strong>Achievements</strong> — the same job across the whole catalog rather than one
+              game at a time. See <a href="#achievements-bulk">In bulk</a>.
+            </li>
+            <li><strong>Featured</strong> — curates the carousel on the client's Home tab, in order, with a per-slot image override.</li>
+            <li><strong>Save paths</strong> — where each game keeps its saves. See <a href="#save-paths">Where the save paths come from</a>.</li>
+            <li><strong>Libraries</strong> — the folders on disk that are scanned, and the scan itself. See <a href="#scanning">Scanning</a>.</li>
+          </ul>
+
+          <h3 id="admin-players">Players</h3>
+          <ul>
+            <li><strong>Accounts</strong> — who is here, and their roles.</li>
+            <li><strong>Invites</strong> — codes, their uses and their expiry.</li>
+            <li><strong>Game requests</strong> — the queue, ranked by how many people asked. See <a href="#requests">Game requests</a>.</li>
+            <li><strong>Bug reports</strong> — the triage queue. See <a href="#bugs">Reporting a bug</a>.</li>
+          </ul>
+
+          <h3 id="admin-insights">Insights</h3>
+          <ul>
+            <li>
+              <strong>Analytics</strong> — who downloaded what, the most-played titles, bandwidth per
+              day and per month, allowance usage, and a recent-downloads log. Everything is derived
+              from the download and play records already being written, so there is no separate
+              counter to drift out of agreement with them.
+            </li>
+            <li><strong>Health</strong> — what needs attention, the backup schedule, and <a href="#database">database maintenance</a>.</li>
+          </ul>
+
+          <h3 id="admin-appearance">Appearance</h3>
+          <ul>
+            <li><strong>Theme</strong> — the colour preset and accent, applied to the panel around you as you pick, and put back if you leave without saving.</li>
+            <li><strong>Landing page</strong> — the public page as an ordered list of sections, with a live preview. See <a href="#landing">Editing the landing page</a>.</li>
+            <li>
+              <strong>Desktop client</strong> — your own links (a Discord invite, a wiki, a support
+              page) rendered in the client's sidebar, on its Home tab, or in the right-click menu.
+              Links only: the client hands the URL to the player's browser, and only
+              <code>http(s)</code> is accepted — pushing anything executable to every player's
+              machine would be a different trust model entirely.
+            </li>
+          </ul>
+
+          <h3 id="admin-settings">Settings</h3>
+          <ul>
+            <li><strong>Server</strong> — the name and tagline, provider credentials, the Windows client installer, and the bandwidth limits.</li>
+            <li><strong>API keys</strong> — scoped credentials for <a href="#external-api">the external API</a>.</li>
+          </ul>
+        </section>
+
+        <section id="scanning">
+          <h2>Scanning</h2>
+          <p>
+            A scan walks each library root, reconciles what is on disk against the catalog, and then
+            asks the metadata providers about anything new. <strong>Admin → Catalog → Libraries</strong>
+            starts one and shows what it is doing.
+          </p>
+
+          <div class="new">
+            <p>
+              The scanner was rebuilt in 0.5.3. If you have been living with a scan that ran from
+              boot and never finished, this section is the one to read.
+            </p>
+          </div>
+
+          <h3 id="scan-phases">The three phases, and what their numbers mean</h3>
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr><th>Phase</th><th>The count is</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Reading</strong></td>
+                  <td>
+                    Top-level folders inspected, out of how many the root holds. It cannot know how
+                    many <em>games</em> that will be until it has looked inside each one.
+                  </td>
+                </tr>
+                <tr>
+                  <td><strong>Indexing</strong></td>
+                  <td>Entries reconciled with the database, out of what reading found.</td>
+                </tr>
+                <tr>
+                  <td><strong>Fetching metadata</strong></td>
+                  <td>Titles asked about, out of everything still waiting on a provider.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            Counters are cleared when the phase or the library changes. They used to carry over,
+            which is why a run part-way through its second root would sit on the first root's
+            finished tally — a complete-looking number that was not measuring anything.
+          </p>
+
+          <h3 id="scan-controls">Skip, Stop, and the stall warning</h3>
+          <p>
+            <strong>Skip this one</strong> abandons whatever is in front of the run — an unreadable
+            folder, a provider that will not answer — and moves on. It aborts the request in flight
+            rather than waiting for it, so it takes effect immediately.
+          </p>
+          <p>
+            <strong>Stop the scan</strong> ends the run at the next checkpoint. What has already been
+            indexed stays indexed; a cancelled scan is a partial scan, and the next one carries on
+            from there.
+          </p>
+          <p>
+            If no counter has moved for three quarters of a minute, the panel says so and how long
+            it has been. A working scan and a wedged one look identical from a progress bar; that
+            line is the difference between waiting sensibly and waiting for ever.
+          </p>
+
+          <h3 id="scan-ceilings">The ceilings</h3>
+          <p>Every phase carries a deadline, because each of these has caused a run to hang:</p>
+          <ul>
+            <li>
+              <strong>90 seconds per title</strong> during metadata. A title is not one request — it
+              is a search, a fetch, a cover and up to twelve screenshots, each with its own timeout
+              and retry. Multiplied out, one game could legitimately occupy a run for the better
+              part of an hour.
+            </li>
+            <li>
+              <strong>30 minutes per library</strong> during reading. A share that has gone away does
+              not fail, it hangs: every directory read blocks on a mount that will never answer.
+            </li>
+            <li>
+              <strong>Twelve screenshots per game.</strong> Nobody scrolls to the thirtieth, and each
+              one past that is a download the first scan of a library pays for, per game.
+            </li>
+          </ul>
+          <p>
+            The reading walk hands the event loop back every two hundred entries, so the server goes
+            on answering requests — including the progress endpoint you are refreshing to find out
+            what is happening — while a large share is being read off a slow disk.
+          </p>
+
+          <h3 id="scan-metadata">What enrichment does and does not touch</h3>
+          <p>
+            Enrichment is a first-time job. Once a provider has written to a game, it is left alone,
+            so a title corrected by hand or artwork chosen deliberately survives the next scan.
+            Clearing a match from the game's page is what puts it back in the queue.
+          </p>
+          <p>
+            A game the providers have never heard of is set aside for the rest of the pass rather
+            than re-asked in every batch, and the run says at the end how many are still without
+            metadata so they can be matched by hand.
+          </p>
+
+          <div class="note">
+            <p>
+              A game that vanishes from disk is <em>flagged</em>, never deleted — an unmounted share
+              must not destroy hand-made metadata matches. <strong>Remove missing</strong> on the
+              catalog page clears the flagged ones out when you actually mean it.
+            </p>
+          </div>
+        </section>
+
+        <section id="database">
+          <h2>The database</h2>
+          <p>
+            SQLite, in <code>DATA_DIR</code>, with plain-SQL migrations applied at boot. There is
+            nothing to administer day to day — but a catalog on a spinning disk is a different
+            proposition from one on an SSD, and 0.5.3 tunes for it.
+          </p>
+
+          <div class="new">
+            <p>
+              A 64 MiB page cache, a memory map, 8 KiB pages on a newly created database, and a
+              write-ahead log that checkpoints a quarter as often. Ten indexes were added for
+              queries that had none: every shelf and library page filters on "not missing" and then
+              sorts, which a single-column index only half satisfies.
+            </p>
+          </div>
+
+          <h3 id="db-maintenance">Maintenance</h3>
+          <p>
+            Statistics and a log checkpoint run hourly by themselves. SQLite only gathers query
+            statistics when asked, so a catalog that grew from fifty games to five thousand is
+            otherwise still being planned as though it were small — and on a disk that charges
+            milliseconds per seek, a plan that scans instead of seeking is the difference between a
+            page load and a wait.
+          </p>
+          <p><strong>Admin → Insights → Health → Database</strong> has both jobs as buttons:</p>
+          <ul>
+            <li>
+              <strong>Refresh statistics</strong> — cheap, safe at any time. Worth pressing right
+              after importing a large library rather than waiting an hour for the hourly run.
+            </li>
+            <li>
+              <strong>Rebuild and compact</strong> — rewrites the file with its pages in order and
+              gives back unused space. This is the one that repays real time on a spinning disk, and
+              also the expensive one: it needs room for a second copy of the database on the same
+              disk and holds a write lock for as long as it takes. The panel shows how much there is
+              to reclaim so you can judge whether it is worth it.
+            </li>
+          </ul>
+        </section>
+
+        <section id="users">
+          <h2>Users and invites</h2>
+          <p>
+            Registration is invite-only unless an administrator turns on self-registration in
+            <strong>Admin → Settings</strong>.
+          </p>
+          <p>
+            To add someone: <strong>Admin → Players → Invites → Create an invite</strong>, then send
+            them the copied link. Invites carry a role, a use count and an optional expiry, and can
+            be revoked at any time. After registering they download the Windows client and sign in
+            there — the web surface has nothing else for them.
+          </p>
+          <p>
+            Changing a password signs out every other session and revokes every desktop device for
+            that account.
+          </p>
+        </section>
+
+        <section id="catalog">
+          <h2>Working on the catalog</h2>
+
+          <h3 id="artwork">Picking artwork</h3>
+          <p>
+            Every image slot — cover, banner, hero, logo/text, icon, and each screenshot — has a
+            <strong>Browse gallery</strong> button that opens a picker over everything IGDB and
+            SteamGridDB publish for that title. Search by whatever the providers call the game
+            rather than what the folder is called, and narrow by SteamGridDB style (a white or black
+            text wordmark, a capsule with no logo baked in, and so on). The screenshot picker stays
+            open so a set can be assembled in one pass.
+          </p>
+          <p>
+            Previews are streamed through the server rather than loaded from the provider CDNs, so a
+            browser never talks to IGDB or SteamGridDB directly. Only the image actually chosen is
+            downloaded and cached.
+          </p>
+
+          <h3 id="rules">Launch and save rules</h3>
+          <p>These are what turn an archived folder into something playable:</p>
+          <ul>
+            <li>
+              A <strong>launch rule</strong> names the executable relative to the install folder.
+              Leave it blank and the client picks the largest <code>.exe</code> that is not obviously
+              an installer or uninstaller.
+            </li>
+            <li>
+              A <strong>save rule</strong> says where the game keeps its saves, using placeholders
+              that resolve on each machine: <code>{userprofile}</code>, <code>{appdata}</code>,
+              <code>{localappdata}</code>, <code>{documents}</code>, <code>{savedgames}</code>,
+              <code>{public}</code>, <code>{programdata}</code>, <code>{windir}</code> and
+              <code>{install}</code>. Optional include and exclude globs narrow it further.
+            </li>
+          </ul>
+
+          <h3 id="checksums">Checksums</h3>
+          <p>
+            <strong>Compute checksums</strong> on a game hashes every file so the client can verify
+            what it downloads. It is opt-in per game because hashing reads every byte and is far too
+            expensive to do automatically across a multi-terabyte archive. <strong>Verify</strong>
+            re-hashes what was hashed before and records whether each file still matches — for an
+            archive, a changed file is almost always corruption rather than an edit, and nothing else
+            here would ever notice.
+          </p>
+
+          <h3 id="import">Games players already have</h3>
+          <p>
+            A player with a drive full of games should not have to download a second copy of any of
+            them. <strong>Library → Import</strong> points the client at a folder, finds every
+            subfolder holding a Windows executable, and matches those names against the catalog —
+            through the same title parser the scanner uses, so a
+            <code>Hollow.Knight.v1.5.78.11.GOG-FitGirl</code> folder still resolves. Each row is
+            confirmed by hand before anything is linked, because a wrong match would attach the wrong
+            cloud saves to the wrong game.
+          </p>
+          <p>
+            Linking copies and moves nothing; the files stay where they are. Unlinking is therefore a
+            separate action from uninstalling, and only the latter deletes.
+          </p>
+        </section>
+
+        <section id="cloud-saves">
+          <h2>Cloud saves</h2>
+          <p>
+            The client hashes the save folder, zips it, and uploads it as an immutable version. Ten
+            versions are kept per slot, so a bad sync is always recoverable.
+          </p>
+          <p>
+            Conflicts are detected rather than guessed at. The client remembers the digest it last
+            synced; when the cloud has moved on from that digest <em>and</em> the local copy has
+            changed too, both sides hold edits and the client asks instead of picking a winner.
+            Launching a game pulls a newer cloud save first, but deliberately does <strong>not</strong>
+            resolve a conflict — starting a game is the wrong moment to make someone choose which
+            save to destroy.
+          </p>
+          <p>
+            Restoring moves the existing save folder aside rather than deleting it, so the previous
+            state stays on disk even if the archive turns out to be wrong.
+          </p>
+
+          <h3 id="auto-sync">Automatic syncing</h3>
+          <div class="new">
+            <p>
+              The setting has said "pull before launching and push after quitting" since the client
+              was written, and only the pull was ever implemented — so a player who trusted it had a
+              cloud copy frozen at whenever they last pressed Upload, and a fresh install would then
+              restore that over their real progress. Uploading now happens too.
+            </p>
+          </div>
+          <p>
+            <strong>Settings → Cloud saves</strong> in the client. The master switch turns automatic
+            syncing on; underneath it, three controls decide <em>when</em>:
+          </p>
+          <ul>
+            <li>
+              <strong>Upload when a game closes.</strong> On by default. There is a short pause first
+              — a game writes its save on the way out and the process is gone before the disk has
+              finished, and packing the instant the process disappears uploads the save from
+              <em>before</em> the session.
+            </li>
+            <li>
+              <strong>Catch up on sign-in.</strong> On by default. A crash, a power cut or closing
+              the launcher mid-game all end a session with nothing uploaded; this is the sweep that
+              notices, and it is why "automatic" can be trusted at all.
+            </li>
+            <li>
+              <strong>Back up while playing.</strong> Off by default, five minutes to an hour. A long
+              session that ends in a crash otherwise loses everything since it started. It costs an
+              upload per interval, and for a game that holds its save file open it can capture a
+              half-written one — hence off unless asked for.
+            </li>
+          </ul>
+          <p>
+            A conflict is never resolved automatically. That stays a decision on the game's page.
+          </p>
+
+          <h3 id="save-paths">Where the save paths come from</h3>
+          <p>
+            Finding where a game saves by hand means installing it, playing it, making a save and
+            going looking — for every title. <strong>Admin → Catalog → Save paths</strong> matches the
+            catalog against
+            <a href="https://github.com/mtkennerly/ludusavi-manifest">Ludusavi's manifest</a>, a
+            machine-readable digest of PCGamingWiki's save-path data covering close to twenty
+            thousand games, and proposes the rules instead.
+          </p>
+          <p>
+            Nothing is written without a tick, and the manifest's own title is shown beside the
+            archive's on every row, because a title match is occasionally confident and wrong — and
+            these paths are where the client will later read and write a player's saves. Titles that
+            already have a rule are hidden by default.
+          </p>
+          <p>
+            The index refreshes itself daily, decided from its own age rather than run on a timer, so
+            a server restarted every evening still refreshes once a day and one left up for months
+            does not drift. <strong>Refresh index</strong> forces it.
+          </p>
+
+          <h4>Achievements without cloud saves</h4>
+          <div class="new">
+            <p>
+              A game with unlock rules and no save rule is not a game whose save location is unknown.
+              An unlock rule reads a file the game wrote <em>into its own save folder</em> — a
+              Goldberg <code>achievements.json</code>, an emulator's progress log, a stats file next
+              to the slots. So the location has already been written down, in a column that syncs
+              nothing.
+            </p>
+          </div>
+          <p>
+            The same page now derives them. Rules pointing into one folder fold into a single
+            proposal; a nested path folds into its parent; two genuinely separate layouts — a retail
+            install and an emulator — are offered as a choice rather than one picked at random.
+            Nothing is written without a tick, and a game that has gained a rule since the page loaded
+            is left alone.
+          </p>
+          <p>
+            Health calls this out separately from the plain "no save rule" count, because those
+            players lose their unlocks along with their saves the first time they change machine —
+            and a save can be copied back by hand, while an unlock cannot.
+          </p>
+        </section>
+
+        <section id="achievements">
+          <h2>Achievements</h2>
+          <p>
+            Games here have no achievement runtime of their own, so definitions are imported and
+            unlocks are reported by the client.
+          </p>
+          <p>
+            Import a set from <strong>Admin → Catalog → Games → (a game) → Achievements</strong> with
+            a Steam app id. This reads Steam's <em>published</em> achievement schema — no player data
+            is requested and no Steam account is linked — which is what makes it usable for a
+            DRM-free copy of a game that also ships there. Global unlock rates come along with it and
+            set each achievement's point value.
+          </p>
+
+          <h3 id="achievements-bulk">In bulk</h3>
+          <p>
+            One game at a time is right for a correction and hopeless as a way to cover a catalog of
+            several hundred, so <strong>Admin → Catalog → Achievements</strong> does the same job
+            across as many games as you select.
+          </p>
+          <p>
+            It starts on the games that have none. Tick the ones you want — or all of them — and it
+            works through the list, finding each on Steam, importing its published list and writing
+            the unlock rules, a few games at a time so you can watch it go and stop it. Every game
+            gets a line saying what happened, and the ones that could not be done automatically sort
+            to the top: a title Steam places ambiguously, one it has never heard of, and one whose
+            store entry has no achievements are all ordinary across a real catalog, and each is a
+            note rather than a failed run. Games that already have achievements are left alone unless
+            you say otherwise.
+          </p>
+          <p>
+            For the games Steam cannot help with — a fan translation, an itch-only release, a version
+            whose store entry predates its achievements — the same page takes a pasted list. One per
+            line: the name, then optionally a description, a point value and a key, separated by
+            tabs, commas or pipes, so a column copied out of a spreadsheet or a wiki table works as
+            it is. A missing key is derived from the name and stays stable, so a corrected list can
+            simply be pasted again.
+          </p>
+
+          <h3 id="achievement-rules">Achievements that unlock themselves</h3>
+          <p>
+            Definitions have always been importable; a <em>rule</em> is what says when one is earned.
+            It names a file the game itself writes and what to find in it — a JSON path, an INI key,
+            or a regular expression over text — tested for presence, truthiness, equality, or a
+            threshold.
+          </p>
+          <p>
+            The client reads those files when a session ends and reports only the resulting keys; the
+            files never leave the machine. A reported key with no rule behind it is ignored, so
+            reporting is not a way of simply asking for an achievement, and unlocking is idempotent,
+            so re-reading the same save changes nothing.
+          </p>
+          <p>
+            One achievement often needs a rule per save layout it might turn up in — Goldberg, a
+            retail install, an emulator — all naming the same key and told apart only by a long path.
+            Rules carry operator tags for exactly that, on the rule rather than on the achievement,
+            because the rule is the only thing that distinguishes them.
+          </p>
+          <div class="note">
+            <p>
+              Because the client is the only thing that can observe progress, unlocks are
+              self-reported and therefore not cheat-proof. The server keeps them idempotent and
+              well-formed; it does not adjudicate them.
+            </p>
+          </div>
+        </section>
+        <section id="requests">
+          <h2>Game requests</h2>
+          <p>Players ask for what is not there, and the archive keeps a queue of it.</p>
+          <p>
+            The client's <strong>Requests</strong> tab is where players ask and vote: a tally of what
+            is open, on the way and already added, a search, filters by state, and the queue ranked
+            by votes. Two people asking for the same game strengthen one row rather than producing
+            two the operator has to reconcile — titles are matched on a normalised key, so
+            <code>Half-Life 2: Episode One</code> and <code>half life 2 episode one</code> collide,
+            while <code>Halo</code> and <code>Halo Wars</code> stay apart. The asker's vote is counted
+            automatically, and anyone else can back a row or take their backing away.
+          </p>
+          <p>
+            Above the queue sit discovery shelves: what is being played elsewhere, what is
+            anticipated, what is newly out and what is best reviewed, from IGDB. Each card is checked
+            against this archive first, so its button reads <em>In the archive</em>, <em>Backed</em>,
+            <em>Back it</em> or <em>Request</em> — one click, no typing. It needs IGDB credentials;
+            without them the shelves simply do not appear and the rest of the page works as normal.
+            The lists are cached for an hour, since they are the same for every player and IGDB's
+            rate limit is shared with scanning and matching.
+          </p>
+
+          <div class="new">
+            <p>
+              Cards are clickable. A title the archive already has opens the game — the same panel
+              the Store opens, with its screenshots, its size and its Install button. One it does not
+              have opens what the provider told us about it: the cover, the full blurb, the year, the
+              score, and the button that asks for it. That is deliberately not the game drawer, which
+              is built around a game that exists here; reusing it would have meant a page of dead
+              Install and Play buttons.
+            </p>
+          </div>
+
+          <p>
+            <strong>Admin → Players → Game requests</strong> is the other side of it: the queue ranked
+            by votes, with four states — pending, coming soon, added, denied — a note players will
+            see, and a field linking a fulfilled request to the catalog entry that satisfied it. Who
+            asked is shown here and nowhere else; a wish list should not become a public record of
+            who wants what.
+          </p>
+          <p>
+            The client's Home tab draws the result: <strong>Coming soon</strong> for what has been
+            promised, <strong>Most requested</strong> for what is still wanted, and
+            <strong>Recently granted</strong> for requests that made it in — with an
+            <strong>Open</strong> button straight to the game. A denied title reopens as pending if
+            somebody else asks for it, because the second asker never saw that decision.
+          </p>
+        </section>
+
+        <section id="social">
+          <h2>Social, news and profiles</h2>
+
+          <h3 id="feed">The feed</h3>
+          <p>
+            Screenshots, clips and text, with comments and reactions. Friends have live presence and
+            a shared activity feed. Clips play where they sit with the browser's own controls, and
+            expand into <a href="#media">the media viewer</a> from a corner button.
+          </p>
+
+          <h3 id="news">News and announcements</h3>
+          <p>
+            The broadcast box on <strong>Admin → Overview</strong>, or the composer on the client's
+            <strong>News</strong> tab, sends a notification to every account <em>and</em> publishes
+            the same text as a post. The notification is read once and gone; the News tab is where it
+            stays, and where people reply to it. Underneath it is an ordinary post, so comments,
+            reactions, editing and deletion are the machinery the social feed already had.
+          </p>
+          <p>
+            Two announcements are deliberately not published: one aimed at named accounts, which is a
+            message rather than a notice, and one an operator marks as transient ("back up in five
+            minutes"). Players cannot author one — the post route derives its kind from what was
+            attached, so asking for <code>kind: announcement</code> in a request body is ignored
+            rather than trusted.
+          </p>
+
+          <h3 id="profiles">Profiles</h3>
+          <p>
+            A display name, a bio, an avatar, a banner, an accent colour, a country, and who may see
+            any of it — everyone on the server, friends only, or nobody. A private profile still
+            resolves so the "add friend" screen has a name to show, but every statistic is withheld
+            rather than faked.
+          </p>
+
+          <div class="new">
+            <p>0.5.3 adds room for a profile to be somebody's rather than a name and an avatar:</p>
+            <ul>
+              <li>
+                <strong>Pronouns.</strong> Free text rather than a list of options, because no fixed
+                list is complete and one that is not gets it wrong for exactly the people it matters
+                most to. Shown beside the name, and visible even on a private profile — withholding
+                it would make a locked-down profile misgender its owner to everyone who visits.
+              </li>
+              <li><strong>A status line</strong>, distinct from the bio: what, right now.</li>
+              <li>
+                <strong>Banner framing.</strong> A banner is a wide crop of a much taller picture,
+                and left at dead centre it beheads people. A slider chooses which band survives.
+              </li>
+              <li>
+                <strong>Up to five labelled links.</strong> Capped, because an uncapped list becomes
+                a link farm; labelled, because an unlabelled URL on somebody's profile is one nobody
+                clicks. Only <code>http(s)</code> is accepted, checked on both sides.
+              </li>
+              <li>
+                <strong>One pinned game</strong>, as distinct from "most played" — which is what the
+                section calling itself <em>Favorite games</em> actually was, and is now labelled as.
+              </li>
+            </ul>
+          </div>
+
+          <h3 id="discord-on-profile">Showing a Discord handle</h3>
+          <p>
+            A linked player's handle is private by default. The toggle lives on their account page,
+            and re-linking — which happens on every Discord sign-in — does not turn it back on.
+          </p>
+          <div class="new">
+            <p>
+              Turning it on used to change the friends rail and nothing else, including the profile
+              page it is named after. Every path that builds a profile summary now resolves the
+              handle the same way, so the answer is the same everywhere.
+            </p>
+          </div>
+        </section>
+
+        <section id="messages">
+          <h2>Messages</h2>
+          <div class="new">
+            <p>New in 0.5.3: direct messages and group chats, end-to-end encrypted.</p>
+          </div>
+
+          <p>
+            The <strong>Messages</strong> tab in the client. Text, images and video, between friends
+            or in a group of up to 32. The server routes these and cannot read them.
+          </p>
+
+          <h3 id="messages-using">Using it</h3>
+          <ul>
+            <li>
+              <strong>Friends only.</strong> An archive with open messaging is one where any account
+              can send anything to any other, which is the shape every spam and harassment problem
+              takes. Adding somebody is already the gesture that says "I want to hear from you".
+            </li>
+            <li>
+              <strong>Picking more than one person makes a group.</strong> Whoever starts it owns it
+              and can rename it and add people; anyone can leave.
+            </li>
+            <li>
+              <strong>Attachments</strong> are encrypted before they are uploaded and decrypt on
+              demand — a thread scrolled back through a year of screenshots does not fetch all of
+              them to draw thumbnails nobody has looked at. They open in
+              <a href="#media">the media viewer</a>.
+            </li>
+            <li>
+              <strong>Withdrawing</strong> a message clears its ciphertext rather than hiding the
+              row, so every client agrees it is gone. It does not reach into the screen of somebody
+              who has already read it, and nothing could.
+            </li>
+          </ul>
+
+          <h3 id="messages-crypto">How the encryption works</h3>
+          <p>
+            Each device generates a long-lived X25519 identity key the first time it is used, kept in
+            the OS credential store beside the device token. The private half never leaves that
+            machine — not to the server, and not even into the client's own web view, so a
+            compromised page cannot leak one.
+          </p>
+          <p>
+            A conversation has one symmetric key, made by whoever starts it. For each member device
+            it is <em>wrapped</em>: a one-time X25519 keypair, ECDH against that device's identity
+            key, HKDF-SHA256 over the shared secret, and XChaCha20-Poly1305 around the conversation
+            key. The server stores one wrapped blob per device and can open none of them — and is
+            never asked to make one, because the moment it could seal a key it could read the
+            conversation.
+          </p>
+          <p>
+            Messages and attachments are then XChaCha20-Poly1305 under that key with a fresh random
+            nonce each time. XChaCha specifically for its 192-bit nonce: one key covers a whole
+            conversation's history, and at that many messages a random 96-bit nonce is no longer
+            comfortably collision-free. Poly1305 is what makes this authenticated rather than merely
+            encrypted — a server that edited a stored row would produce something that will not open,
+            not something that opens as different words.
+          </p>
+          <p>
+            The plaintext is a small JSON envelope rather than bare text, so an attachment's name and
+            type are encrypted too. The server can say that a file was sent; it cannot say it was a
+            screenshot whose filename gives away which game.
+          </p>
+
+          <h3 id="messages-limits">What this protects against, and what it does not</h3>
+          <p>
+            Stated plainly, because a security promise nobody reads is worth nothing — and the same
+            three points are on the screen in the client, not only here.
+          </p>
+
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr><th>Threat</th><th>Covered?</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Someone who reads the database, or takes a backup of it</td>
+                  <td><strong>Yes.</strong> Every body and attachment is ciphertext at rest.</td>
+                </tr>
+                <tr>
+                  <td>Someone who intercepts the traffic</td>
+                  <td><strong>Yes</strong>, on top of TLS — the payloads are already sealed.</td>
+                </tr>
+                <tr>
+                  <td>An operator reading the messages on a stock server</td>
+                  <td><strong>Yes.</strong> Nothing on the server holds a key that opens one.</td>
+                </tr>
+                <tr>
+                  <td>An operator who has <em>replaced the server binary</em></td>
+                  <td>
+                    <strong>Only if you check fingerprints.</strong> The server distributes the
+                    public keys, so a modified one could hand out a key of its own. See below.
+                  </td>
+                </tr>
+                <tr>
+                  <td>A conversation key that leaks later</td>
+                  <td>
+                    <strong>No.</strong> There is no ratchet, so no forward secrecy: it opens that
+                    conversation's past as well as its future.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Who talks to whom, when, and how much</td>
+                  <td>
+                    <strong>No.</strong> Encrypting content does not hide the shape of a social
+                    graph, and nothing here pretends otherwise.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 id="messages-verify">Verifying a fingerprint</h3>
+          <p>
+            <strong>Verify</strong> in a conversation's header lists everybody in it and the
+            fingerprint of each of their devices — eight groups of four characters. Read one aloud to
+            the person it belongs to. If they match, no key was substituted, which is the one thing
+            encryption alone cannot prove. The server computes the fingerprint independently of the
+            client claiming it, so a modified client cannot simply display the digest you expect.
+          </p>
+
+          <div class="note">
+            <p>
+              <strong>Signing out destroys this device's message identity.</strong> That is
+              deliberate: it is the one secret that makes the account's conversations readable on
+              that machine, and leaving it behind on a shared PC would throw away the whole point.
+              Signing back in creates a new identity, and every conversation is re-keyed for it by
+              the other members' clients — quietly, the next time they open the thread. A device that
+              signs in while everybody else is offline shows "not unlocked for this machine yet"
+              until one of them does.
+            </p>
+          </div>
+
+          <h3 id="messages-leaving">Leaving a group</h3>
+          <p>
+            The membership record is kept, with a departure date, so the messages that person sent
+            still have a name against them. The conversation is deliberately <em>not</em> re-keyed on
+            their way out: doing so would suggest its past is now closed to them, and it is not —
+            they held the key and could have kept a copy of everything they read. Saying otherwise
+            would be a promise this design cannot keep.
+          </p>
+        </section>
+
+        <section id="desktop">
+          <h2>The desktop client</h2>
+          <p>The client is where players spend all their time.</p>
+
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr><th>Tab</th><th>What is there</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Home</strong></td><td>Your own totals, an auto-advancing featured carousel, jump back in, friends playing, what is coming soon and most requested, activity, recent unlocks</td></tr>
+                <tr><td><strong>Library</strong></td><td>Games you own, as posters or as a dense list — install, launch, playtime, achievements, save sync and your own groups</td></tr>
+                <tr><td><strong>Store</strong></td><td>The whole archive, filterable, one click to add to your library</td></tr>
+                <tr><td><strong>Requests</strong></td><td>Ask for what is missing, and back what others asked for</td></tr>
+                <tr><td><strong>News</strong></td><td>Announcements, and the replies to them</td></tr>
+                <tr><td><strong>Social</strong></td><td>Feed with screenshots and clips, comments, reactions, friends and requests</td></tr>
+                <tr><td><strong>Messages</strong></td><td><a href="#messages">Encrypted conversations</a> with friends and groups</td></tr>
+                <tr><td><strong>Settings</strong></td><td>Profile, appearance, install locations, save sync, presence, devices, your bug reports</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p>
+            Adding a game to your library applies immediately and only to the card you clicked, so a
+            run down the store adding a dozen titles is a dozen clicks rather than a dozen round
+            trips waited out one at a time.
+          </p>
+          <p>
+            Installing, launching and playtime tracking are handled in Rust: the client extracts the
+            archive, resolves the executable, watches the game process and banks playtime as it goes,
+            so a crash mid-session still keeps most of it.
+          </p>
+          <p>
+            Presence, friend activity, notifications and new messages arrive over a WebSocket that
+            reconnects with backoff. Everything it carries is also readable over REST, so a dropped
+            socket costs freshness, never correctness.
+          </p>
+
+          <h3 id="stopping">Stopping a game</h3>
+          <div class="new">
+            <p>
+              While a game runs, the Play button used to become a greyed-out "Running" — true, and no
+              help at all to somebody whose game has hung behind a fullscreen window they cannot get
+              back to. The only way out was Task Manager.
+            </p>
+          </div>
+          <p>
+            The game's page, the right-click menu and the chip in the title bar all offer
+            <strong>Stop</strong>. The process is asked to close first, so a game that handles the
+            request gets to save, and killed five seconds later if it does not answer. Playtime is
+            recorded exactly as for a normal exit, because it was time played.
+          </p>
+
+          <h3 id="library-layouts">Library layouts</h3>
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr><th>Layout</th><th>For</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Grid</strong></td><td>Browsing by artwork</td></tr>
+                <tr><td><strong>List</strong></td><td>Finding a title you already know — four or five times as many rows on screen</td></tr>
+                <tr><td><strong>Detailed</strong></td><td>Deciding what to play: cover, blurb, genres and every stat spelled out</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            Switched from the toolbar rather than from Settings, because which one is right changes
+            with what you are doing. The choice lives in the client's settings file, so it survives a
+            restart. Game pages show a title's logo artwork in place of its name wherever the archive
+            has one; <strong>Settings → Appearance</strong> turns that off for anyone who would rather
+            read the title.
+          </p>
+
+          <h3 id="groups">Groups</h3>
+          <p>
+            A player's own shelves, private to their account. Right-click any game and choose
+            <strong>Add to group…</strong> to file it — or make a group in the same dialog and file it
+            there in one step. The Library tab then shows a chip per group beside the search box.
+          </p>
+          <p>
+            Groups are per-account rather than server-wide: an operator already has genres and the
+            featured rail to shape the catalog, and a shared group would need its own permissions
+            model to answer "who may rename this". Nothing is copied or moved, and deleting a group
+            leaves every game in it alone.
+          </p>
+
+          <h3 id="media">The media viewer</h3>
+          <div class="new">
+            <p>
+              Screenshots used to open into the 440-pixel dialog the app uses for confirmation
+              prompts, so a 1080p capture rendered at about a fifth of its size with text buttons
+              underneath for Previous and Next. Trailers left the app for a browser.
+            </p>
+          </div>
+          <p>
+            Both now open the same full-viewport viewer: arrow keys between items, a filmstrip, a
+            counter, and a fit/full-size toggle for reading small text in a capture. Trailers play
+            inline through YouTube's privacy-preserving embed host with related videos from other
+            channels switched off, and "Open on YouTube" is still there. Clips in the feed and
+            attachments in a conversation play with the browser's own controls — scrubbing, volume,
+            playback rate, picture-in-picture.
+          </p>
+
+          <h3 id="offline">Working offline</h3>
+          <div class="new">
+            <p>
+              The archive runs on your own hardware, so it is down sometimes — a reboot, a moved
+              cable, a laptop on a train. Any of those used to take the whole client with it: the
+              sign-in check failed, the app fell back to the login screen, and the login screen could
+              not reach the server either.
+            </p>
+          </div>
+          <p>What works with the server unreachable:</p>
+          <ul>
+            <li><strong>You stay signed in.</strong> An unreachable server is not the same answer as a revoked device, and is no longer treated as one.</li>
+            <li><strong>Installed games launch</strong>, and playtime is recorded when the server comes back.</li>
+            <li><strong>The library lists what is on this disk</strong>, from the install records themselves — so changing the sort does not empty the page.</li>
+            <li><strong>Pages you have already visited</strong> render from the last answer the server gave.</li>
+            <li><strong>Artwork</strong> comes off local disk. It goes through the client's own cache now, which also makes every launch after the first much faster.</li>
+          </ul>
+          <p>
+            A banner says what still works rather than only that something is wrong. Anything that
+            writes fails with "this needs a connection" instead of a TLS error. Messages are the one
+            feature that genuinely cannot work offline, and the tab says so.
+          </p>
+
+          <h3 id="downloads">Downloads</h3>
+          <p>
+            Pressing <strong>Install</strong> asks where the game should go rather than silently using
+            a default. Every configured drive is listed with what is free, what would be left after,
+            and a plain refusal when the game will not fit — a download that dies at 90% for want of
+            disk is the worst way to find that out. Add more locations under
+            <strong>Settings → Storage</strong>.
+          </p>
+          <p>
+            A browser download of a 60 GB folder is a single connection that has to survive from
+            start to finish; if it drops at 90%, it starts over. The desktop client exists to remove
+            that failure mode.
+          </p>
+          <ul>
+            <li>Fetches a <strong>manifest</strong> of every file in a game with a short-lived signed token.</li>
+            <li><strong>Multiple connections per file</strong> (files ≥ 32 MB are split into four ranges) and several files in parallel.</li>
+            <li>
+              <strong>Resumes after a disconnect, a crash or a reboot.</strong> Progress is journalled
+              to a <code>.gbpart</code> sidecar next to each file, so a transfer picks up at the exact
+              byte it stopped.
+            </li>
+            <li><strong>Retries with backoff</strong> — a flaky tunnel recovers on its own instead of failing the download.</li>
+            <li><strong>Verifies SHA-256</strong> when the server has a checksum for a file. See <a href="#checksums">Checksums</a>.</li>
+            <li>Signs in with a <strong>device token in the Windows Credential Manager</strong>, never a password on disk. Each device is listed and revocable from <strong>Settings</strong>.</li>
+          </ul>
+          <p>
+            <strong>Cancelling asks what to do with the bytes already on disk.</strong> Stopping a
+            250 GB install 100 GB in leaves 100 GB somewhere, and both answers are legitimate — a
+            transfer stopped to be resumed later wants its files, one being abandoned wants the space
+            back. Keeping them is the default; removing them deletes exactly the paths that download
+            wrote and nothing else in the folder.
+          </p>
+          <p>
+            Web downloads still work for everything: archive games stream with byte-range resume
+            support, and folder games are packaged into a ZIP on the fly.
+          </p>
+
+          <h3 id="right-click">Right-click menus</h3>
+          <p>
+            Right-clicking a game anywhere in the client — Home, Library or Store — opens a menu with
+            everything that applies to it: play, stop, install, add to library, favourite, open the
+            install folder, unlink, uninstall, plus any custom buttons placed there. Text fields keep
+            the native menu, so copy and paste still work.
+          </p>
+
+          <h3 id="updates">Keeping the client up to date</h3>
+          <p>
+            Upload a new installer under <strong>Admin → Settings</strong> and bump the client version
+            beside it. Clients older than that version show a banner offering to update, and hand off
+            to the installer when the user accepts — nothing is replaced behind their back. Declining
+            is remembered per version, so saying no to 0.5.2 stays no while 0.5.3 asks again. Nothing
+            is offered unless an installer has actually been uploaded.
+          </p>
+
+          <h3 id="bugs">Reporting a bug</h3>
+          <p>
+            <strong>Report a problem</strong> sits in the client's sidebar, reachable from wherever
+            something went wrong rather than on a page somebody has to go and find. The report
+            carries the client version, the platform, the game if one was running, and the last few
+            errors the app logged — none of which a reporter should have to know, and all of which an
+            operator would otherwise have to go back and ask for.
+          </p>
+          <p>
+            <strong>Admin → Players → Bug reports</strong> is the queue: filter by state, read what
+            the app logged just before, and answer. Whatever you set, and anything you write back,
+            reaches the reporter as a notification, and they can see where each of their reports got
+            to under Settings.
+          </p>
+          <p>
+            That last part is the point rather than a nicety. Somebody who reports a problem and never
+            learns whether it was read, fixed, or was never a bug has no reason to report the next
+            one, and an archive tested by the people using it depends on them doing so. Unanswered
+            reports show up on the health page for the same reason.
+          </p>
+        </section>
+        <section id="discord">
+          <h2>Discord</h2>
+          <p>
+            Entirely optional — with none of it configured, GameBlade behaves exactly as it did
+            before. <strong>Admin → Settings → Discord</strong> has two independent halves.
+          </p>
+
+          <h3 id="discord-signin">Sign in with Discord</h3>
+          <p>
+            Needs a Discord application's client ID and secret. Players can then link from their
+            account page and use it to sign in. Linking never creates an account: this server is
+            invite-only, so an unlinked Discord is told to sign in normally once and link. The
+            redirect URI registered on the application must exactly match
+            <code>&lt;your server&gt;/api/auth/discord/callback</code>.
+          </p>
+          <p>
+            With a guild ID set, linking also checks membership of your Discord, and the bot adds
+            them to it using the <code>guilds.join</code> scope they granted — being told to go and
+            join is a step people do not take. If that fails, they get your invite link instead.
+            <strong>Require players to be in the server</strong> refuses the link outright when
+            neither works.
+          </p>
+
+          <h3 id="discord-bot">Starting the bot</h3>
+          <p>
+            A token lets this server <em>post</em>; it does not make the bot <strong>online</strong>.
+            Being in the member list, answering a slash command and reacting to a button all need a
+            live gateway connection, and <strong>Start the bot</strong> is what opens one. The switch
+            is remembered, so the bot comes back by itself after a restart, and it reconnects on its
+            own if Discord drops it. A wrong token stops it outright and says so rather than retrying
+            for ever.
+          </p>
+          <p>
+            Intents are assembled per feature, so a server using none of them keeps exactly the bot
+            it had: <strong>Guild Members</strong> is added only when an auto-role is set, and
+            <strong>Message Reactions</strong> only when reaction roles are switched on. Both are read
+            at connect time, so changing either reconnects rather than leaving a live socket
+            listening for events it never asked for. Guild Members is privileged and has to be
+            enabled in the developer portal — the panel says so, because that is the step that
+            otherwise fails as "the bot will not connect".
+          </p>
+          <p>
+            <strong>How it appears</strong> sets the coloured dot (online, idle, do not disturb,
+            invisible) and the line under the name: Playing, Streaming, Listening to, Watching,
+            Custom or Competing in, plus the text. A change is pushed over the open connection, so it
+            takes effect immediately rather than bouncing the bot offline and back.
+          </p>
+
+          <h3 id="discord-posting">Posting, and tagging people in a post</h3>
+          <p>
+            <strong>Post something</strong> goes to whichever channel you pick — the channel and role
+            boxes are real pickers once the bot can see your server, and fall back to pasting an ID
+            when it cannot. An attached image is sent as a genuine Discord attachment rather than as
+            a link, so it works whether or not this server is reachable from the internet.
+          </p>
+
+          <div class="new">
+            <p>
+              The composer has three pickers — people, roles, channels — that insert a real mention at
+              the cursor. Typing a snowflake by hand works and nobody does it: it has to be copied out
+              of Discord with developer mode on, and a mistyped digit produces a post that looks fine
+              and pings nobody.
+            </p>
+          </div>
+
+          <div class="warn">
+            <p>
+              <strong>Discord never notifies for a mention inside an embed.</strong> A role pill in an
+              embed description renders correctly and reaches nobody — that is Discord's rule, not a
+              formatting mistake, and there is no flag that changes it.
+            </p>
+            <p>
+              The only fix is to repeat the mentions in the message content that carries the embed,
+              which the composer offers as <strong>Notify the people tagged</strong> and explains
+              rather than leaving to be discovered. Untick it for a post that should mention somebody
+              without pinging them.
+            </p>
+          </div>
+
+          <p>
+            Every outgoing message carries an explicit permission list naming exactly the ids the
+            text contains. Omitting that field would tell Discord to notify anything that looks like
+            a mention, which is how a game summary containing the word <code>@everyone</code> would
+            ping a whole server. <code>@everyone</code> itself is opt-in on top of that, with its own
+            tick, because it is the one mention nobody should send by accident.
+          </p>
+          <p>
+            The member picker is filled from accounts linked here, topped up from your guild when the
+            privileged Members intent happens to be enabled — so it works either way rather than
+            requiring a trip to the developer portal.
+          </p>
+
+          <h3 id="discord-roles">Auto-role and reaction roles</h3>
+          <p>
+            An <strong>auto-role</strong> is handed to everyone who joins. A
+            <strong>reaction role</strong> binds one emoji on one message to one role, keyed on the
+            pair since a message normally carries several choices; the emoji is stored in the shape
+            the gateway reports it, so matching is a string equality rather than a guess. Adding a
+            binding also puts the emoji on the message, and says so when it could not.
+          </p>
+          <p>
+            Both failure paths log the real cause, which is almost always the bot's own role sitting
+            below the one it is trying to grant.
+          </p>
+
+          <h3 id="discord-tickets">Support tickets</h3>
+          <p>
+            They work the way Ticket Tool does. Post a panel into a channel and it carries a button;
+            pressing it asks what the problem is, then opens a private channel that only that person,
+            your staff role and the bot can see. Closing it asks once, deletes the channel and keeps
+            the record in the panel — a Discord that accumulates two hundred dead
+            <code>#ticket-0042</code> channels is worse than no ticket system at all, which is why the
+            record lives here rather than there. One open ticket per person. The bot needs
+            <strong>Manage Channels</strong>.
+          </p>
+          <p>
+            Without a staff role every ticket is private to the person who opened it, which is almost
+            certainly not what you want — the picker says so.
+          </p>
+
+          <h3 id="discord-profile"><code>/profile</code></h3>
+          <p>
+            Anyone who has linked their account can run <code>/profile</code> in your server and the
+            bot answers with their GameBlade profile: their avatar, how many games they have, hours
+            played, achievements, friends, when they joined and what they are playing right now. The
+            avatar travels as an attachment rather than a link, because the media route needs
+            authentication and opening it to the world to save a round trip is not a trade worth
+            making. Someone who has not linked is told how to.
+          </p>
+          <p>
+            The command is registered against your server rather than globally, so it appears the
+            moment the bot connects instead of up to an hour later.
+          </p>
+
+          <h3 id="discord-config">Configuration and testing</h3>
+          <p>
+            <strong>The bot</strong> needs a token, a channel and this server's public address. The
+            address is for cover art: Discord fetches images itself, so a relative path would resolve
+            against discord.com. Paste the bare token from the Bot tab; a token pasted as
+            <code>Bot &lt;token&gt;</code> is accepted too.
+          </p>
+          <p>
+            <strong>Test</strong> walks every step between that token and a message arriving — the
+            token itself, whether the bot was ever invited to your server, whether it can see the
+            channel you named, and whether it may post there — and reports each separately, because
+            those are the things that actually go wrong and they all look identical from outside. A
+            passing run leaves a test message in the channel.
+          </p>
+          <p>
+            It can post whatever you type, announce newly added games every fifteen minutes, and
+            announce requests as they are granted. Turning announcements on starts from that moment
+            rather than posting everything already in the catalog, and only games whose metadata
+            matched are announced — an unmatched entry is a folder name with no cover and no blurb.
+          </p>
+
+          <div class="note">
+            <p>
+              <strong>Discord publishes no friends list to third-party applications.</strong> There
+              is no scope for it and no endpoint. "Friends from Discord" therefore means other
+              players here who are in the same server as you, which is the closest the platform
+              allows — and since linking pushes everyone into that one server, very nearly the same
+              set.
+            </p>
+          </div>
+        </section>
+
+        <section id="appearance">
+          <h2>Theming and the landing page</h2>
+
+          <h3 id="theming">Theming</h3>
+          <p>
+            Ten presets — eight dark (Midnight, Slate, Carbon, Nebula, Aurora, Ember, Moss, Oceanic)
+            and two genuine light ones (Daylight, Parchment) — plus an optional accent colour that
+            replaces the preset's own. Only the mid step is picked; the lighter and darker steps are
+            derived from it, so hover, focus and gradient states keep working without asking anyone to
+            choose four related colours by hand.
+          </p>
+          <p>
+            A theme is a complete surface ramp rather than one hue: brightening only the accent on a
+            near-black chrome produces something that reads as broken. The tokens are resolved
+            server-side and applied by both the web app and the desktop client, so a server's look is
+            one setting rather than two that drift.
+          </p>
+          <p>
+            <strong>Players can disagree.</strong> The client's
+            <strong>Settings → Appearance</strong> offers the same ten themes and the same accent
+            picker, stored in that machine's settings file. Picking one overrides the server's for
+            that PC only; <strong>Follow the server</strong> hands it back. An operator chooses the
+            look of their archive, and nobody has their desktop restyled the next time that choice
+            changes.
+          </p>
+
+          <h3 id="landing">Editing the landing page</h3>
+          <p>
+            <strong>Admin → Appearance → Landing page</strong> turns the landing page into an ordered
+            list of sections. Add, reorder, hide and edit them with the real page rendering beside the
+            form; the preview is the same component the public page uses, not a mock-up of it.
+          </p>
+
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr><th>Section</th><th></th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Hero</td><td>The headline, with an eyebrow line, a background image and its dimming, alignment, and four heights up to full-screen.</td></tr>
+                <tr><td>Feature grid</td><td>Short "what you get" cards, two to four across, as cards or plain.</td></tr>
+                <tr><td>How it works</td><td>A numbered sequence — get an invite, install, play.</td></tr>
+                <tr><td>Stats</td><td>A strip of numbers, optionally including the live game count.</td></tr>
+                <tr><td>Screenshots</td><td>A grid, two to four across, in widescreen, ultrawide, square or poster shape.</td></tr>
+                <tr><td>Video</td><td>One embedded YouTube video.</td></tr>
+                <tr><td>Quote</td><td>A pull quote, larger than body text and attributed.</td></tr>
+                <tr><td>FAQ</td><td>Questions and answers, each one expandable.</td></tr>
+                <tr><td>Text</td><td>Prose, left or centred, at body or display size.</td></tr>
+                <tr><td>Spacer</td><td>Space between two sections, with or without a rule.</td></tr>
+                <tr><td>Call to action</td><td>A closing prompt with the same buttons as the hero, as a panel or full width.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p>
+            Every section also has its own padding, background (none, a muted band, or an accent wash)
+            and content width. Alternating those is most of what makes a page read as designed rather
+            than as a stack of boxes, and all three come from theme tokens — so a light theme gets a
+            light band rather than a dark stripe.
+          </p>
+          <p>
+            Blocks rather than free-form positioning is deliberate: an operator says what the page
+            contains and in what order, while each section's layout stays something that was designed
+            once and works at every width, phones included. Operator copy is rendered as text and
+            never as HTML, only YouTube can be framed, and a stored page that cannot be parsed falls
+            back to the built-in one rather than taking the front door down. <strong>Reset</strong>
+            restores the shipped page at any point.
+          </p>
+
+          <h3 id="publishing-client">Publishing the Windows client</h3>
+          <p>
+            <strong>Admin → Settings</strong> takes the installer itself: pick a <code>.exe</code> (or
+            <code>.msi</code>, <code>.msix</code>, <code>.appinstaller</code>, <code>.zip</code>) up to
+            1 GB and it is stored on the server and served from the landing page's download button,
+            with its size shown alongside the version. One build is kept at a time — uploading again
+            replaces it.
+          </p>
+          <p>
+            <code>CLIENT_DOWNLOAD_URL</code> and the URL field beside the upload still work and are
+            used whenever no installer has been uploaded, so an existing deployment keeps pointing
+            wherever it already did.
+          </p>
+        </section>
+
+        <section id="operations">
+          <h2>Bandwidth, health and backups</h2>
+
+          <h3 id="bandwidth">Bandwidth</h3>
+          <p>
+            Two limits, both off by default (<code>0</code> means no limit), under
+            <strong>Admin → Settings</strong>:
+          </p>
+          <ul>
+            <li>
+              A <strong>download speed cap</strong> in KB/s, applied per stream. A client opening
+              several connections gets that much on each, which is the honest way to describe it.
+            </li>
+            <li>
+              A <strong>monthly allowance</strong> per account, in MB, resetting on the 1st. Override
+              it for one account on the Users page — an explicit override binds even for an
+              administrator, while the server-wide default deliberately does not apply to them, so a
+              default can never lock the operator out of their own downloads.
+            </li>
+          </ul>
+          <p>
+            An account over its allowance is refused with <code>429</code> before any bytes are sent,
+            and a single transfer that would cross the line is cut off mid-stream — usage is only
+            recorded when a stream closes, so a start-only check would let one oversized download sail
+            straight past.
+          </p>
+
+          <h3 id="health">Health</h3>
+          <p>
+            <strong>Admin → Insights → Health</strong> answers "is anything wrong", which analytics
+            does not: disks running out, games that have gone from disk, entries with no launch or
+            save rule, games tracking achievements they cannot sync, files whose contents no longer
+            match their recorded checksum, accounts that have hit their limit, unanswered bug reports,
+            and when the library was last scanned. Every finding links to where it is fixed. It is all
+            derived from rows already being written, so there is nothing to keep in step by hand.
+          </p>
+
+          <h3 id="backups">Backups</h3>
+          <p>
+            An archive holds the database, every player's cloud saves, uploaded media and the
+            published installer — the things that exist nowhere else. The game library is deliberately
+            left out: it is enormous, you already have it, and a scan rebuilds the catalog from it.
+            Cached artwork is out too by default, being both the largest part and the one part that
+            can be fetched again.
+          </p>
+          <p>
+            The database is copied through SQLite's own backup API rather than by copying the file.
+            Under WAL the file on disk is not a complete database on its own, and copying it during a
+            scan produces an archive that restores to a corrupt state.
+          </p>
+          <p>
+            Written every <code>backupEveryHours</code> hours keeping <code>backupKeep</code> of them,
+            or on demand. To restore: stop the server, unzip the archive over an empty
+            <code>DATA_DIR</code>, start it again.
+          </p>
+        </section>
+
+        <section id="external-api">
+          <h2>The external API</h2>
+          <p>
+            A versioned, key-authenticated API at <code>/api/v1</code> for driving the server from
+            elsewhere — provisioning accounts from a billing system, handing out invites, reading
+            stats. Keys carry explicit scopes, and <code>users:admin</code> is separate from
+            <code>users:write</code> so a provisioning key cannot mint itself an administrator.
+          </p>
+          <p>
+            Full reference, including a worked provisioning example:
+            <a href="docs/API.md"><code>docs/API.md</code></a>.
+          </p>
+        </section>
+
+        <section id="development">
+          <h2>Development</h2>
+          <p>Requires Node 22 and pnpm 10.</p>
+
+          <pre><code>pnpm install
+pnpm --filter @gameblade/shared build
+
+# API on :8080, landing page and admin panel on :5173 with proxying
+pnpm dev
+
+# The desktop client (needs the Rust toolchain and, on Linux, GTK/WebKit dev packages)
+pnpm dev:desktop</code></pre>
+
+          <pre><code>pnpm -r typecheck
+pnpm -r test
+pnpm format
+
+# Rust side of the desktop client
+cd apps/desktop/src-tauri &amp;&amp; cargo test &amp;&amp; cargo clippy --all-targets -- -D warnings</code></pre>
+
+          <h3 id="layout">Layout</h3>
+          <pre><code>apps/server     Fastify API, scanner, metadata, social, saves, achievements, messaging
+apps/web        Public landing page and the admin panel (React 19 + Tailwind)
+apps/desktop    Tauri v2 client: the tabbed UI plus Rust install/launch/sync/crypto
+packages/shared Types, zod schemas and constants used by all three</code></pre>
+          <p>
+            Server services live in <code>apps/server/src/services</code> and are wired in dependency
+            order in <code>context.ts</code>. On the Rust side, <code>install.rs</code>,
+            <code>launcher.rs</code>, <code>saves.rs</code>, <code>realtime.rs</code>,
+            <code>offline.rs</code> and <code>e2ee.rs</code> hold everything the browser cannot do.
+          </p>
+          <p>
+            The database schema lives in <code>apps/server/src/db/schema.ts</code>, with plain-SQL
+            migrations applied at boot from <code>apps/server/src/db/migrations.ts</code>. Append a
+            new migration rather than editing an applied one.
+          </p>
+
+          <h3 id="windows-build">Building a Windows release by hand</h3>
+          <p>
+            The Windows client is built on a real machine rather than by CI. Both Actions workflows
+            still know how — the jobs are there and work — but neither starts on its own, because a
+            job queued for a self-hosted runner that is offline sits pending until it times out hours
+            later rather than failing.
+          </p>
+          <p>
+            <code>scripts/build-windows.ps1</code> does the same job on any Windows machine with
+            Node 22, pnpm and the Rust toolchain:
+          </p>
+          <pre><code>.\scripts\build-windows.ps1</code></pre>
+          <p>
+            It asks for the version, stamps it across every manifest that carries one — the five
+            <code>package.json</code> files, <code>tauri.conf.json</code>, the Rust crate and its
+            lockfile, which are read by different things and must agree — then typechecks, tests,
+            builds, and copies the <code>.exe</code> and <code>.msi</code> into
+            <code>dist/windows/&lt;version&gt;/</code>.
+          </p>
+          <p>
+            <code>scripts/build-windows.cmd</code> is a double-clickable wrapper, which also avoids
+            the execution-policy prompt. It always waits for a keypress before closing, so a failure
+            cannot vanish with the window; set <code>GAMEBLADE_NOPAUSE=1</code> to skip that when
+            scripting it. Every run is transcribed to <code>build-windows.log</code> at the repo root.
+          </p>
+
+          <div class="scroller">
+            <table>
+              <thead><tr><th>Flag</th><th></th></tr></thead>
+              <tbody>
+                <tr><td><code>-Version 0.5.3</code></td><td>Skip the prompt.</td></tr>
+                <tr><td><code>-KeepVersion</code></td><td>Build at the current version, changing no files.</td></tr>
+                <tr><td><code>-Fast</code></td><td>Drop link-time optimisation. Much quicker; not for release.</td></tr>
+                <tr><td><code>-SkipChecks</code></td><td>Skip typecheck and tests.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p>
+            Only the client is built — the server ships as a container image built on Linux. Commit
+            the version bump and tag it once the installer is in hand; the tag publishes the release
+            and the image, and you attach the <code>.exe</code> to it.
+          </p>
+
+          <div class="warn">
+            <p>
+              <strong>If the window opens and closes doing nothing</strong>, it is almost always a
+              missing prerequisite. Open PowerShell in the repo and run the script directly to see the
+              message — it names every missing tool at once rather than one per run. The usual culprit
+              is that a tool <em>is</em> installed but the terminal predates the install: a running
+              process keeps the PATH it started with, so open a new one.
+            </p>
+            <pre><code>node --version; pnpm --version; cargo --version</code></pre>
+          </div>
+        </section>
+
+        <section id="security">
+          <h2>Security notes</h2>
+          <ul>
+            <li>Passwords are hashed with Argon2id using OWASP's low-memory profile.</li>
+            <li>Session tokens are opaque and stored only as SHA-256 hashes.</li>
+            <li>
+              State-changing requests from the browser require a CSRF header; bearer-token requests
+              from the desktop carry no ambient authority and are exempt.
+            </li>
+            <li>
+              Every download path is re-resolved against its library root and symlink-checked before
+              any bytes are served, so a crafted path cannot escape the mount.
+            </li>
+            <li>The container runs as a non-root user and the library is mounted read-only.</li>
+            <li>
+              Archive entries are attacker-controlled, so both the game installer and the save
+              restorer rebuild every path from its normal components and reject anything containing
+              <code>..</code> or a root — the zip-slip escape.
+            </li>
+            <li>
+              Uploaded saves are verified against the digest the client declared before the version is
+              accepted, so a truncated transfer never becomes the copy others pull.
+            </li>
+            <li>
+              Profile visibility is applied when a summary is built, per viewer, so a friends-only
+              profile never leaks its current game to a stranger.
+            </li>
+            <li>
+              Message bodies and attachments are encrypted on the sending device and the server holds
+              no key that opens them. What that does and does not cover is set out in full under
+              <a href="#messages-limits">Messages</a>.
+            </li>
+            <li>
+              Outgoing Discord messages carry an explicit mention permission list, so text the server
+              did not write cannot cause a notification.
+            </li>
+            <li>
+              Profile links are checked for an <code>http(s)</code> scheme on both sides, since the
+              value lands in an <code>href</code> on a page other people open.
+            </li>
+          </ul>
+        </section>
+
+        <section id="license">
+          <h2>License</h2>
+          <p>AGPL-3.0-only.</p>
+          <footer class="page">
+            <p>
+              GameBlade 0.5.3 · Documentation lives in <code>Docs.html</code> at the repository root
+              and is edited as ordinary HTML — the contents list on the left builds itself from the
+              headings.
+            </p>
+          </footer>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      /*
+       * Everything below is convenience. The page is complete and readable
+       * with scripting switched off — the contents list is the only thing
+       * that disappears, and every section is still there in order with
+       * working anchors.
+       */
+      (function () {
+        'use strict';
+
+        var main = document.querySelector('main');
+        var toc = document.getElementById('toc');
+        var contents = document.getElementById('contents');
+
+        /** True while the pointer or keyboard is in the contents list. */
+        var pointerInContents = false;
+        contents.addEventListener('pointerenter', function () {
+          pointerInContents = true;
+        });
+        contents.addEventListener('pointerleave', function () {
+          pointerInContents = false;
+        });
+
+        function contentsHasFocus() {
+          return pointerInContents || contents.contains(document.activeElement);
+        }
+
+        /* --------------------------------------------------- contents */
+
+        /*
+         * Built from the headings rather than maintained by hand. That is
+         * the whole reason this file stays editable: adding a section is
+         * writing a <section> with an <h2> in it, and nothing else.
+         */
+        var headings = main.querySelectorAll('h2[id], section > h2, h3[id]');
+        var links = [];
+
+        headings.forEach(function (heading) {
+          // An h2 without an id inherits its section's, so most sections
+          // need no id on the heading itself.
+          var id = heading.id || (heading.parentElement && heading.parentElement.id);
+          if (!id) return;
+          heading.id = id;
+
+          var item = document.createElement('li');
+          var link = document.createElement('a');
+          link.href = '#' + id;
+          link.textContent = heading.textContent.replace('#', '').trim();
+          if (heading.tagName === 'H3') link.className = 'sub';
+          item.appendChild(link);
+          toc.appendChild(item);
+          links.push({ link: link, item: item, heading: heading });
+
+          // A quiet anchor, visible on hover, for linking straight to a
+          // heading without a permanent hash cluttering every one of them.
+          var anchor = document.createElement('a');
+          anchor.href = '#' + id;
+          anchor.className = 'anchor';
+          anchor.textContent = '#';
+          anchor.setAttribute('aria-label', 'Link to this section');
+          heading.appendChild(anchor);
+        });
+
+        /* -------------------------------------------------- scroll spy */
+
+        /*
+         * Marks the heading nearest the top of the viewport. rootMargin
+         * pulls the observation band up under the sticky header, so the
+         * highlighted entry is the one actually being read rather than the
+         * one just scrolled past.
+         */
+        if ('IntersectionObserver' in window) {
+          var visible = new Set();
+
+          var spy = new IntersectionObserver(
+            function (entries) {
+              entries.forEach(function (entry) {
+                if (entry.isIntersecting) visible.add(entry.target.id);
+                else visible.delete(entry.target.id);
+              });
+
+              var current = null;
+              for (var i = 0; i < links.length; i += 1) {
+                if (visible.has(links[i].heading.id)) {
+                  current = links[i].heading.id;
+                  break;
+                }
+              }
+
+              links.forEach(function (entry) {
+                var active = entry.heading.id === current;
+                entry.link.classList.toggle('current', active);
+
+                // With eighty entries the highlight is off-screen for most of
+                // the page, which makes it useless — the contents list has to
+                // follow the reader down. Only when it has actually gone out of
+                // view, so the list is not scrolling under the pointer while
+                // somebody is trying to click something in it.
+                if (active && !contentsHasFocus()) {
+                  var box = entry.link.getBoundingClientRect();
+                  var frame = contents.getBoundingClientRect();
+                  if (box.top < frame.top + 8 || box.bottom > frame.bottom - 8) {
+                    entry.link.scrollIntoView({ block: 'nearest' });
+                  }
+                }
+              });
+            },
+            { rootMargin: '-80px 0px -70% 0px' },
+          );
+
+          links.forEach(function (entry) {
+            spy.observe(entry.heading);
+          });
+        }
+
+        /* ------------------------------------------------------ filter */
+
+        var filter = document.getElementById('filter');
+        filter.addEventListener('input', function () {
+          var term = filter.value.trim().toLowerCase();
+          links.forEach(function (entry) {
+            var matches = !term || entry.link.textContent.toLowerCase().indexOf(term) !== -1;
+            entry.item.classList.toggle('hidden', !matches);
+          });
+        });
+
+        // Escape clears it, because a filter you cannot get out of quickly
+        // is one people reload the page to escape.
+        filter.addEventListener('keydown', function (event) {
+          if (event.key === 'Escape') {
+            filter.value = '';
+            filter.dispatchEvent(new Event('input'));
+          }
+        });
+
+        /* ------------------------------------------------------- theme */
+
+        var root = document.documentElement;
+        var stored = null;
+        try {
+          stored = localStorage.getItem('gameblade-docs-theme');
+        } catch (error) {
+          // Private browsing, or site data switched off. The page follows
+          // the operating system in that case, which is a fine default.
+        }
+        if (stored) root.setAttribute('data-theme', stored);
+
+        document.getElementById('theme-toggle').addEventListener('click', function () {
+          var dark = !matchMedia('(prefers-color-scheme: light)').matches;
+          var currently = root.getAttribute('data-theme') || (dark ? 'dark' : 'light');
+          var next = currently === 'dark' ? 'light' : 'dark';
+          root.setAttribute('data-theme', next);
+          try {
+            localStorage.setItem('gameblade-docs-theme', next);
+          } catch (error) {
+            // Not remembering the choice is survivable; failing is not.
+          }
+        });
+
+        /* -------------------------------------------------------- menu */
+
+        var toggle = document.getElementById('menu-toggle');
+
+        toggle.addEventListener('click', function () {
+          var open = contents.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', String(open));
+        });
+
+        // On a narrow screen the contents cover the page, so following a
+        // link has to close them or the reader lands on something they
+        // cannot see.
+        contents.addEventListener('click', function (event) {
+          if (event.target.tagName === 'A' && window.innerWidth <= 940) {
+            contents.classList.remove('open');
+            toggle.setAttribute('aria-expanded', 'false');
+          }
+        });
+
+        /* --------------------------------------------- copying commands */
+
+        document.querySelectorAll('pre').forEach(function (block) {
+          var button = document.createElement('button');
+          button.className = 'copy';
+          button.type = 'button';
+          button.textContent = 'Copy';
+
+          button.addEventListener('click', function () {
+            var code = block.querySelector('code');
+            var text = (code || block).textContent;
+
+            var done = function () {
+              button.textContent = 'Copied';
+              setTimeout(function () {
+                button.textContent = 'Copy';
+              }, 1400);
+            };
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(done, function () {
+                button.textContent = 'Press ⌘/Ctrl+C';
+              });
+            } else {
+              // A file opened from disk in an older browser has no clipboard
+              // API; selecting the text is the next best thing.
+              var range = document.createRange();
+              range.selectNodeContents(code || block);
+              var selection = getSelection();
+              selection.removeAllRanges();
+              selection.addRange(range);
+              button.textContent = 'Selected';
+            }
+          });
+
+          block.appendChild(button);
+        });
+      })();
+    </script>
+  </body>
+</html>

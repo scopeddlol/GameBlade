@@ -6,7 +6,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
-import { media, postMedia, userProfiles } from '../db/schema.js';
+import { media, messageMedia, postMedia, userProfiles } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { writeHashedStream } from '../lib/stream.js';
@@ -18,6 +18,17 @@ const ALLOWED_TYPES: Record<MediaKind, readonly string[]> = {
   banner: ['image/png', 'image/jpeg', 'image/webp'],
   image: ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'],
   clip: ['video/mp4', 'video/webm'],
+  /**
+   * A message attachment, which arrives already encrypted.
+   *
+   * There is exactly one acceptable type because there is nothing to check:
+   * the bytes are ciphertext and reveal nothing about what they were. What it
+   * actually is — a screenshot, a clip — travels inside the sealed message
+   * body, where only the conversation's members can read it. Type sniffing is
+   * a *client's* job here, after decryption, and it is the only place it can
+   * be done at all.
+   */
+  sealed: ['application/octet-stream'],
 };
 
 /**
@@ -172,9 +183,14 @@ export class MediaStore {
   }
 
   /**
-   * Removes uploads that nothing references — neither a post nor a profile.
+   * Removes uploads that nothing references — a post, a profile or a message.
    * The desktop client uploads before it composes, so an abandoned draft would
    * otherwise leak a file per attempt.
+   *
+   * A message attachment counts as referenced exactly like a post's does. It
+   * has to: the bytes are ciphertext, so a sweep that got this wrong would
+   * delete something nobody could even recognise as lost until they scrolled
+   * back to it.
    */
   async collectOrphans(olderThanIso: string): Promise<number> {
     const rows = this.db
@@ -184,6 +200,7 @@ export class MediaStore {
         and(
           sql`${media.createdAt} < ${olderThanIso}`,
           sql`${media.id} NOT IN (SELECT media_id FROM ${postMedia})`,
+          sql`${media.id} NOT IN (SELECT media_id FROM ${messageMedia})`,
           sql`${media.id} NOT IN (SELECT avatar_media_id FROM ${userProfiles} WHERE avatar_media_id IS NOT NULL)`,
           sql`${media.id} NOT IN (SELECT banner_media_id FROM ${userProfiles} WHERE banner_media_id IS NOT NULL)`,
         ),

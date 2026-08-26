@@ -11,6 +11,16 @@ pub enum AppError {
     #[error("Network error: {0}")]
     Network(#[from] reqwest::Error),
 
+    /// The server could not be reached and there was nothing cached to answer
+    /// with. Distinct from `Network` so the UI can say "you are offline" rather
+    /// than showing somebody a TLS handshake failure.
+    #[error("GameBlade cannot reach the server right now.")]
+    Offline(String),
+
+    /// Something that needs the server, attempted without one.
+    #[error("{0} needs a connection to the server.")]
+    RequiresConnection(String),
+
     #[error("File error: {0}")]
     Io(#[from] std::io::Error),
 

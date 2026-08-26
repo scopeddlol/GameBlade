@@ -1,3 +1,4 @@
+import { allowedMentions, extractMentions } from '@gameblade/shared';
 import { and, asc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Db } from '../db/index.js';
@@ -534,18 +535,20 @@ export class DiscordService {
     if (!botToken) throw ApiError.badRequest('No Discord bot token is configured');
     if (!target) throw ApiError.badRequest('No Discord channel is configured');
 
+    const body = withMentionPolicy(payload);
+
     if (!file) {
       return this.call<{ id: string; channel_id: string }>(`/channels/${target}/messages`, {
         method: 'POST',
         auth: `Bot ${botToken}`,
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
       });
     }
 
     return this.call<{ id: string; channel_id: string }>(`/channels/${target}/messages`, {
       method: 'POST',
       auth: `Bot ${botToken}`,
-      body: multipart(payload, [file]),
+      body: multipart(body, [file]),
     });
   }
 
@@ -605,6 +608,66 @@ export class DiscordService {
       .filter((role) => role.name !== '@everyone')
       .sort((a, b) => (b.position ?? 0) - (a.position ?? 0))
       .map((role) => ({ id: role.id, name: role.name }));
+  }
+
+  /**
+   * People in the guild, so a post can address one by name rather than by
+   * snowflake.
+   *
+   * Listing members needs the privileged Guild Members intent enabled in the
+   * developer portal, and most operators have not enabled it — this is the one
+   * picker that must work anyway. So a rejection falls back to the accounts
+   * that have linked Discord *here*, which this server knows about without
+   * asking Discord anything, and which is very nearly the set anybody wants to
+   * tag in an announcement.
+   */
+  async listMembers(limit = 200): Promise<Array<{ id: string; name: string; linked: boolean }>> {
+    const linked = this.db
+      .select({
+        discordId: discordLinks.discordId,
+        discordUsername: discordLinks.username,
+        globalName: discordLinks.globalName,
+        username: users.username,
+      })
+      .from(discordLinks)
+      .innerJoin(users, eq(users.id, discordLinks.userId))
+      .all()
+      .map((row) => ({
+        id: row.discordId,
+        name: row.globalName ?? row.discordUsername ?? row.username,
+        linked: true,
+      }));
+
+    const known = new Set(linked.map((entry) => entry.id));
+    const botToken = this.botToken;
+    const guildId = this.settings.get().discordGuildId?.trim();
+    if (!botToken || !guildId) return linked;
+
+    try {
+      const members = await this.call<
+        Array<{ user?: { id: string; username?: string; global_name?: string | null } }>
+      >(`/guilds/${guildId}/members?limit=${Math.min(1000, Math.max(limit, 1))}`, {
+        auth: `Bot ${botToken}`,
+      });
+
+      for (const member of members) {
+        if (!member.user?.id || known.has(member.user.id)) continue;
+        known.add(member.user.id);
+        linked.push({
+          id: member.user.id,
+          name: member.user.global_name ?? member.user.username ?? member.user.id,
+          linked: false,
+        });
+      }
+    } catch (error) {
+      // Almost always a 403 for the missing intent, which is a configuration
+      // choice rather than a fault. The linked accounts above still stand.
+      this.logger?.debug({ err: error }, 'could not list guild members');
+    }
+
+    return linked.sort(
+      (a, b) => Number(b.linked) - Number(a.linked) || a.name.localeCompare(b.name),
+    );
   }
 
   /**
@@ -949,4 +1012,44 @@ function avatarUrl(discordId: string, avatar: string | null): string | null {
   if (!avatar) return null;
   const extension = avatar.startsWith('a_') ? 'gif' : 'png';
   return `${DISCORD_CDN}/avatars/${discordId}/${avatar}.${extension}?size=128`;
+}
+
+/**
+ * Attaches a mention policy to an outgoing message, unless one was given.
+ *
+ * Discord's default when the field is absent is "notify everything you can
+ * find in the content", which is the wrong default for a bot that posts text
+ * it did not write: a game summary pulled from a provider containing the word
+ * `@everyone` would ping the whole server. Naming the exact ids the content
+ * contains means a mention an operator typed on purpose notifies, and one that
+ * merely appears in someone else's prose does not.
+ *
+ * Embeds are read too, but only so their tokens are *permitted* — Discord
+ * never notifies for an embed's contents whatever this says. Getting an embed's
+ * mentions to actually reach anyone is the caller's job, by repeating them in
+ * the content; `pingLine` in the shared package builds that line.
+ */
+function withMentionPolicy(payload: Record<string, unknown>): Record<string, unknown> {
+  if ('allowed_mentions' in payload) return payload;
+
+  const embeds = Array.isArray(payload.embeds) ? payload.embeds : [];
+  const embedText = embeds.flatMap((embed) => {
+    const record = embed as Record<string, unknown>;
+    const fields = Array.isArray(record.fields) ? record.fields : [];
+    return [
+      typeof record.title === 'string' ? record.title : null,
+      typeof record.description === 'string' ? record.description : null,
+      ...fields.map((field) => {
+        const entry = field as Record<string, unknown>;
+        return typeof entry.value === 'string' ? entry.value : null;
+      }),
+    ];
+  });
+
+  const found = extractMentions(
+    typeof payload.content === 'string' ? payload.content : null,
+    ...embedText,
+  );
+
+  return { ...payload, allowed_mentions: allowedMentions(found) };
 }

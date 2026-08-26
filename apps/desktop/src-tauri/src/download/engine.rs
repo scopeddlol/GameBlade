@@ -16,7 +16,7 @@
 //!   resuming after the server-side file changed produces an honest restart
 //!   rather than a corrupt hybrid stitched from two versions.
 
-use super::{part_path_for, sanitise_relative_path, urlencode, DownloadStatus, DownloadState};
+use super::{part_path_for, sanitise_relative_path, urlencode, DownloadState, DownloadStatus};
 use crate::api::{ApiClient, DownloadManifest, ManifestFile};
 use crate::error::{AppError, AppResult};
 use chrono::Utc;
@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{Emitter};
+use tauri::Emitter;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{Mutex, Semaphore};
 
@@ -207,9 +207,7 @@ impl ChunkJournal {
     /// an older format, a different file size, another chunking — restarts
     /// the file rather than guessing.
     fn usable(&self, size: u64) -> bool {
-        self.version == JOURNAL_VERSION
-            && self.size == size
-            && self.chunk_bytes == CHUNK_BYTES
+        self.version == JOURNAL_VERSION && self.size == size && self.chunk_bytes == CHUNK_BYTES
     }
 
     fn total_chunks(&self) -> u64 {
@@ -710,9 +708,9 @@ async fn fetch_all_chunks(
                 let stop = match result {
                     Ok(Ok(())) => continue,
                     Ok(Err(stop)) => stop,
-                    Err(err) => Stop::Fatal(AppError::Other(format!(
-                        "Download task failed: {err}"
-                    ))),
+                    Err(err) => {
+                        Stop::Fatal(AppError::Other(format!("Download task failed: {err}")))
+                    }
                 };
                 // The first failure is the one reported; everything after it
                 // is a sibling noticing the flag.
@@ -785,7 +783,10 @@ async fn download_chunk(
         let range = format!("bytes={start}-{end}");
         let etag = journal.lock().await.etag.clone();
 
-        let mut request = client.http().get(&url).header(reqwest::header::RANGE, &range);
+        let mut request = client
+            .http()
+            .get(&url)
+            .header(reqwest::header::RANGE, &range);
         if let Some(etag) = &etag {
             request = request.header(reqwest::header::IF_RANGE, etag);
         }
@@ -1091,11 +1092,17 @@ mod tests {
     fn a_sidecar_from_another_layout_is_not_trusted() {
         let mut j = journal(CHUNK_BYTES);
         j.version = 1;
-        assert!(!j.usable(CHUNK_BYTES), "old-format journals must not resume");
+        assert!(
+            !j.usable(CHUNK_BYTES),
+            "old-format journals must not resume"
+        );
 
         let mut j = journal(CHUNK_BYTES);
         j.chunk_bytes = 1024;
-        assert!(!j.usable(CHUNK_BYTES), "foreign chunk sizes must not resume");
+        assert!(
+            !j.usable(CHUNK_BYTES),
+            "foreign chunk sizes must not resume"
+        );
 
         let j = journal(CHUNK_BYTES * 2);
         assert!(

@@ -11,6 +11,7 @@ import { ImportGames } from '../components/ImportGames.js';
 import { InstallDialog, useInstallDialog } from '../components/InstallDialog.js';
 import { Empty, ErrorNote, GridSkeleton } from '../components/ui.js';
 import { useCollections } from '../hooks/useCollections.js';
+import { useConnectivity } from '../hooks/useConnectivity.js';
 import {
   errorMessage,
   ipc,
@@ -118,10 +119,63 @@ export function LibraryTab({
     onInstall: installDialog.request,
   });
 
+  const { online } = useConnectivity();
+
   const installedIds = new Set(installed.map((game) => game.gameId));
-  const items = (gamesQuery.data?.items ?? []).filter(
-    (game) => filter !== 'installed' || installedIds.has(game.id),
-  );
+
+  /**
+   * What to show when the server cannot answer.
+   *
+   * The client caches the last answer to each query, so the library somebody
+   * left open still renders offline — but change the sort or the filter and
+   * that is a query it has never made, so the cache misses and the page reads
+   * "Your library is empty". Which is both wrong and alarming: the games are
+   * installed, on this disk, ready to run.
+   *
+   * So a miss falls back to what is genuinely known without a server: the
+   * install records. They carry a title and a size and nothing else, which is
+   * exactly what an offline library needs to be — a list of things you can
+   * press Play on.
+   */
+  const fromServer = gamesQuery.data?.items ?? [];
+  const offlineFallback =
+    !online && fromServer.length === 0
+      ? installed.map((game): GameSummary => ({
+          id: game.gameId,
+          title: game.title,
+          sortTitle: game.title.toLowerCase(),
+          kind: 'folder',
+          sizeBytes: game.sizeBytes,
+          fileCount: 0,
+          releaseDate: null,
+          rating: null,
+          genres: [],
+          platforms: [],
+          summary: null,
+          art: { cover: null, banner: null, hero: null, logo: null, icon: null },
+          matchStatus: 'unmatched',
+          isFavorite: false,
+          addedAt: game.installedAt,
+          isMissing: false,
+          inLibrary: true,
+          playSeconds: 0,
+          lastPlayedAt: null,
+          achievementCount: 0,
+          unlockedCount: 0,
+          hasLaunchRule: false,
+          hasSaveRule: false,
+        }))
+      : [];
+
+  // The search box is served by the server's own query when there is one. The
+  // fallback list has never been near a server, so it filters itself.
+  const matchesSearch = (game: GameSummary) =>
+    !debounced || game.title.toLowerCase().includes(debounced.toLowerCase());
+
+  const items = [
+    ...fromServer.filter((game) => filter !== 'installed' || installedIds.has(game.id)),
+    ...offlineFallback.filter(matchesSearch),
+  ];
 
   const activeCollection = collections.find((entry) => entry.id === collectionId);
 
@@ -235,18 +289,22 @@ export function LibraryTab({
       ) : items.length === 0 ? (
         <Empty
           title={
-            activeCollection
-              ? `Nothing in ${activeCollection.name}`
-              : debounced
-                ? 'Nothing matches'
-                : 'Your library is empty'
+            !online
+              ? 'Nothing installed on this machine'
+              : activeCollection
+                ? `Nothing in ${activeCollection.name}`
+                : debounced
+                  ? 'Nothing matches'
+                  : 'Your library is empty'
           }
           message={
-            activeCollection
-              ? 'Right-click a game and choose "Add to group…" to file it here.'
-              : debounced
-                ? 'Try a different search.'
-                : 'Head to the Store tab and add a few games to get started.'
+            !online
+              ? 'The server is not reachable, so this is only what is already on this disk.'
+              : activeCollection
+                ? 'Right-click a game and choose "Add to group…" to file it here.'
+                : debounced
+                  ? 'Try a different search.'
+                  : 'Head to the Store tab and add a few games to get started.'
           }
         />
       ) : view === 'list' ? (

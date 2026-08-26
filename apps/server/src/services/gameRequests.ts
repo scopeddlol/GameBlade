@@ -241,14 +241,18 @@ export class GameRequestService {
         .map((row) => [row.key, row]),
     );
 
-    const inCatalog = new Set(
-      this.db
-        .select({ search: games.searchTitle })
-        .from(games)
-        .all()
-        .map((row) => requestKey(row.search ?? ''))
-        .filter(Boolean),
-    );
+    // A map rather than a set, so a suggestion the archive already has can say
+    // *which* game it is. Without the id, "In the archive" was a dead end: the
+    // one thing somebody wants at that moment is to go and look at it.
+    const inCatalog = new Map<string, string>();
+    for (const row of this.db
+      .select({ id: games.id, search: games.searchTitle, missingAt: games.missingAt })
+      .from(games)
+      .all()) {
+      if (row.missingAt !== null) continue;
+      const key = requestKey(row.search ?? '');
+      if (key && !inCatalog.has(key)) inCatalog.set(key, row.id);
+    }
 
     const backed = new Set(
       this.db
@@ -270,6 +274,7 @@ export class GameRequestService {
           summary: entry.summary ?? null,
           rating: entry.rating ?? null,
           inCatalog: inCatalog.has(key),
+          gameId: inCatalog.get(key) ?? null,
           requestId: request?.id ?? null,
           status: request?.status ?? null,
           hasVoted: request ? backed.has(request.id) : false,
