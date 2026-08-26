@@ -865,3 +865,287 @@ export function TicketSection({
     </section>
   );
 }
+
+/* --------------------------------------------------------------------- roles */
+
+interface ReactionRoleRow {
+  id: string;
+  channelId: string;
+  messageId: string;
+  emoji: string;
+  roleId: string;
+  note: string | null;
+}
+
+interface RoleConfig {
+  autoRoleId: string;
+  reactionRolesEnabled: boolean;
+  bindings: ReactionRoleRow[];
+}
+
+/**
+ * Roles handed out without anybody pressing anything in the panel: one on
+ * join, and one per emoji on a message.
+ *
+ * Both need the bot to be told about events it does not otherwise ask for, so
+ * turning either on reconnects the gateway. Auto-roles need the privileged
+ * Server Members intent, which is the step operators reliably miss — so it is
+ * spelled out next to the field rather than left in the docs.
+ */
+export function RoleSection({
+  guild,
+  botOnline,
+  onError,
+  onNotice,
+}: {
+  guild: ReturnType<typeof useGuild>;
+  botOnline: boolean;
+  onError: (message: string | null) => void;
+  onNotice: (message: string | null) => void;
+}) {
+  const queryClient = useQueryClient();
+  const rolesQuery = useQuery({
+    queryKey: ['admin', 'discord', 'roles'],
+    queryFn: () => api.get<RoleConfig>('/admin/discord/roles'),
+  });
+
+  const [binding, setBinding] = useState({
+    channelId: '',
+    messageId: '',
+    emoji: '',
+    roleId: '',
+    note: '',
+  });
+
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ['admin', 'discord', 'roles'] });
+
+  const saveSettings = useMutation({
+    mutationFn: (patch: { autoRoleId?: string; reactionRolesEnabled?: boolean }) =>
+      api.patch('/admin/discord/roles', patch),
+    onSuccess: () => {
+      onError(null);
+      onNotice('Role settings saved. The bot reconnects when what it listens for changes.');
+      void invalidate();
+    },
+    onError: (caught) =>
+      onError(caught instanceof ApiRequestError ? caught.message : 'Could not save role settings.'),
+  });
+
+  const addBinding = useMutation({
+    mutationFn: () =>
+      api.post<{ reacted: boolean }>('/admin/discord/roles/reactions', {
+        channelId: binding.channelId,
+        messageId: binding.messageId,
+        emoji: binding.emoji,
+        roleId: binding.roleId,
+        ...(binding.note ? { note: binding.note } : {}),
+      }),
+    onSuccess: (result) => {
+      onError(null);
+      onNotice(
+        result.reacted
+          ? 'Bound, and the emoji is on the message.'
+          : 'Bound. The bot could not add the emoji itself — react to the message once so players have something to click.',
+      );
+      setBinding({ channelId: '', messageId: '', emoji: '', roleId: '', note: '' });
+      void invalidate();
+    },
+    onError: (caught) =>
+      onError(caught instanceof ApiRequestError ? caught.message : 'Could not add that binding.'),
+  });
+
+  const removeBinding = useMutation({
+    mutationFn: (id: string) => api.delete(`/admin/discord/roles/reactions/${id}`),
+    onSuccess: () => void invalidate(),
+  });
+
+  const config = rolesQuery.data;
+  const canSubmit =
+    binding.channelId.trim() && binding.messageId.trim() && binding.emoji.trim() && binding.roleId;
+
+  const rolePicker = (
+    id: string,
+    value: string,
+    onChange: (next: string) => void,
+    empty: string,
+  ) =>
+    guild.isError || (guild.data?.roles.length ?? 0) === 0 ? (
+      <input
+        id={id}
+        className="gb-input font-mono"
+        placeholder="Role ID"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    ) : (
+      <select
+        id={id}
+        className="gb-input"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">{empty}</option>
+        {(guild.data?.roles ?? []).map((role) => (
+          <option key={role.id} value={role.id}>
+            @{role.name}
+          </option>
+        ))}
+      </select>
+    );
+
+  if (rolesQuery.isLoading || !config) return <RowSkeleton rows={3} />;
+
+  return (
+    <section className="gb-card space-y-5 p-5">
+      <div>
+        <h2 className="text-sm font-semibold tracking-wide uppercase">Roles</h2>
+        <p className="text-ink-400 mt-1 text-xs">
+          The bot has to sit <strong>above</strong> any role it hands out in the server&rsquo;s role
+          list, or Discord refuses every attempt.
+        </p>
+      </div>
+
+      {/* ------------------------------------------------------------ auto */}
+
+      <div className="space-y-2">
+        <Field
+          label="Auto-role on join"
+          htmlFor="auto-role"
+          hint="Given to everyone who joins the server."
+        >
+          {rolePicker(
+            'auto-role',
+            config.autoRoleId,
+            (next) => saveSettings.mutate({ autoRoleId: next }),
+            'No role — nothing is given on join',
+          )}
+        </Field>
+        {config.autoRoleId ? (
+          <p className="text-xs text-amber-400">
+            This needs the privileged <strong>Server Members Intent</strong>, enabled on the
+            application&rsquo;s Bot tab in the Discord developer portal. Without it the bot cannot
+            connect at all.
+          </p>
+        ) : null}
+      </div>
+
+      {/* -------------------------------------------------------- reactions */}
+
+      <div className="border-ink-700/70 space-y-3 border-t pt-4">
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={config.reactionRolesEnabled}
+            onChange={(event) =>
+              saveSettings.mutate({ reactionRolesEnabled: event.target.checked })
+            }
+          />
+          <span>
+            Reaction roles
+            <span className="text-ink-400 block text-xs">
+              Players give themselves a role by reacting to a message you choose.
+            </span>
+          </span>
+        </label>
+
+        {config.reactionRolesEnabled ? (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Channel" htmlFor="rr-channel">
+                <ChannelPicker
+                  id="rr-channel"
+                  value={binding.channelId}
+                  onChange={(next) => setBinding({ ...binding, channelId: next })}
+                  guild={guild}
+                  placeholder="Channel ID"
+                />
+              </Field>
+              <Field
+                label="Message ID"
+                htmlFor="rr-message"
+                hint="Right-click the message → Copy Message ID, with Developer Mode on."
+              >
+                <input
+                  id="rr-message"
+                  className="gb-input font-mono"
+                  value={binding.messageId}
+                  onChange={(event) => setBinding({ ...binding, messageId: event.target.value })}
+                />
+              </Field>
+              <Field
+                label="Emoji"
+                htmlFor="rr-emoji"
+                hint="A single emoji, or name:id for a custom one."
+              >
+                <input
+                  id="rr-emoji"
+                  className="gb-input"
+                  placeholder="🎮"
+                  value={binding.emoji}
+                  onChange={(event) => setBinding({ ...binding, emoji: event.target.value })}
+                />
+              </Field>
+              <Field label="Role" htmlFor="rr-role">
+                {rolePicker(
+                  'rr-role',
+                  binding.roleId,
+                  (next) => setBinding({ ...binding, roleId: next }),
+                  'Pick a role',
+                )}
+              </Field>
+            </div>
+
+            <button
+              type="button"
+              className="gb-btn-primary"
+              disabled={!canSubmit || addBinding.isPending || !botOnline}
+              onClick={() => addBinding.mutate()}
+            >
+              {addBinding.isPending ? <Spinner className="h-4 w-4" /> : null}
+              Bind this emoji
+            </button>
+            {!botOnline ? (
+              <p className="text-ink-500 text-xs">Start the bot to add a binding.</p>
+            ) : null}
+
+            {config.bindings.length === 0 ? (
+              <EmptyState
+                title="Nothing bound yet"
+                message="Pick a message and an emoji above, and the bot will react to it for you."
+              />
+            ) : (
+              <div className="divide-ink-700/70 bg-ink-800/40 divide-y rounded-lg">
+                {config.bindings.map((row) => (
+                  <div key={row.id} className="flex items-center gap-3 px-3 py-2">
+                    <span className="text-lg">{row.emoji}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm">
+                        @
+                        {guild.data?.roles.find((role) => role.id === row.roleId)?.name ??
+                          row.roleId}
+                      </p>
+                      <p className="text-ink-400 truncate font-mono text-xs">
+                        message {row.messageId}
+                        {row.note ? ` · ${row.note}` : ''}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="gb-btn-danger shrink-0 px-2 py-1"
+                      title="Remove this binding"
+                      onClick={() => removeBinding.mutate(row.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        ) : null}
+      </div>
+    </section>
+  );
+}

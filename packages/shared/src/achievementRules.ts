@@ -37,6 +37,14 @@ export interface AchievementRule {
   comparator: AchievementComparator;
   /** The operand for `equals` and `at-least`; ignored by the others. */
   value: string | null;
+  /**
+   * Operator labels for this rule.
+   *
+   * One achievement often needs a rule per save layout it might turn up in,
+   * all naming the same key and told apart only by a long path. A tag —
+   * "goldberg", "gog", "needs testing" — is what makes them legible.
+   */
+  tags?: string[];
 }
 
 /** What a rule decided, and why, so an operator can see it working. */

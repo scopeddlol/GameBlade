@@ -607,6 +607,21 @@ export class DiscordService {
       .map((role) => ({ id: role.id, name: role.name }));
   }
 
+  /**
+   * Puts the bot's own reaction on a message, so a role binding has something
+   * for players to click rather than needing somebody to react first.
+   *
+   * Discord wants the emoji percent-encoded, and in `name:id` form for a
+   * custom one — which is the same shape the gateway reports reactions in, so
+   * what an operator pastes in round-trips unchanged.
+   */
+  async addReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    await this.botCall(
+      `/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`,
+      { method: 'PUT' },
+    );
+  }
+
   /** Any authenticated bot call, for the ticket and interaction services. */
   async botCall<T>(path: string, init: Omit<RequestInit, 'headers'> = {}): Promise<T> {
     const botToken = this.botToken;

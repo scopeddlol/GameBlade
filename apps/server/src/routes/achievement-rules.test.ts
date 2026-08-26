@@ -269,4 +269,54 @@ describe('achievement rules', () => {
     });
     expect(response.statusCode).toBe(401);
   });
+
+  /**
+   * Labels live on the rule, not the achievement it unlocks.
+   *
+   * One achievement needs a rule per save layout it might turn up in, all
+   * naming the same key and otherwise told apart only by a long path.
+   */
+  describe('rule tags', () => {
+    it('round-trips tags through a save', async () => {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/api/games/g1/achievement-rules',
+        headers: auth(),
+        payload: { rules: [rule({ tags: ['goldberg', 'needs testing'] })] },
+      });
+      expect(response.statusCode).toBe(200);
+      expect((response.json() as Array<{ tags: string[] }>)[0]?.tags).toEqual([
+        'goldberg',
+        'needs testing',
+      ]);
+    });
+
+    it('reads back an untagged rule as an empty list, not null', async () => {
+      // Rules written before tags existed have no column value at all.
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/api/games/g1/achievement-rules',
+        headers: auth(),
+        payload: { rules: [rule()] },
+      });
+      expect((response.json() as Array<{ tags: string[] }>)[0]?.tags).toEqual([]);
+    });
+
+    it('lets two rules for one achievement be told apart', async () => {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/api/games/g1/achievement-rules',
+        headers: auth(),
+        payload: {
+          rules: [
+            rule({ sourceTemplate: '{install}\\goldberg\\stats.json', tags: ['goldberg'] }),
+            rule({ sourceTemplate: '{appdata}\\Game\\stats.json', tags: ['retail'] }),
+          ],
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      const saved = response.json() as Array<{ tags: string[] }>;
+      expect(saved.map((r) => r.tags)).toEqual([['goldberg'], ['retail']]);
+    });
+  });
 });

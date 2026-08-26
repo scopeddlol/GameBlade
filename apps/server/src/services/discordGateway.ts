@@ -60,13 +60,27 @@ const FATAL_CLOSE_REASONS: Record<number, string> = {
 /**
  * What the bot asks to be told about.
  *
- * Zero, deliberately. Interactions — slash commands and button presses — are
- * delivered regardless of intents, and they are the only events this bot acts
- * on. Asking for nothing means the operator never has to enable a privileged
- * intent in the portal, and the bot cannot read anybody's messages even in
- * principle, which is a much easier thing to be asked to install.
+ * Zero by default, deliberately. Interactions — slash commands and button
+ * presses — are delivered regardless of intents, and for a long time they were
+ * the only events this bot acted on. Asking for nothing means the operator
+ * never has to enable anything in the portal, and the bot cannot read anybody's
+ * messages even in principle, which is a much easier thing to be asked to
+ * install.
+ *
+ * Each of the two below is added only when the feature that needs it is
+ * actually configured, so that stays true for anyone not using them.
  */
-const INTENTS = 0;
+export const GATEWAY_INTENTS = {
+  none: 0,
+  /**
+   * Privileged. Needed for GUILD_MEMBER_ADD, and so for auto-roles — the
+   * operator has to enable "Server Members Intent" on the application's Bot
+   * tab, and Discord closes the socket with 4014 if they have not.
+   */
+  guildMembers: 1 << 1,
+  /** Not privileged. Needed for MESSAGE_REACTION_ADD/REMOVE. */
+  guildMessageReactions: 1 << 10,
+} as const;
 
 /**
  * How long to wait for HELLO before assuming the connection is going nowhere.
@@ -138,6 +152,14 @@ export class DiscordGateway {
   private token: string | null = null;
   private presence: GatewayPresence = { status: 'online', activityType: 0, activityName: null };
 
+  /**
+   * Which events this connection asked for.
+   *
+   * Only read at IDENTIFY, so a change to it needs a reconnect to take — which
+   * is what the bot does when the settings behind it change.
+   */
+  private intents: number = GATEWAY_INTENTS.none;
+
   private state: DiscordBotState = 'stopped';
   private detail: string | null = null;
   private botId: string | null = null;
@@ -163,9 +185,15 @@ export class DiscordGateway {
     return this.wanted;
   }
 
-  start(token: string, presence: GatewayPresence): void {
+  /** What the live connection asked for, so a caller can tell it is stale. */
+  get currentIntents(): number {
+    return this.intents;
+  }
+
+  start(token: string, presence: GatewayPresence, intents: number = GATEWAY_INTENTS.none): void {
     this.token = token;
     this.presence = presence;
+    this.intents = intents;
     this.wanted = true;
     this.attempts = 0;
     this.connect();
@@ -423,7 +451,7 @@ export class DiscordGateway {
       op: OP.IDENTIFY,
       d: {
         token: this.token,
-        intents: INTENTS,
+        intents: this.intents,
         properties: { os: process.platform, browser: 'gameblade', device: 'gameblade' },
         presence: this.presenced(),
       },

@@ -907,6 +907,14 @@ export const gameAchievementRules = sqliteTable(
       .notNull()
       .default('truthy'),
     value: text('value'),
+    /**
+     * Operator labels for this rule.
+     *
+     * On the rule rather than the achievement on purpose: one achievement
+     * needs a rule per save layout it might be found in, and the tag is what
+     * distinguishes them.
+     */
+    tags: text('tags', { mode: 'json' }).$type<string[]>(),
     createdAt: text('created_at').notNull().default(now),
   },
   (t) => [
@@ -914,6 +922,31 @@ export const gameAchievementRules = sqliteTable(
     // Includes the source: a game needs one rule per candidate emulator
     // layout, since which one a given copy uses is not knowable up front.
     uniqueIndex('game_achievement_rules_key_idx').on(t.gameId, t.achievementKey, t.sourceTemplate),
+  ],
+);
+
+/**
+ * One emoji on one message, granting one role.
+ *
+ * Keyed on message and emoji together, because a single message normally
+ * carries several choices. The emoji is kept in the shape the gateway reports:
+ * a bare unicode character, or `name:id` for a custom one.
+ */
+export const discordReactionRoles = sqliteTable(
+  'discord_reaction_roles',
+  {
+    id: text('id').primaryKey(),
+    guildId: text('guild_id').notNull(),
+    channelId: text('channel_id').notNull(),
+    messageId: text('message_id').notNull(),
+    emoji: text('emoji').notNull(),
+    roleId: text('role_id').notNull(),
+    note: text('note'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('discord_reaction_roles_key_idx').on(t.messageId, t.emoji),
+    index('discord_reaction_roles_message_idx').on(t.messageId),
   ],
 );
 

@@ -648,6 +648,8 @@ export const achievementRuleSchema = z.object({
   selector: z.string().trim().min(1).max(300),
   comparator: z.enum(ACHIEVEMENT_COMPARATORS),
   value: z.string().trim().max(120).nullable().optional(),
+  /** Operator labels, so several rules for one achievement stay tellable apart. */
+  tags: z.array(z.string().trim().min(1).max(40)).max(10).optional(),
 });
 export type AchievementRuleInput = z.infer<typeof achievementRuleSchema>;
 
@@ -796,6 +798,28 @@ export const discordSettingsSchema = z.object({
   requireGuild: z.boolean().optional(),
 });
 export type DiscordSettingsInput = z.infer<typeof discordSettingsSchema>;
+
+/** Roles handed out automatically, either on join or on a reaction. */
+export const discordRoleSettingsSchema = z.object({
+  /** Empty string clears it; the privileged Members intent goes with it. */
+  autoRoleId: z.string().trim().max(64).optional(),
+  reactionRolesEnabled: z.boolean().optional(),
+});
+export type DiscordRoleSettingsInput = z.infer<typeof discordRoleSettingsSchema>;
+
+/** One emoji on one message, granting one role. */
+export const discordReactionRoleSchema = z.object({
+  channelId: z.string().trim().min(1).max(64),
+  messageId: z.string().trim().min(1).max(64),
+  /**
+   * A bare unicode character, or `name:id` for a custom emoji — the shape the
+   * gateway reports, so the comparison at dispatch time is a string equality.
+   */
+  emoji: z.string().trim().min(1).max(100),
+  roleId: z.string().trim().min(1).max(64),
+  note: z.string().trim().max(200).optional(),
+});
+export type DiscordReactionRoleInput = z.infer<typeof discordReactionRoleSchema>;
 
 /** A post the operator is sending to the Discord by hand. */
 export const discordAnnounceSchema = z.object({

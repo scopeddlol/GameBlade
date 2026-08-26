@@ -37,12 +37,14 @@ import {
   type PublicUser,
   type ServerSettings,
   discordSettingsSchema,
+  discordRoleSettingsSchema,
+  discordReactionRoleSchema,
   discordAnnounceSchema,
   discordPresenceSchema,
   discordTicketSettingsSchema,
   MAX_DISCORD_ATTACHMENT_BYTES,
 } from '@gameblade/shared';
-import { eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -51,7 +53,15 @@ import { requireAdmin } from '../auth/middleware.js';
 import type { DiscordUpload } from '../services/discord.js';
 import type { MediaStore } from '../services/media.js';
 import { toPublicUser } from '../auth/service.js';
-import { gameFiles, gameSaveRules, games, invites, libraries, users } from '../db/schema.js';
+import {
+  discordReactionRoles,
+  gameFiles,
+  gameSaveRules,
+  games,
+  invites,
+  libraries,
+  users,
+} from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { isLikelyGameExecutable, listZipExecutables, sortCandidates } from '../lib/executables.js';
 import { newId, newInviteCode } from '../lib/ids.js';
@@ -1019,6 +1029,102 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     // of waiting for the next scheduled announcement to expose a bad token.
     const bot = input.botToken ? await discord.startBot() : null;
     return { ok: true, bot };
+  });
+
+  /* ---------------------------------------------------------------- roles */
+
+  app.get('/admin/discord/roles', async (request) => {
+    requireAdmin(request);
+    const s = settings.get();
+    return {
+      autoRoleId: s.discordAutoRoleId ?? '',
+      reactionRolesEnabled: s.discordReactionRolesEnabled,
+      bindings: db
+        .select()
+        .from(discordReactionRoles)
+        .orderBy(desc(discordReactionRoles.createdAt))
+        .all(),
+    };
+  });
+
+  /**
+   * Turning either feature on changes which gateway events the bot needs, and
+   * intents are only read when the connection identifies — so the bot is
+   * reconnected rather than left listening for events it never asked for.
+   */
+  app.patch('/admin/discord/roles', async (request) => {
+    requireAdmin(request);
+    const input = discordRoleSettingsSchema.parse(request.body);
+
+    settings.update({
+      ...(input.autoRoleId !== undefined ? { discordAutoRoleId: input.autoRoleId || null } : {}),
+      ...(input.reactionRolesEnabled !== undefined
+        ? { discordReactionRolesEnabled: input.reactionRolesEnabled }
+        : {}),
+    });
+    discordBot.reconnectIfIntentsChanged();
+
+    const s = settings.get();
+    return {
+      autoRoleId: s.discordAutoRoleId ?? '',
+      reactionRolesEnabled: s.discordReactionRolesEnabled,
+      // Auto-roles need a privileged intent, and the one thing an operator
+      // reliably forgets is enabling it in the developer portal.
+      needsMembersIntent: Boolean(s.discordAutoRoleId?.trim()),
+    };
+  });
+
+  app.post('/admin/discord/roles/reactions', async (request) => {
+    requireAdmin(request);
+    const input = discordReactionRoleSchema.parse(request.body);
+
+    const guildId = settings.get().discordGuildId?.trim();
+    if (!guildId) throw ApiError.badRequest('Set the Discord server ID first');
+
+    // One role per emoji per message: binding the same emoji twice would make
+    // which role a press grants depend on row order.
+    const clash = db
+      .select({ id: discordReactionRoles.id })
+      .from(discordReactionRoles)
+      .where(
+        and(
+          eq(discordReactionRoles.messageId, input.messageId),
+          eq(discordReactionRoles.emoji, input.emoji),
+        ),
+      )
+      .get();
+    if (clash) throw ApiError.conflict('That emoji is already bound on that message');
+
+    const row = {
+      id: newId('drr'),
+      guildId,
+      channelId: input.channelId,
+      messageId: input.messageId,
+      emoji: input.emoji,
+      roleId: input.roleId,
+      note: input.note ?? null,
+      createdAt: isoNow(),
+    };
+    db.insert(discordReactionRoles).values(row).run();
+
+    // Put the emoji on the message so players have something to click. A
+    // failure here is worth reporting but not worth losing the binding over —
+    // somebody can always react first.
+    const reacted = await discord
+      .addReaction(input.channelId, input.messageId, input.emoji)
+      .then(() => true)
+      .catch(() => false);
+
+    return { binding: row, reacted };
+  });
+
+  app.delete('/admin/discord/roles/reactions/:id', async (request) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+
+    const result = db.delete(discordReactionRoles).where(eq(discordReactionRoles.id, id)).run();
+    if (result.changes === 0) throw ApiError.notFound('That binding no longer exists');
+    return { deleted: true };
   });
 
   /** Clearing a secret needs to be possible without a way to read it back. */

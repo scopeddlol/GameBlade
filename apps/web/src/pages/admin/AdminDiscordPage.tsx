@@ -7,11 +7,12 @@ import {
   BotControl,
   ChannelPicker,
   PostSection,
+  RoleSection,
   TicketSection,
-  useGuild,
   type DiscordBotStatus,
   type DiscordPresenceConfig,
   type DiscordTicketConfig,
+  useGuild,
 } from './discordSections.js';
 
 /** One step between a stored token and a message actually arriving. */
@@ -447,6 +448,13 @@ export function AdminDiscordPage() {
         hasToken={config.botTokenSet}
         defaultChannelId={config.channelId}
         guild={guild}
+        onError={setError}
+        onNotice={setNotice}
+      />
+
+      <RoleSection
+        guild={guild}
+        botOnline={config.bot.state === 'ready'}
         onError={setError}
         onNotice={setNotice}
       />

@@ -745,4 +745,41 @@ export const migrations: Migration[] = [
       CREATE INDEX password_resets_expires_idx ON password_resets(expires_at);
     `,
   },
+  {
+    id: '0018_achievement_rule_tags',
+    sql: /* sql */ `
+      -- Labels on an unlock rule, not on the achievement it unlocks.
+      --
+      -- A game needs one rule per candidate emulator or save layout, all of
+      -- them naming the same achievement, and they are otherwise told apart
+      -- only by a long path. A tag is what lets an operator say which is which
+      -- — "goldberg", "rune", "needs testing" — and filter on it later.
+      ALTER TABLE game_achievement_rules ADD COLUMN tags TEXT;
+    `,
+  },
+  {
+    id: '0019_discord_roles',
+    sql: /* sql */ `
+      -- Emoji-on-a-message to role, the way every other server does it.
+      --
+      -- Keyed on the message and the emoji together: one message usually
+      -- carries several choices. The emoji is stored in the form the gateway
+      -- reports it — a bare unicode character, or name:id for a custom one —
+      -- so the comparison at dispatch time is a string equality and not a
+      -- guess about which half Discord will send.
+      CREATE TABLE discord_reaction_roles (
+        id TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        role_id TEXT NOT NULL,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX discord_reaction_roles_key_idx
+        ON discord_reaction_roles(message_id, emoji);
+      CREATE INDEX discord_reaction_roles_message_idx ON discord_reaction_roles(message_id);
+    `,
+  },
 ];

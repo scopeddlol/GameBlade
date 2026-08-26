@@ -91,6 +91,19 @@ export interface RuntimeSettings {
   /** The text beside it. Blank means no activity at all, just a presence. */
   discordActivityName: string | null;
 
+  /* ----------------------------------------------------------------- roles */
+
+  /**
+   * A role handed to everyone who joins the Discord.
+   *
+   * Needs the privileged Guild Members intent, which the gateway only asks for
+   * when this is set — an operator who does not want auto-roles never has to
+   * turn anything on in the developer portal.
+   */
+  discordAutoRoleId: string | null;
+  /** Whether emoji-on-a-message role bindings are acted on at all. */
+  discordReactionRolesEnabled: boolean;
+
   /* --------------------------------------------------------------- tickets */
 
   discordTicketsEnabled: boolean;
@@ -181,6 +194,8 @@ export class SettingsService {
       discordPresenceStatus: asString('discordPresenceStatus', 'online') ?? 'online',
       discordActivityType: asNumber('discordActivityType', 0),
       discordActivityName: asString('discordActivityName', null),
+      discordAutoRoleId: asString('discordAutoRoleId', null),
+      discordReactionRolesEnabled: asBoolean('discordReactionRolesEnabled', false),
       discordTicketsEnabled: asBoolean('discordTicketsEnabled', false),
       discordSupportChannelId: asString('discordSupportChannelId', null),
       discordTicketCategoryId: asString('discordTicketCategoryId', null),

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { DiscordGateway } from './discordGateway.js';
+import { DiscordGateway, GATEWAY_INTENTS } from './discordGateway.js';
 
 /**
  * The gateway protocol itself, against a fake socket.
@@ -52,14 +52,17 @@ describe('the Discord gateway protocol', () => {
     vi.useRealTimers();
   });
 
-  const start = (presence = { status: 'online', activityType: 0, activityName: 'the archive' }) => {
+  const start = (
+    presence = { status: 'online', activityType: 0, activityName: 'the archive' },
+    intents?: number,
+  ) => {
     const states: string[] = [];
     const dispatched: Array<[string, unknown]> = [];
     const gateway = new DiscordGateway(logger, {
       onDispatch: (event, data) => dispatched.push([event, data]),
       onStateChange: (state) => states.push(state),
     });
-    gateway.start('a-token', presence);
+    gateway.start('a-token', presence, intents);
     return { gateway, states, dispatched, socket: FakeSocket.last! };
   };
 
@@ -74,6 +77,37 @@ describe('the Discord gateway protocol', () => {
     expect(identify!.d.intents).toBe(0);
     expect(identify!.d.token).toBe('a-token');
     expect(identify!.d.presence.activities).toEqual([{ type: 0, name: 'the archive' }]);
+  });
+
+  /**
+   * Intents are opt-in per feature, so a server using neither role feature
+   * keeps a bot that is told about nothing and needs nothing enabling.
+   */
+  it('asks for the members intent only when auto-roles need it', () => {
+    const { socket } = start(undefined, GATEWAY_INTENTS.guildMembers);
+    socket.receive({ op: 10, d: { heartbeat_interval: 45000 } });
+
+    const identify = socket.frames().find((f) => f.op === 2);
+    expect(identify!.d.intents).toBe(GATEWAY_INTENTS.guildMembers);
+  });
+
+  it('combines intents when both role features are on', () => {
+    const both = GATEWAY_INTENTS.guildMembers | GATEWAY_INTENTS.guildMessageReactions;
+    const { socket, gateway } = start(undefined, both);
+    socket.receive({ op: 10, d: { heartbeat_interval: 45000 } });
+
+    expect(socket.frames().find((f) => f.op === 2)!.d.intents).toBe(both);
+    // Read back so the bot can tell a live connection is asking for the wrong
+    // set and reconnect, rather than listening for events it never requested.
+    expect(gateway.currentIntents).toBe(both);
+  });
+
+  it('hands every dispatch to the handler, not only interactions', () => {
+    const { socket, dispatched } = start(undefined, GATEWAY_INTENTS.guildMembers);
+    socket.receive({ op: 10, d: { heartbeat_interval: 45000 } });
+    socket.receive({ op: 0, t: 'GUILD_MEMBER_ADD', s: 1, d: { guild_id: 'g', user: { id: 'u' } } });
+
+    expect(dispatched.map(([event]) => event)).toContain('GUILD_MEMBER_ADD');
   });
 
   it('puts a custom status in `state`, where Discord reads it from', () => {
