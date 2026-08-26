@@ -20,6 +20,13 @@ export interface MediaItem {
   label: string;
   /** Poster frame, where one exists. */
   thumbnailPath?: string | null;
+  /**
+   * A URL that is already loadable, used instead of resolving `path`.
+   *
+   * The case this exists for is a decrypted message attachment: it is served
+   * from this machine's own disk and has no server-relative path to resolve.
+   */
+  resolvedUrl?: string;
 }
 
 /**
@@ -190,7 +197,8 @@ export function MediaViewer({
 
 /** The thing itself, with whichever controls its kind actually has. */
 function MediaSurface({ item, actualSize }: { item: MediaItem; actualSize: boolean }) {
-  const resolved = useArtwork(item.kind === 'youtube' ? null : item.path);
+  const looked = useArtwork(item.kind === 'youtube' || item.resolvedUrl ? null : item.path);
+  const resolved = item.resolvedUrl ?? looked;
 
   if (item.kind === 'youtube') {
     return (
@@ -242,12 +250,19 @@ function MediaSurface({ item, actualSize }: { item: MediaItem; actualSize: boole
 
 /** A filmstrip entry — the poster frame where there is one, the image itself otherwise. */
 function Thumbnail({ item }: { item: MediaItem }) {
-  const path = item.kind === 'youtube' ? null : (item.thumbnailPath ?? item.path);
-  const resolved = useArtwork(path);
+  const path =
+    item.kind === 'youtube' || item.resolvedUrl ? null : (item.thumbnailPath ?? item.path);
+  const looked = useArtwork(path);
+  const resolved = item.resolvedUrl ?? looked;
 
   if (item.kind === 'youtube') {
     return <img src={`https://img.youtube.com/vi/${item.path}/mqdefault.jpg`} alt="" />;
   }
   if (!resolved) return <span className="skeleton" aria-hidden />;
+  // A clip's filmstrip entry is its own first frame; asking a <video> for one
+  // is cheaper than storing a separate poster we would also have to encrypt.
+  if (item.kind === 'video') {
+    return <video src={resolved} muted preload="metadata" />;
+  }
   return <img src={resolved} alt="" loading="lazy" />;
 }

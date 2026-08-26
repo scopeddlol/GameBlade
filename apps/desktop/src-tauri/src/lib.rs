@@ -1,6 +1,7 @@
 mod api;
 mod credentials;
 mod download;
+mod e2ee;
 mod error;
 mod install;
 mod launcher;
@@ -101,7 +102,16 @@ impl AppState {
 /// screenshot — by accident. Rust still holds it in `StoredSession`, which is
 /// where every request actually gets it from.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionInfo {
+    /// The account's own id.
+    ///
+    /// Needed by anything that has to recognise the caller in data the server
+    /// returns — "is this message mine" is answered by comparing ids, and
+    /// comparing usernames instead would be one rename away from wrong.
+    /// Empty only for a session stored before this was recorded, which the
+    /// next successful sign-in check fills in.
+    user_id: String,
     username: String,
     role: String,
 }
@@ -138,6 +148,7 @@ fn sniff_image_type(bytes: &[u8]) -> &'static str {
 async fn current_session(state: State<'_, AppState>) -> AppResult<Option<SessionInfo>> {
     let session = state.session.read().await;
     Ok(session.as_ref().map(|s| SessionInfo {
+        user_id: s.user_id.clone().unwrap_or_default(),
         username: s.username.clone(),
         role: s.role.clone(),
     }))
@@ -178,6 +189,11 @@ async fn sign_out(state: State<'_, AppState>) -> AppResult<()> {
     state.realtime.stop();
     credentials::clear()?;
     *state.session.write().await = None;
+    // The message identity goes with the session. It is the one secret that
+    // makes this account's conversations readable on this machine, and leaving
+    // it on a shared PC would throw away the entire point of encrypting them.
+    // Every conversation is re-keyed for whichever device signs in next.
+    let _ = e2ee::forget_identity();
     // Everything the offline cache holds belongs to the account that just left:
     // its library, its friends, its artwork. Whoever signs in next must not
     // open onto it.
@@ -994,6 +1010,191 @@ async fn stop_game(state: State<'_, AppState>, game_id: Option<String>) -> AppRe
     }
 }
 
+/* ------------------------------------------------------------------ messages */
+
+/// This device's message identity, generating one the first time.
+///
+/// The private half never leaves this machine — not to the server, not to the
+/// webview. Everything the UI is given is the public key and its fingerprint.
+#[tauri::command]
+async fn message_identity() -> AppResult<e2ee::Identity> {
+    let (_, identity) = e2ee::identity()?;
+    Ok(identity)
+}
+
+/// The fingerprint of somebody else's published key, for comparing by voice.
+#[tauri::command]
+async fn key_fingerprint(public_key: String) -> AppResult<String> {
+    e2ee::fingerprint(&public_key)
+}
+
+/// A fresh conversation key, sealed for each device that should hold it.
+///
+/// Both halves happen here so the plaintext key exists only inside this
+/// command: the webview is handed the wraps and never the key itself, which is
+/// what stops a compromised page from leaking one.
+#[tauri::command]
+async fn seal_conversation_key(recipients: Vec<String>) -> AppResult<serde_json::Value> {
+    let key = e2ee::new_conversation_key();
+    let mut wraps = Vec::with_capacity(recipients.len());
+
+    for public_key in &recipients {
+        let wrapped = e2ee::wrap_key(&key, public_key)?;
+        wraps.push(serde_json::json!({
+            "publicKey": public_key,
+            "ephemeralPublic": wrapped.ephemeral_public,
+            "nonce": wrapped.nonce,
+            "ciphertext": wrapped.ciphertext,
+        }));
+    }
+
+    // The key comes back too, because the caller has to encrypt its first
+    // message with it. Held in the UI for the session and never persisted.
+    Ok(serde_json::json!({ "key": key, "wraps": wraps }))
+}
+
+/// Re-seals a conversation key this device can already open, for more devices.
+///
+/// Used when somebody adds a member, or signs in on a second machine: any
+/// existing member can supply the wrap, because they can already read the
+/// conversation.
+#[tauri::command]
+async fn rewrap_conversation_key(
+    conversation_key: String,
+    recipients: Vec<String>,
+) -> AppResult<Vec<serde_json::Value>> {
+    recipients
+        .iter()
+        .map(|public_key| {
+            let wrapped = e2ee::wrap_key(&conversation_key, public_key)?;
+            Ok(serde_json::json!({
+                "publicKey": public_key,
+                "ephemeralPublic": wrapped.ephemeral_public,
+                "nonce": wrapped.nonce,
+                "ciphertext": wrapped.ciphertext,
+            }))
+        })
+        .collect()
+}
+
+/// Opens a conversation key that was sealed for this device.
+#[tauri::command]
+async fn open_conversation_key(wrapped: e2ee::WrappedKey) -> AppResult<String> {
+    let (secret, _) = e2ee::identity()?;
+    e2ee::unwrap_key(&secret, &wrapped)
+}
+
+#[tauri::command]
+async fn seal_message(conversation_key: String, plaintext: String) -> AppResult<e2ee::Sealed> {
+    e2ee::seal_message(&conversation_key, &plaintext)
+}
+
+#[tauri::command]
+async fn open_message(conversation_key: String, sealed: e2ee::Sealed) -> AppResult<String> {
+    e2ee::open_message(&conversation_key, &sealed)
+}
+
+/// Encrypts a file and writes the ciphertext somewhere the uploader can read.
+///
+/// Written to a temporary file rather than returned as bytes: a clip is tens of
+/// megabytes, and moving that through the IPC bridge as a base64 string costs
+/// three copies and a third again in size for nothing.
+#[tauri::command]
+async fn seal_file(
+    state: State<'_, AppState>,
+    conversation_key: String,
+    file_path: String,
+) -> AppResult<serde_json::Value> {
+    let plaintext = tokio::fs::read(&file_path).await?;
+    let sealed = e2ee::seal_attachment(&conversation_key, &plaintext)?;
+
+    let staging = state.app_data.join("message-uploads");
+    tokio::fs::create_dir_all(&staging).await?;
+    let target = staging.join(format!("{}.sealed", staging_name()));
+
+    // The nonce rides with the ciphertext rather than in the message body: an
+    // attachment has to be openable from its own bytes, so that a client
+    // fetching one does not need the message row as well.
+    let mut bytes = base64_decode(&sealed.nonce)?;
+    bytes.extend_from_slice(&base64_decode(&sealed.ciphertext)?);
+    tokio::fs::write(&target, &bytes).await?;
+
+    let name = Path::new(&file_path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "attachment".to_string());
+
+    Ok(serde_json::json!({
+        "path": target.to_string_lossy(),
+        "name": name,
+        "sizeBytes": plaintext.len(),
+        "contentType": guess_content_type(&name),
+    }))
+}
+
+/// Fetches a sealed attachment, opens it, and writes the plaintext to a file.
+///
+/// The plaintext lands in the offline cache directory so the viewer can point
+/// an `<img>` or `<video>` at it through the app's own image scheme, and so
+/// scrolling back through a conversation does not re-download and re-decrypt
+/// everything each time.
+#[tauri::command]
+async fn open_attachment(
+    state: State<'_, AppState>,
+    conversation_key: String,
+    media_id: String,
+    url: String,
+    content_type: String,
+) -> AppResult<String> {
+    let cached = state.app_data.join("message-media").join(&media_id);
+    if !cached.is_file() {
+        let client = state.client().await?;
+        let session = state
+            .session
+            .read()
+            .await
+            .clone()
+            .ok_or(AppError::NotSignedIn)?;
+
+        let separator = if url.contains('?') { '&' } else { '?' };
+        let full = format!(
+            "{}{url}{separator}token={}",
+            session.server_url, session.token
+        );
+        let response = client.http().get(full).send().await?;
+        if !response.status().is_success() {
+            return Err(AppError::Other(
+                "That attachment is no longer there".to_string(),
+            ));
+        }
+
+        let bytes = response.bytes().await?;
+        if bytes.len() < 24 {
+            return Err(AppError::Other("That attachment is truncated".to_string()));
+        }
+
+        // The first 24 bytes are the nonce this was sealed with; the rest is
+        // the ciphertext.
+        let sealed = e2ee::Sealed {
+            nonce: base64_encode(&bytes[..24]),
+            ciphertext: base64_encode(&bytes[24..]),
+        };
+        let plaintext = e2ee::open_attachment(&conversation_key, &sealed)?;
+
+        tokio::fs::create_dir_all(cached.parent().unwrap_or(&state.app_data)).await?;
+        tokio::fs::write(&cached, &plaintext).await?;
+    }
+
+    let _ = content_type;
+    // Through the app's own image scheme rather than as a file path: the
+    // webview cannot load `C:\Users\...` from a page, and routing it here
+    // means the decrypted bytes are served from local disk without ever
+    // becoming a URL that points at the server.
+    Ok(format!(
+        "{IMAGE_SCHEME}://localhost/local/message-media/{media_id}"
+    ))
+}
+
 /* -------------------------------------------------------------- cloud saves */
 
 #[derive(Debug, Serialize)]
@@ -1166,14 +1367,30 @@ async fn upload_media(
     kind: String,
 ) -> AppResult<serde_json::Value> {
     let path = PathBuf::from(&file_path);
-    let content_type = content_type_for(&path)
-        .ok_or_else(|| AppError::Other("That file type cannot be uploaded".to_string()))?;
 
-    state
+    // A sealed upload is ciphertext, so there is no file type to recognise —
+    // and saying otherwise would be a lie the server could not check anyway.
+    // What it actually is travels inside the encrypted message body.
+    let content_type = if kind == "sealed" {
+        "application/octet-stream"
+    } else {
+        content_type_for(&path)
+            .ok_or_else(|| AppError::Other("That file type cannot be uploaded".to_string()))?
+    };
+
+    let result = state
         .client()
         .await?
         .upload_file(&format!("/media?kind={kind}"), &path, content_type)
-        .await
+        .await;
+
+    // The staged ciphertext exists only to be uploaded; leaving it behind
+    // would grow a folder of encrypted duplicates for every attachment sent.
+    if kind == "sealed" {
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    result
 }
 
 /* ------------------------------------------------------------------ helpers */
@@ -1254,6 +1471,25 @@ async fn serve_image(
             .unwrap_or_else(|_| missing())
     };
 
+    // A `/local/` path is something this client decrypted for itself — a
+    // message attachment — and is never fetched from the server. It is served
+    // from the app's own data directory, and only from inside it: the id is
+    // checked so a crafted URL cannot walk out with `..`.
+    if let Some(rest) = path.strip_prefix("/local/message-media/") {
+        let id = rest.split('/').next().unwrap_or_default();
+        if id.is_empty()
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return missing();
+        }
+        return match tokio::fs::read(state.app_data.join("message-media").join(id)).await {
+            Ok(bytes) => served(bytes),
+            Err(_) => missing(),
+        };
+    }
+
     if let Some(bytes) = state.cache.read_image(&path) {
         return served(bytes);
     }
@@ -1289,6 +1525,55 @@ async fn serve_image(
             }
             missing()
         }
+    }
+}
+
+/// A unique name for one staged upload.
+///
+/// A timestamp plus a counter rather than a random id: these files live for the
+/// length of one upload, and the only thing that has to be true of the name is
+/// that two attachments queued in the same millisecond do not collide.
+fn staging_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis())
+        .unwrap_or(0);
+    format!("{now}-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    STANDARD.encode(bytes)
+}
+
+fn base64_decode(value: &str) -> AppResult<Vec<u8>> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    STANDARD
+        .decode(value)
+        .map_err(|_| AppError::Other("That attachment is malformed".to_string()))
+}
+
+/// What a decrypted attachment is, from its file name.
+///
+/// The server cannot say — it only ever held ciphertext — so this is the only
+/// place the question can be answered at all. Falls back to a generic type the
+/// webview will sniff for itself.
+fn guess_content_type(name: &str) -> &'static str {
+    let lower = name.to_ascii_lowercase();
+    match () {
+        _ if lower.ends_with(".png") => "image/png",
+        _ if lower.ends_with(".jpg") || lower.ends_with(".jpeg") => "image/jpeg",
+        _ if lower.ends_with(".webp") => "image/webp",
+        _ if lower.ends_with(".gif") => "image/gif",
+        _ if lower.ends_with(".avif") => "image/avif",
+        _ if lower.ends_with(".mp4") || lower.ends_with(".m4v") => "video/mp4",
+        _ if lower.ends_with(".webm") => "video/webm",
+        _ => "application/octet-stream",
     }
 }
 
@@ -1421,6 +1706,15 @@ pub fn run() {
             api_patch,
             api_delete,
             image_url,
+            message_identity,
+            key_fingerprint,
+            seal_conversation_key,
+            rewrap_conversation_key,
+            open_conversation_key,
+            seal_message,
+            open_message,
+            seal_file,
+            open_attachment,
             read_rule_file,
             client_version,
             run_client_installer,

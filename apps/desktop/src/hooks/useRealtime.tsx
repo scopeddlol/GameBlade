@@ -80,6 +80,25 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
             setLastAchievement(frame);
             void queryClient.invalidateQueries({ queryKey: ['achievements'] });
             break;
+          // A message arrives sealed, exactly as it was stored — the gateway
+          // is as unable to read it as the database is. So this refreshes the
+          // thread rather than inserting the frame: decryption belongs to the
+          // component that holds the conversation key.
+          case 'message':
+            void queryClient.invalidateQueries({
+              queryKey: ['messages', 'thread', frame.message.conversationId],
+            });
+            void queryClient.invalidateQueries({ queryKey: ['messages', 'conversations'] });
+            void queryClient.invalidateQueries({ queryKey: ['messages', 'unread'] });
+            break;
+          case 'message-removed':
+            void queryClient.invalidateQueries({
+              queryKey: ['messages', 'thread', frame.conversationId],
+            });
+            break;
+          case 'conversation':
+            void queryClient.invalidateQueries({ queryKey: ['messages', 'conversations'] });
+            break;
           default:
             break;
         }

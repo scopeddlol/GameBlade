@@ -65,6 +65,21 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = [
 # Device tokens live in the OS credential store, never on disk in plain text.
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
 
+# End-to-end encryption for messages.
+#
+# X25519 for agreeing a key with somebody else's device, HKDF to turn the raw
+# shared secret into one, and XChaCha20-Poly1305 to actually encrypt with — a
+# 192-bit nonce, which is the reason to prefer it here: a message key is used
+# for a whole conversation, and at that many messages a random 96-bit nonce is
+# no longer comfortably collision-free.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+rand = "0.8"
+base64 = "0.22"
+# Comparing key material without leaking which byte differed through timing.
+subtle = "2"
+
 [features]
 # Enabled by tauri when building without the dev server.
 custom-protocol = ["tauri/custom-protocol"]

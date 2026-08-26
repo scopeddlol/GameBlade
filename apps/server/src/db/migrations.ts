@@ -854,4 +854,107 @@ export const migrations: Migration[] = [
         REFERENCES games(id) ON DELETE SET NULL;
     `,
   },
+  {
+    id: '0022_messaging',
+    sql: /* sql */ `
+      -- Private conversations, which the server routes and cannot read.
+      --
+      -- Everything here is either ciphertext or metadata. What the server
+      -- knows: who is in a conversation, when a message was sent, and how
+      -- large it was. What it does not: a single word of any of them.
+
+      -- One published key per device, so a message can be sealed for each
+      -- machine somebody uses rather than for an account in the abstract.
+      CREATE TABLE device_keys (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        -- Ties a key to the device that owns it, so signing out on one laptop
+        -- retires that key and leaves the phone's alone.
+        device_id TEXT REFERENCES devices(id) ON DELETE CASCADE,
+        public_key TEXT NOT NULL,
+        -- The operator-visible label, for a "your devices" list that can say
+        -- which key is which.
+        label TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        last_seen_at TEXT
+      );
+      CREATE UNIQUE INDEX device_keys_public_idx ON device_keys(user_id, public_key);
+      CREATE INDEX device_keys_user_idx ON device_keys(user_id);
+
+      CREATE TABLE conversations (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL DEFAULT 'direct',
+        -- Only groups carry one. A direct conversation is named by whoever is
+        -- in it, which each side renders for itself.
+        title TEXT,
+        created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        -- Denormalised so the conversation list sorts without touching the
+        -- messages table, which is by far the largest thing here.
+        last_message_at TEXT
+      );
+      CREATE INDEX conversations_recent_idx ON conversations(last_message_at DESC);
+
+      CREATE TABLE conversation_members (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member',
+        joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        -- How far this member has read, so an unread count needs no per-user
+        -- row per message.
+        last_read_at TEXT,
+        left_at TEXT
+      );
+      CREATE UNIQUE INDEX conversation_members_pk
+        ON conversation_members(conversation_id, user_id);
+      CREATE INDEX conversation_members_user_idx ON conversation_members(user_id, left_at);
+
+      -- The conversation key, sealed once per member device.
+      --
+      -- Separate from the membership row because one member may have several
+      -- devices, each needing its own wrap, and because a new device joining
+      -- must not disturb the membership record.
+      CREATE TABLE conversation_keys (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        -- The device public key this wrap was made for; the client matches on
+        -- it to find the one it can open.
+        public_key TEXT NOT NULL,
+        ephemeral_public TEXT NOT NULL,
+        nonce TEXT NOT NULL,
+        ciphertext TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX conversation_keys_pk
+        ON conversation_keys(conversation_id, public_key);
+      CREATE INDEX conversation_keys_user_idx ON conversation_keys(conversation_id, user_id);
+
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        sender_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        -- The sealed body: a nonce and a ciphertext, both base64. The server
+        -- stores these and never looks inside.
+        nonce TEXT NOT NULL,
+        ciphertext TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        edited_at TEXT,
+        -- Tombstoned rather than deleted, so every client agrees the message
+        -- is gone instead of one that missed the event still showing it.
+        deleted_at TEXT
+      );
+      CREATE INDEX messages_conversation_idx ON messages(conversation_id, created_at);
+
+      -- Attachments, which are rows in "media" holding ciphertext.
+      CREATE TABLE message_media (
+        message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (message_id, media_id)
+      );
+      CREATE INDEX message_media_media_idx ON message_media(media_id);
+    `,
+  },
 ];

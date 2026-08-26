@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { forgetMessageSecrets } from './useMessages.js';
 import { ipc, type SessionInfo } from '../lib/ipc.js';
 
 interface SessionContextValue {
@@ -65,6 +66,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setSessionState(null);
     // Drop every cached query so nothing from the previous account lingers.
     queryClient.clear();
+    // And every conversation key held in memory. The Rust side destroys this
+    // device's message identity at the same moment, so leaving the opened keys
+    // in a JavaScript map would be the one copy of them left anywhere.
+    forgetMessageSecrets();
   }, [queryClient]);
 
   const value = useMemo<SessionContextValue>(

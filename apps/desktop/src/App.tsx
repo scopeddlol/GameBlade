@@ -41,6 +41,7 @@ import { TitleBar } from './components/TitleBar.js';
 import { GameDetailPanel } from './components/GameDetail.js';
 import { Avatar, Loading } from './components/ui.js';
 import { useAutoSync } from './hooks/useAutoSync.js';
+import { useUnreadMessages } from './hooks/useMessages.js';
 import { ConnectivityProvider, useConnectivity } from './hooks/useConnectivity.js';
 import { OfflineBanner } from './components/OfflineBanner.js';
 import { RealtimeProvider, useRealtime } from './hooks/useRealtime.js';
@@ -56,6 +57,7 @@ import { SettingsTab } from './tabs/SettingsTab.js';
 import { SocialTab } from './tabs/SocialTab.js';
 import { StoreTab } from './tabs/StoreTab.js';
 import { UpdateBanner } from './components/UpdateBanner.js';
+import { MessagesTab } from './tabs/MessagesTab.js';
 import { NewsTab } from './tabs/NewsTab.js';
 import { RequestsTab } from './tabs/RequestsTab.js';
 import { ReportBug } from './components/ReportBug.js';
@@ -78,6 +80,7 @@ const TABS = [
   { id: 'requests', label: 'Requests', icon: Sparkles },
   { id: 'news', label: 'News', icon: Megaphone },
   { id: 'social', label: 'Social', icon: Users },
+  { id: 'messages', label: 'Messages', icon: MessageSquare },
   { id: 'settings', label: 'Settings', icon: Settings },
 ] as const;
 
@@ -122,6 +125,7 @@ const TAB_PREFETCH: Partial<Record<TabId, { key: readonly unknown[]; path: strin
   ],
   news: [{ key: ['news'], path: '/feed?scope=everyone&kind=announcement&limit=50' }],
   social: [{ key: ['feed', 'friends'], path: '/feed?scope=friends&limit=30' }],
+  messages: [{ key: ['messages', 'conversations'], path: '/messages/conversations' }],
 };
 
 export function App() {
@@ -355,6 +359,7 @@ function Shell() {
             {tab === 'requests' ? <RequestsTab onOpenGameId={setOpenGameId} /> : null}
             {tab === 'news' ? <NewsTab onOpenProfile={setProfileId} /> : null}
             {tab === 'social' ? <SocialTab onOpenProfile={setProfileId} /> : null}
+            {tab === 'messages' ? <MessagesTab onOpenProfile={setProfileId} /> : null}
             {tab === 'settings' ? <SettingsTab /> : null}
           </div>
         </div>
@@ -423,6 +428,9 @@ function Sidebar({
   onReportBug: () => void;
 }) {
   const { session } = useSession();
+  // Unread messages get a count on the sidebar, because the whole point of a
+  // message is that somebody is waiting for an answer.
+  const unreadMessages = useUnreadMessages(Boolean(session)).data ?? 0;
 
   return (
     <nav className="sidebar">
@@ -444,6 +452,9 @@ function Sidebar({
             >
               <entry.icon size={18} aria-hidden />
               <span>{entry.label}</span>
+              {entry.id === 'messages' && unreadMessages > 0 ? (
+                <span className="pill">{unreadMessages}</span>
+              ) : null}
             </button>
           </li>
         ))}

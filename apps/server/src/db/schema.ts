@@ -1,5 +1,12 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 
@@ -607,7 +614,15 @@ export const media = sqliteTable(
     ownerId: text('owner_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    kind: text('kind', { enum: ['avatar', 'banner', 'image', 'clip'] }).notNull(),
+    /**
+     * `sealed` is an encrypted message attachment.
+     *
+     * Its bytes are ciphertext, so the content type on the row is
+     * `application/octet-stream` and says nothing about what is inside. What it
+     * actually is — a screenshot, a clip — travels inside the sealed message
+     * body, where only the conversation's members can read it.
+     */
+    kind: text('kind', { enum: ['avatar', 'banner', 'image', 'clip', 'sealed'] }).notNull(),
     contentType: text('content_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),
     width: integer('width'),
@@ -1105,3 +1120,157 @@ export const bugReports = sqliteTable(
     index('bug_reports_user_idx').on(t.userId, t.createdAt),
   ],
 );
+
+/* ------------------------------------------------------------------ messages */
+
+/**
+ * One published X25519 key per device.
+ *
+ * Per device rather than per account, because the private half never leaves the
+ * machine that made it — so a conversation key has to be sealed once for every
+ * machine its members use. An account with a laptop and a desktop has two rows
+ * here, and a message reaches both.
+ */
+export const deviceKeys = sqliteTable(
+  'device_keys',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** The client device this key belongs to, so signing out retires it. */
+    deviceId: text('device_id').references(() => devices.id, { onDelete: 'cascade' }),
+    publicKey: text('public_key').notNull(),
+    label: text('label'),
+    createdAt: text('created_at').notNull().default(now),
+    lastSeenAt: text('last_seen_at'),
+  },
+  (t) => [
+    uniqueIndex('device_keys_public_idx').on(t.userId, t.publicKey),
+    index('device_keys_user_idx').on(t.userId),
+  ],
+);
+
+export const conversations = sqliteTable(
+  'conversations',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind', { enum: ['direct', 'group'] })
+      .notNull()
+      .default('direct'),
+    /** Only groups carry one; a direct conversation is named by who is in it. */
+    title: text('title'),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: text('created_at').notNull().default(now),
+    /**
+     * Denormalised so the conversation list sorts without touching `messages`,
+     * which is by far the largest table here and the one nobody should scan to
+     * draw a sidebar.
+     */
+    lastMessageAt: text('last_message_at'),
+  },
+  (t) => [index('conversations_recent_idx').on(t.lastMessageAt)],
+);
+
+export const conversationMembers = sqliteTable(
+  'conversation_members',
+  {
+    id: text('id').primaryKey(),
+    conversationId: text('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: text('role', { enum: ['owner', 'member'] })
+      .notNull()
+      .default('member'),
+    joinedAt: text('joined_at').notNull().default(now),
+    /** How far they have read, so an unread count needs no row per message. */
+    lastReadAt: text('last_read_at'),
+    leftAt: text('left_at'),
+  },
+  (t) => [
+    uniqueIndex('conversation_members_pk').on(t.conversationId, t.userId),
+    index('conversation_members_user_idx').on(t.userId, t.leftAt),
+  ],
+);
+
+/**
+ * The conversation key, sealed once per member device.
+ *
+ * Separate from the membership row because one member may have several devices
+ * — each needing its own wrap — and because a new device joining must not
+ * disturb the membership record.
+ */
+export const conversationKeys = sqliteTable(
+  'conversation_keys',
+  {
+    id: text('id').primaryKey(),
+    conversationId: text('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** The device key this wrap was made for; the client matches on it. */
+    publicKey: text('public_key').notNull(),
+    ephemeralPublic: text('ephemeral_public').notNull(),
+    nonce: text('nonce').notNull(),
+    ciphertext: text('ciphertext').notNull(),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('conversation_keys_pk').on(t.conversationId, t.publicKey),
+    index('conversation_keys_user_idx').on(t.conversationId, t.userId),
+  ],
+);
+
+export const messages = sqliteTable(
+  'messages',
+  {
+    id: text('id').primaryKey(),
+    conversationId: text('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    senderId: text('sender_id').references(() => users.id, { onDelete: 'set null' }),
+    /**
+     * The sealed body, base64. The server stores these two columns and never
+     * looks inside either of them — it holds no key that would open them.
+     */
+    nonce: text('nonce').notNull(),
+    ciphertext: text('ciphertext').notNull(),
+    createdAt: text('created_at').notNull().default(now),
+    editedAt: text('edited_at'),
+    /**
+     * Tombstoned rather than deleted, so every client agrees the message is
+     * gone — one that missed the event would otherwise go on showing it.
+     */
+    deletedAt: text('deleted_at'),
+  },
+  (t) => [index('messages_conversation_idx').on(t.conversationId, t.createdAt)],
+);
+
+/** Attachments: rows in `media` whose bytes are ciphertext. */
+export const messageMedia = sqliteTable(
+  'message_media',
+  {
+    messageId: text('message_id')
+      .notNull()
+      .references(() => messages.id, { onDelete: 'cascade' }),
+    mediaId: text('media_id')
+      .notNull()
+      .references(() => media.id, { onDelete: 'cascade' }),
+    sortOrder: integer('sort_order').notNull().default(0),
+  },
+  (t) => [
+    primaryKey({ columns: [t.messageId, t.mediaId] }),
+    index('message_media_media_idx').on(t.mediaId),
+  ],
+);
+
+export type DeviceKey = typeof deviceKeys.$inferSelect;
+export type Conversation = typeof conversations.$inferSelect;
+export type ConversationMember = typeof conversationMembers.$inferSelect;
+export type ConversationKey = typeof conversationKeys.$inferSelect;
+export type Message = typeof messages.$inferSelect;

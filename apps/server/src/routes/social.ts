@@ -25,7 +25,15 @@ interface UploadQuery {
   durationMs?: string;
 }
 
-const UPLOAD_KINDS: readonly MediaKind[] = ['avatar', 'banner', 'image', 'clip'];
+/**
+ * What may be uploaded, and `sealed` is one of them.
+ *
+ * A sealed upload is a message attachment that arrived already encrypted: the
+ * bytes are ciphertext and the recorded content type says nothing about what
+ * they were. It is allowed the clip ceiling because a clip is exactly what it
+ * most often is, and nothing here can tell the difference anyway.
+ */
+const UPLOAD_KINDS: readonly MediaKind[] = ['avatar', 'banner', 'image', 'clip', 'sealed'];
 
 function parseNumber(value: string | undefined): number | null {
   if (!value) return null;
@@ -253,7 +261,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
       if (!contentType) throw ApiError.badRequest('A Content-Type header is required');
 
       const declared = Number(request.headers['content-length'] ?? 0);
-      const maxBytes = kind === 'clip' ? MAX_CLIP_BYTES : MAX_IMAGE_BYTES;
+      const maxBytes = kind === 'clip' || kind === 'sealed' ? MAX_CLIP_BYTES : MAX_IMAGE_BYTES;
 
       const info = await media.store(
         context.user.id,
