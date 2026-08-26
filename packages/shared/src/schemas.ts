@@ -709,6 +709,19 @@ export const scanRequestSchema = z.object({
 });
 export type ScanRequestInput = z.infer<typeof scanRequestSchema>;
 
+/** Upkeep run from the panel rather than waiting for the hourly one. */
+export const databaseMaintenanceSchema = z.object({
+  /**
+   * Rewrite the file with its pages in order.
+   *
+   * Off by default because it is the expensive half: it needs room for a
+   * second copy of the database on the same disk and holds a write lock for
+   * as long as it takes. Worth it after a large deletion, and not otherwise.
+   */
+  vacuum: z.boolean().default(false),
+});
+export type DatabaseMaintenanceInput = z.infer<typeof databaseMaintenanceSchema>;
+
 export const purgeMissingSchema = z.object({
   /**
    * Only purge entries missing for at least this long. The default of 0 means

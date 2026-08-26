@@ -63,6 +63,8 @@ export const devices = sqliteTable(
   (t) => [
     uniqueIndex('devices_token_hash_idx').on(t.tokenHash),
     index('devices_user_idx').on(t.userId),
+    /** Sweeping devices that have not checked in, without a table scan. */
+    index('devices_last_seen_idx').on(t.lastSeenAt),
   ],
 );
 
@@ -193,6 +195,18 @@ export const games = sqliteTable(
     index('games_match_status_idx').on(t.matchStatus),
     index('games_missing_idx').on(t.missingAt),
     index('games_metadata_lock_idx').on(t.metadataLockedAt),
+    // Every shelf and every library page filters on "not missing" and then
+    // sorts. Leading each of these with missingAt is what lets the index
+    // supply the ordering too, instead of SQLite sorting the survivors itself.
+    index('games_live_sort_title_idx').on(t.missingAt, t.sortTitle),
+    index('games_live_added_idx').on(t.missingAt, t.addedAt),
+    index('games_live_rating_idx').on(t.missingAt, t.rating),
+    index('games_live_size_idx').on(t.missingAt, t.sizeBytes),
+    index('games_live_released_idx').on(t.missingAt, t.releaseDate),
+    /** The enrichment queue's exact filter, run at the end of every scan. */
+    index('games_pending_meta_idx').on(t.missingAt, t.metadataLockedAt, t.matchStatus),
+    index('games_igdb_idx').on(t.igdbId),
+    index('games_steam_app_idx').on(t.steamAppId),
   ],
 );
 
@@ -418,6 +432,9 @@ export const userGameStats = sqliteTable(
   (t) => [
     uniqueIndex('user_game_stats_pk').on(t.userId, t.gameId),
     index('user_game_stats_last_played_idx').on(t.userId, t.lastPlayedAt),
+    // The most-played shelf groups by game across every account; both of the
+    // indexes above lead with the user, so neither helps it.
+    index('user_game_stats_game_idx').on(t.gameId),
   ],
 );
 
@@ -466,6 +483,8 @@ export const userAchievements = sqliteTable(
   (t) => [
     uniqueIndex('user_achievements_pk').on(t.userId, t.achievementId),
     index('user_achievements_user_idx').on(t.userId, t.unlockedAt),
+    /** "How many people have this one?", which reads by achievement. */
+    index('user_achievements_achievement_idx').on(t.achievementId),
   ],
 );
 
@@ -514,6 +533,8 @@ export const saveVersions = sqliteTable(
   (t) => [
     index('save_versions_slot_idx').on(t.slotId, t.createdAt),
     index('save_versions_sha_idx').on(t.sha256),
+    /** Retention sweeps read by age across every slot. */
+    index('save_versions_created_idx').on(t.createdAt),
   ],
 );
 

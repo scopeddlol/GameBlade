@@ -31,14 +31,56 @@ const SCAN_LOG_LINES = 200;
  */
 const YIELD_EVERY = 25;
 
+/**
+ * How many directory entries the walk reads before yielding.
+ *
+ * The reading phase used to run start to finish without ever giving the loop
+ * back. On a spinning disk holding thousands of folders that is minutes of a
+ * server that answers nothing — including the progress endpoint the operator
+ * is refreshing to find out what is happening.
+ */
+const WALK_YIELD_EVERY = 200;
+
+/**
+ * The longest one title may spend in the providers before the run moves on.
+ *
+ * Every individual request already has its own timeout, but a title is not one
+ * request: a match is a search, a fetch, a cover, and up to a screenshot per
+ * image the provider publishes, each with its own retries. Multiply those out
+ * and a single game can legitimately occupy the run for the better part of an
+ * hour — which is exactly what "the scan has been running since I started the
+ * app" turned out to be. This is the ceiling on the whole title.
+ */
+const ITEM_DEADLINE_MS = 90_000;
+
+/**
+ * How long a single library's walk may take before the run gives up on it.
+ *
+ * A share that has gone away mid-walk does not fail, it hangs — every `readdir`
+ * blocking on a mount that will never answer. Without a ceiling the run sits
+ * there for ever with no log line and no counter moving.
+ */
+const READ_DEADLINE_MS = 30 * 60_000;
+
+/**
+ * How many rows the enrichment pass claims at a time, and how many passes it
+ * will make. Batching means a library with three thousand unmatched games is
+ * finished by one run rather than needing the button pressed six times.
+ */
+const MATCH_BATCH = 250;
+const MATCH_MAX_BATCHES = 40;
+
 const IDLE_PROGRESS: ScanProgress = {
   libraryId: null,
   state: 'idle',
   phase: null,
   library: null,
+  libraryIndex: 0,
+  libraryCount: 0,
   processed: 0,
   total: 0,
   currentItem: null,
+  heartbeatAt: null,
   startedAt: null,
   finishedAt: null,
   error: null,
@@ -47,6 +89,8 @@ const IDLE_PROGRESS: ScanProgress = {
   removed: 0,
   log: [],
   skipped: 0,
+  failed: 0,
+  canceling: false,
 };
 
 interface DiscoveredFile {
@@ -64,6 +108,14 @@ interface DiscoveredGame {
   contentMtime: string;
 }
 
+/** Raised by `cancel`, and caught only by the run that was asked to stop. */
+class ScanCanceled extends Error {
+  constructor() {
+    super('Scan canceled');
+    this.name = 'ScanCanceled';
+  }
+}
+
 function isArchive(name: string): boolean {
   const lower = name.toLowerCase();
   return ARCHIVE_EXTENSIONS.some((ext) => lower.endsWith(ext));
@@ -71,6 +123,34 @@ function isArchive(name: string): boolean {
 
 function isIgnored(name: string): boolean {
   return name.startsWith('.') || IGNORED.has(name.toLowerCase());
+}
+
+/**
+ * Runs `work` with a hard ceiling, aborting it rather than waiting it out.
+ *
+ * The abort matters more than the timer: without it the abandoned work carries
+ * on in the background holding a provider slot, so "moved on" would mean the
+ * next title queues behind the one we supposedly gave up on.
+ */
+async function withDeadline<T>(
+  timeoutMs: number,
+  controller: AbortController,
+  work: (signal: AbortSignal) => Promise<T>,
+): Promise<{ value: T; timedOut: false } | { value: null; timedOut: true }> {
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return { value: await work(controller.signal), timedOut: false };
+  } catch (error) {
+    if (timedOut) return { value: null, timedOut: true };
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -82,6 +162,14 @@ function isIgnored(name: string): boolean {
  * Nested directories are walked to enumerate a folder game's files, never to
  * discover additional games — otherwise every `data/` subfolder would become an
  * entry of its own.
+ *
+ * Everything here is written on the assumption that a run can wedge, because in
+ * practice one did: a share that stops answering, a provider that accepts a
+ * connection and then goes quiet, one game whose fifty screenshots each get two
+ * sixty-second attempts. Each phase therefore carries its own deadline, every
+ * counter is reset when the phase changes rather than carried forward, and the
+ * progress record stamps the moment it last moved so a wedged run can be told
+ * from a slow one without reading the container's logs.
  */
 export class ScannerService {
   private progress: ScanProgress = { ...IDLE_PROGRESS };
@@ -97,6 +185,7 @@ export class ScannerService {
    * "skip once this finishes in twenty seconds".
    */
   private skipRequested = false;
+  private cancelRequested = false;
   private currentItem: AbortController | null = null;
 
   constructor(
@@ -129,22 +218,65 @@ export class ScannerService {
     return true;
   }
 
+  /**
+   * Stop the whole run at the next checkpoint.
+   *
+   * Skip was the only control there was, which is no help at all when the
+   * problem is the run itself rather than one title in it — the only way out
+   * was restarting the container. What has already been written stays written:
+   * a cancelled scan is a partial scan, not a rolled-back one.
+   */
+  cancel(): boolean {
+    if (!this.running) return false;
+    this.cancelRequested = true;
+    this.currentItem?.abort();
+    this.progress = { ...this.progress, canceling: true };
+    this.note('warn', 'Stopping the scan…');
+    return true;
+  }
+
   /** Records a line for the admin panel, keeping only the recent ones. */
   private note(level: ScanLogEntry['level'], message: string): void {
     const log = [...this.progress.log, { at: new Date().toISOString(), level, message }].slice(
       -SCAN_LOG_LINES,
     );
-    this.progress = { ...this.progress, log };
+    this.progress = { ...this.progress, log, heartbeatAt: new Date().toISOString() };
     if (level === 'warn') this.logger.warn({}, message);
     else this.logger.info({}, message);
+  }
+
+  /**
+   * Moves the run's counters and stamps the moment it happened.
+   *
+   * Every progress write goes through here so that `heartbeatAt` cannot drift
+   * out of step with the numbers it is meant to describe.
+   */
+  private advance(patch: Partial<ScanProgress>): void {
+    this.progress = { ...this.progress, ...patch, heartbeatAt: new Date().toISOString() };
+  }
+
+  /**
+   * Starts a phase, clearing the counters the previous one left behind.
+   *
+   * This is the fix for the readout that sat on "25 / 25" while the second
+   * library was still being read: the totals belong to a phase, so they end
+   * with it rather than being carried into work that has not started counting.
+   */
+  private beginPhase(phase: ScanProgress['phase'], patch: Partial<ScanProgress> = {}): void {
+    this.advance({ phase, processed: 0, total: 0, currentItem: null, ...patch });
   }
 
   /** Consumes a pending skip request, if there is one. */
   private takeSkip(): boolean {
     if (!this.skipRequested) return false;
     this.skipRequested = false;
-    this.progress = { ...this.progress, skipped: this.progress.skipped + 1 };
+    this.advance({ skipped: this.progress.skipped + 1 });
     return true;
+  }
+
+  /** Throws out of the run if a stop has been asked for. */
+  private checkpoint(): void {
+    if (this.cancelRequested) throw new ScanCanceled();
   }
 
   /**
@@ -158,16 +290,30 @@ export class ScannerService {
 
     this.running = this.runScan(options)
       .catch((error: unknown) => {
+        if (error instanceof ScanCanceled) {
+          this.note('warn', 'Scan stopped');
+          this.advance({
+            state: 'canceled',
+            phase: null,
+            currentItem: null,
+            canceling: false,
+            finishedAt: new Date().toISOString(),
+          });
+          return;
+        }
         this.logger.error({ err: error }, 'library scan failed');
-        this.progress = {
-          ...this.progress,
+        this.advance({
           state: 'error',
+          canceling: false,
           error: error instanceof Error ? error.message : String(error),
           finishedAt: new Date().toISOString(),
-        };
+        });
       })
       .finally(() => {
         this.running = null;
+        this.cancelRequested = false;
+        this.skipRequested = false;
+        this.currentItem = null;
       });
 
     return this.running;
@@ -183,24 +329,32 @@ export class ScannerService {
       : this.db.select().from(libraries).where(eq(libraries.enabled, true)).all();
 
     this.skipRequested = false;
+    this.cancelRequested = false;
     this.progress = {
       ...IDLE_PROGRESS,
       libraryId: options.libraryId ?? null,
       state: 'scanning',
       phase: 'reading',
+      libraryCount: targets.length,
       startedAt: new Date().toISOString(),
+      heartbeatAt: new Date().toISOString(),
     };
     this.note(
       'info',
       `Scan started over ${targets.length} librar${targets.length === 1 ? 'y' : 'ies'}`,
     );
 
+    let index = 0;
     for (const library of targets) {
       if (!library.enabled && !options.libraryId) continue;
+      this.checkpoint();
+      index += 1;
+      this.advance({ libraryIndex: index, library: library.name });
       await this.scanLibrary(library, options.force ?? false);
     }
 
     if (options.fetchMetadata !== false) {
+      this.checkpoint();
       // The internal loop, not the guarded wrapper: `matchPending` returns the
       // in-flight run when one exists, which here is this very scan — awaiting
       // it would be awaiting ourselves.
@@ -210,16 +364,17 @@ export class ScannerService {
     this.note(
       'info',
       `Scan finished — ${this.progress.added} added, ${this.progress.updated} updated, ` +
-        `${this.progress.removed} missing, ${this.progress.skipped} skipped`,
+        `${this.progress.removed} missing, ${this.progress.skipped} skipped, ` +
+        `${this.progress.failed} failed`,
     );
-    this.progress = {
-      ...this.progress,
+    this.advance({
       state: 'idle',
       phase: null,
       library: null,
       currentItem: null,
+      canceling: false,
       finishedAt: new Date().toISOString(),
-    };
+    });
   }
 
   private async scanLibrary(library: Library, force: boolean): Promise<void> {
@@ -229,25 +384,38 @@ export class ScannerService {
     let discovered: DiscoveredGame[];
     try {
       // Walking a large share turns up no count until it finishes, and the
-      // progress readout would otherwise sit on the previous library's final
-      // tally throughout — indistinguishable from a stall. Naming the library
-      // being read says which of the two is happening.
-      this.progress = {
-        ...this.progress,
-        phase: 'reading',
-        library: library.name,
-        currentItem: `Reading ${library.name}…`,
-      };
+      // progress readout used to sit on the *previous* library's final tally
+      // throughout — indistinguishable from a stall, and the reason a run
+      // part-way through its second root reported "25 / 25" for minutes on
+      // end. The counters are cleared here and the walk reports what it has
+      // found so far as it goes.
+      this.beginPhase('reading', { library: library.name, currentItem: `Reading ${library.name}…` });
       this.note('info', `Reading ${library.name} (${library.path})`);
-      discovered = await this.discover(library.path);
+
+      const controller = new AbortController();
+      this.currentItem = controller;
+      const read = await withDeadline(READ_DEADLINE_MS, controller, () =>
+        this.discover(library.path),
+      );
+      this.currentItem = null;
+
+      if (read.timedOut) {
+        this.checkpoint();
+        const message = `gave up after ${Math.round(READ_DEADLINE_MS / 60_000)} minutes`;
+        this.note('warn', `Could not finish reading ${library.name} — ${message}`);
+        this.markLibraryScan(library.id, `error: ${message}`);
+        this.advance({ failed: this.progress.failed + 1 });
+        return;
+      }
+      discovered = read.value;
     } catch (error) {
+      if (error instanceof ScanCanceled) throw error;
       const message = error instanceof Error ? error.message : String(error);
+      this.currentItem = null;
       this.logger.error({ err: error, path: library.path }, 'library root unreadable');
-      this.db
-        .update(libraries)
-        .set({ lastScanAt: new Date().toISOString(), lastScanStatus: `error: ${message}` })
-        .where(eq(libraries.id, library.id))
-        .run();
+      this.note('warn', `Could not read ${library.name}: ${message}`);
+      this.markLibraryScan(library.id, `error: ${message}`);
+      this.advance({ failed: this.progress.failed + 1 });
       return;
     }
 
@@ -256,11 +424,7 @@ export class ScannerService {
       `Read ${library.name}: ${discovered.length} entries in ${Math.round((Date.now() - startedAt) / 1000)}s`,
     );
 
-    this.progress = {
-      ...this.progress,
-      phase: 'indexing',
-      total: this.progress.total + discovered.length,
-    };
+    this.beginPhase('indexing', { library: library.name, total: discovered.length });
 
     const existing = new Map(
       this.db
@@ -275,12 +439,9 @@ export class ScannerService {
 
     let sinceYield = 0;
     for (const item of discovered) {
+      this.checkpoint();
       seen.add(item.relPath);
-      this.progress = {
-        ...this.progress,
-        processed: this.progress.processed + 1,
-        currentItem: item.rawName,
-      };
+      this.advance({ processed: this.progress.processed + 1, currentItem: item.rawName });
 
       // SQLite is synchronous here, so without this the whole library is one
       // unbroken block of work and the server answers nothing until it ends.
@@ -296,61 +457,15 @@ export class ScannerService {
         continue;
       }
 
-      const current = existing.get(item.relPath);
-      if (current) {
-        const unchanged =
-          !force &&
-          current.sizeBytes === item.sizeBytes &&
-          current.fileCount === item.files.length &&
-          current.contentMtime === item.contentMtime &&
-          current.missingAt === null;
-
-        if (unchanged) continue;
-
-        this.db
-          .update(games)
-          .set({
-            sizeBytes: item.sizeBytes,
-            fileCount: item.files.length,
-            contentMtime: item.contentMtime,
-            scannedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            missingAt: null,
-          })
-          .where(eq(games.id, current.id))
-          .run();
-
-        this.replaceFiles(current.id, item.files);
-        this.progress = { ...this.progress, updated: this.progress.updated + 1 };
-        continue;
+      try {
+        this.reconcile(library, item, existing.get(item.relPath), force);
+      } catch (error) {
+        // One unwritable row is not a reason to abandon the other four
+        // thousand; it is a reason to say which one and carry on.
+        const message = error instanceof Error ? error.message : String(error);
+        this.note('warn', `Could not index ${item.rawName}: ${message}`);
+        this.advance({ failed: this.progress.failed + 1 });
       }
-
-      const title = parseTitle(item.rawName, item.kind === 'archive');
-      const id = newId('gam');
-      const now = new Date().toISOString();
-
-      this.db
-        .insert(games)
-        .values({
-          id,
-          libraryId: library.id,
-          relPath: item.relPath,
-          kind: item.kind,
-          title,
-          sortTitle: toSortTitle(title),
-          searchTitle: toSearchTitle(title),
-          sizeBytes: item.sizeBytes,
-          fileCount: item.files.length,
-          contentMtime: item.contentMtime,
-          matchStatus: 'unmatched',
-          addedAt: now,
-          updatedAt: now,
-          scannedAt: now,
-        })
-        .run();
-
-      this.replaceFiles(id, item.files);
-      this.progress = { ...this.progress, added: this.progress.added + 1 };
     }
 
     // Anything previously known but absent now is flagged rather than deleted,
@@ -370,18 +485,82 @@ export class ScannerService {
           )
           .run();
       }
-      this.progress = { ...this.progress, removed: this.progress.removed + vanished.length };
+      this.advance({ removed: this.progress.removed + vanished.length });
       this.note('info', `${vanished.length} entries in ${library.name} are no longer on disk`);
     }
 
+    this.markLibraryScan(library.id, `ok: ${discovered.length} entries`);
+  }
+
+  private markLibraryScan(libraryId: string, status: string): void {
     this.db
       .update(libraries)
-      .set({
-        lastScanAt: new Date().toISOString(),
-        lastScanStatus: `ok: ${discovered.length} entries`,
-      })
-      .where(eq(libraries.id, library.id))
+      .set({ lastScanAt: new Date().toISOString(), lastScanStatus: status })
+      .where(eq(libraries.id, libraryId))
       .run();
+  }
+
+  /** Insert, update or leave alone one discovered entry. */
+  private reconcile(
+    library: Library,
+    item: DiscoveredGame,
+    current: Game | undefined,
+    force: boolean,
+  ): void {
+    if (current) {
+      const unchanged =
+        !force &&
+        current.sizeBytes === item.sizeBytes &&
+        current.fileCount === item.files.length &&
+        current.contentMtime === item.contentMtime &&
+        current.missingAt === null;
+
+      if (unchanged) return;
+
+      this.db
+        .update(games)
+        .set({
+          sizeBytes: item.sizeBytes,
+          fileCount: item.files.length,
+          contentMtime: item.contentMtime,
+          scannedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          missingAt: null,
+        })
+        .where(eq(games.id, current.id))
+        .run();
+
+      this.replaceFiles(current.id, item.files);
+      this.advance({ updated: this.progress.updated + 1 });
+      return;
+    }
+
+    const title = parseTitle(item.rawName, item.kind === 'archive');
+    const id = newId('gam');
+    const now = new Date().toISOString();
+
+    this.db
+      .insert(games)
+      .values({
+        id,
+        libraryId: library.id,
+        relPath: item.relPath,
+        kind: item.kind,
+        title,
+        sortTitle: toSortTitle(title),
+        searchTitle: toSearchTitle(title),
+        sizeBytes: item.sizeBytes,
+        fileCount: item.files.length,
+        contentMtime: item.contentMtime,
+        matchStatus: 'unmatched',
+        addedAt: now,
+        updatedAt: now,
+        scannedAt: now,
+      })
+      .run();
+
+    this.replaceFiles(id, item.files);
+    this.advance({ added: this.progress.added + 1 });
   }
 
   private replaceFiles(gameId: string, files: DiscoveredFile[]): void {
@@ -404,14 +583,32 @@ export class ScannerService {
     });
   }
 
-  /** Enumerate library entries: top-level directories and top-level archives. */
+  /**
+   * Enumerate library entries: top-level directories and top-level archives.
+   *
+   * Reports as it goes rather than only at the end. The count it publishes is
+   * "entries found so far" — the walk genuinely does not know the total until
+   * it finishes — but a number that climbs is the whole difference between a
+   * run somebody can watch and one they assume has died.
+   */
   private async discover(root: string): Promise<DiscoveredGame[]> {
     const entries = await readdir(root, { withFileTypes: true });
     const results: DiscoveredGame[] = [];
+    const candidates = entries.filter((entry) => !isIgnored(entry.name));
 
-    for (const entry of entries) {
-      if (isIgnored(entry.name)) continue;
+    // Now that the top level is known, the phase has a real denominator: it is
+    // the folders to inspect, not the games that will come out of them.
+    this.advance({ total: candidates.length });
+
+    for (const entry of candidates) {
+      this.checkpoint();
       const absolute = path.join(root, entry.name);
+      this.advance({ processed: this.progress.processed + 1, currentItem: entry.name });
+
+      if (this.takeSkip()) {
+        this.note('warn', `Skipped reading ${entry.name}`);
+        continue;
+      }
 
       try {
         if (entry.isDirectory()) {
@@ -443,19 +640,30 @@ export class ScannerService {
           });
         }
       } catch (error) {
+        if (error instanceof ScanCanceled) throw error;
         this.logger.warn({ err: error, entry: entry.name }, 'skipping unreadable library entry');
+        this.note('warn', `Skipping ${entry.name}: unreadable`);
+        this.advance({ failed: this.progress.failed + 1 });
       }
     }
 
     return results;
   }
 
-  /** Recursively list a folder game's files, guarding against symlink loops. */
+  /**
+   * Recursively list a folder game's files, guarding against symlink loops.
+   *
+   * Yields to the event loop periodically. A game with a hundred thousand small
+   * files is not unusual — an emulator set, an engine's asset tree — and
+   * without this the server stops answering for as long as one of them takes to
+   * read off a spinning disk.
+   */
   private async walkFolder(
     root: string,
     prefix: string,
     depth = 0,
     visited = new Set<string>(),
+    counter = { seen: 0 },
   ): Promise<DiscoveredFile[]> {
     if (depth > 12) return [];
 
@@ -472,6 +680,10 @@ export class ScannerService {
 
     for (const entry of entries) {
       if (isIgnored(entry.name)) continue;
+      if (++counter.seen % WALK_YIELD_EVERY === 0) {
+        this.checkpoint();
+        await yieldToLoop();
+      }
       const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
       const absolute = path.join(root, relPath);
 
@@ -484,7 +696,7 @@ export class ScannerService {
           if (visited.has(real)) continue;
           visited.add(real);
           if (info.isDirectory()) {
-            files.push(...(await this.walkFolder(root, relPath, depth + 1, visited)));
+            files.push(...(await this.walkFolder(root, relPath, depth + 1, visited, counter)));
           } else if (info.isFile()) {
             files.push({
               relPath: toPosixPath(relPath),
@@ -492,14 +704,15 @@ export class ScannerService {
               modifiedAt: info.mtime.toISOString(),
             });
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof ScanCanceled) throw error;
           // Broken link — nothing to index.
         }
         continue;
       }
 
       if (entry.isDirectory()) {
-        files.push(...(await this.walkFolder(root, relPath, depth + 1, visited)));
+        files.push(...(await this.walkFolder(root, relPath, depth + 1, visited, counter)));
       } else if (entry.isFile()) {
         try {
           const info = await stat(absolute);
@@ -529,38 +742,54 @@ export class ScannerService {
    * reads `matching` as a run in flight, so the count sat there and every scan
    * button stayed disabled until the server was restarted.
    */
-  matchPending(limit = 500): Promise<void> {
+  matchPending(limit = MATCH_BATCH): Promise<void> {
     if (this.running) return this.running;
 
     this.skipRequested = false;
+    this.cancelRequested = false;
     this.progress = {
       ...IDLE_PROGRESS,
       state: 'matching',
       phase: 'matching',
       startedAt: new Date().toISOString(),
+      heartbeatAt: new Date().toISOString(),
     };
 
     this.running = this.runMatchPending(limit)
       .then(() => {
-        this.progress = {
-          ...this.progress,
+        this.advance({
           state: 'idle',
           phase: null,
           currentItem: null,
+          canceling: false,
           finishedAt: new Date().toISOString(),
-        };
+        });
       })
       .catch((error: unknown) => {
+        if (error instanceof ScanCanceled) {
+          this.note('warn', 'Metadata enrichment stopped');
+          this.advance({
+            state: 'canceled',
+            phase: null,
+            currentItem: null,
+            canceling: false,
+            finishedAt: new Date().toISOString(),
+          });
+          return;
+        }
         this.logger.error({ err: error }, 'metadata enrichment failed');
-        this.progress = {
-          ...this.progress,
+        this.advance({
           state: 'error',
+          canceling: false,
           error: error instanceof Error ? error.message : String(error),
           finishedAt: new Date().toISOString(),
-        };
+        });
       })
       .finally(() => {
         this.running = null;
+        this.cancelRequested = false;
+        this.skipRequested = false;
+        this.currentItem = null;
       });
 
     return this.running;
@@ -573,80 +802,130 @@ export class ScannerService {
    * artwork comes from a different provider that may have been configured
    * later — or that was unreachable when the game was first scanned.
    *
+   * Claimed in batches and looped, because one pass with a fixed limit quietly
+   * left everything past that limit for the next time somebody pressed the
+   * button — on a first scan of a large archive, most of it.
+   *
    * Leaves the progress state on `matching`; whoever started the run decides
    * what it becomes next.
    */
-  private async runMatchPending(limit = 500): Promise<void> {
+  private async runMatchPending(batchSize = MATCH_BATCH): Promise<void> {
     if (!this.metadata.hasIgdb && !this.metadata.hasSteamGridDb) {
-      this.logger.info({}, 'no metadata providers configured — skipping enrichment');
+      this.note('info', 'No metadata providers configured — skipping enrichment');
       return;
     }
 
-    const pending = this.db
-      .select()
-      .from(games)
-      .where(
-        and(
-          isNull(games.missingAt),
-          // Enrichment is a first-time job. Once a provider has written to a
-          // row it is left alone, so a title corrected by hand or artwork
-          // chosen deliberately is not undone by the next scan.
-          isNull(games.metadataLockedAt),
-          or(eq(games.matchStatus, 'unmatched'), isNull(games.coverImageId)),
-        ),
-      )
-      .limit(limit)
-      .all();
-
-    if (pending.length === 0) {
+    // Counted up front so the progress bar means something across the whole
+    // pass rather than restarting at zero on every batch.
+    const outstanding = this.countPending();
+    if (outstanding === 0) {
       this.note('info', 'No games are waiting on metadata');
       return;
     }
 
-    this.note('info', `Fetching metadata for ${pending.length} games`);
+    this.note('info', `Fetching metadata for ${outstanding} games`);
+    this.beginPhase('matching', { state: 'matching', library: null, total: outstanding });
 
-    this.progress = {
-      ...this.progress,
-      state: 'matching',
-      phase: 'matching',
-      currentItem: null,
-      processed: 0,
-      total: pending.length,
-    };
+    // Rows that came back with nothing are held aside so the next batch does
+    // not re-claim them: the query selects "still missing metadata", which a
+    // title the provider has never heard of matches for ever.
+    const exhausted = new Set<string>();
 
-    for (const game of pending) {
-      this.progress = {
-        ...this.progress,
-        processed: this.progress.processed + 1,
-        currentItem: game.title,
-      };
+    for (let pass = 0; pass < MATCH_MAX_BATCHES; pass += 1) {
+      this.checkpoint();
+      const pending = this.selectPending(batchSize + exhausted.size).filter(
+        (game) => !exhausted.has(game.id),
+      );
+      if (pending.length === 0) break;
 
-      // A skip asked for while the previous title was in flight applies here.
-      if (this.takeSkip()) {
-        this.note('warn', `Skipped metadata for ${game.title}`);
-        continue;
-      }
+      for (const game of pending.slice(0, batchSize)) {
+        this.checkpoint();
+        this.advance({ processed: this.progress.processed + 1, currentItem: game.title });
 
-      const controller = new AbortController();
-      this.currentItem = controller;
-      try {
-        await this.metadata.enrich(game, controller.signal);
-      } catch (error) {
-        // An abort here is the operator pressing skip, not a failure.
+        // A skip asked for while the previous title was in flight applies here.
         if (this.takeSkip()) {
           this.note('warn', `Skipped metadata for ${game.title}`);
-        } else {
-          const message = error instanceof Error ? error.message : String(error);
-          this.note('warn', `Could not fetch metadata for ${game.title}: ${message}`);
+          exhausted.add(game.id);
+          continue;
         }
-      } finally {
-        this.currentItem = null;
-      }
 
-      // Providers are awaited above, so the loop already yields; this only
-      // matters for a run where every game is skipped outright.
-      await yieldToLoop();
+        const before = this.db.select().from(games).where(eq(games.id, game.id)).get();
+        const controller = new AbortController();
+        this.currentItem = controller;
+        try {
+          const result = await withDeadline(ITEM_DEADLINE_MS, controller, (signal) =>
+            this.metadata.enrich(game, signal),
+          );
+          if (result.timedOut) {
+            this.note(
+              'warn',
+              `Gave up on ${game.title} after ${Math.round(ITEM_DEADLINE_MS / 1000)}s`,
+            );
+            this.advance({ failed: this.progress.failed + 1 });
+          }
+        } catch (error) {
+          // An abort here is the operator pressing skip, not a failure.
+          if (this.takeSkip()) {
+            this.note('warn', `Skipped metadata for ${game.title}`);
+          } else if (this.cancelRequested) {
+            throw new ScanCanceled();
+          } else {
+            const message = error instanceof Error ? error.message : String(error);
+            this.note('warn', `Could not fetch metadata for ${game.title}: ${message}`);
+            this.advance({ failed: this.progress.failed + 1 });
+          }
+        } finally {
+          this.currentItem = null;
+        }
+
+        // Whether or not it worked, this title has had its turn. Without this
+        // the next batch re-selects it — a provider that does not know the
+        // game would otherwise be asked about it until the pass cap ran out.
+        const after = this.db.select().from(games).where(eq(games.id, game.id)).get();
+        if (!after || (before && after.updatedAt === before.updatedAt)) {
+          exhausted.add(game.id);
+        }
+
+        // Providers are awaited above, so the loop already yields; this only
+        // matters for a run where every game is skipped outright.
+        await yieldToLoop();
+      }
     }
+
+    const left = this.countPending();
+    if (left > 0) {
+      this.note(
+        'info',
+        `${left} games still have no metadata — the providers had nothing for them, ` +
+          'or they need matching by hand from the catalog',
+      );
+    }
+  }
+
+  /** The filter both the count and the batch query share. */
+  private pendingWhere() {
+    return and(
+      isNull(games.missingAt),
+      // Enrichment is a first-time job. Once a provider has written to a
+      // row it is left alone, so a title corrected by hand or artwork
+      // chosen deliberately is not undone by the next scan.
+      isNull(games.metadataLockedAt),
+      or(eq(games.matchStatus, 'unmatched'), isNull(games.coverImageId)),
+    );
+  }
+
+  private countPending(): number {
+    return (
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(games)
+        .where(this.pendingWhere())
+        .get()?.count ?? 0
+    );
+  }
+
+  private selectPending(limit: number): Game[] {
+    return this.db.select().from(games).where(this.pendingWhere()).limit(limit).all();
   }
 
   /**

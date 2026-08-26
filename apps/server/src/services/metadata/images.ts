@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../../db/index.js';
 import { images } from '../../db/schema.js';
 import { newId } from '../../lib/ids.js';
-import { DOWNLOAD_TIMEOUT_MS, HttpError, withRetry } from '../../lib/ratelimit.js';
+import { DOWNLOAD_TIMEOUT_MS, HttpError, requestSignal, withRetry } from '../../lib/ratelimit.js';
 
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
@@ -54,8 +54,14 @@ export class ImageCache {
   /**
    * Fetch and store an image, returning its id. Returns null instead of throwing
    * when the download fails — missing artwork must never fail a whole scan.
+   *
+   * The signal is what makes a scan's "skip" mean anything here. A matched game
+   * can carry fifty screenshots, each downloaded in turn with its own minute-long
+   * deadline and a retry behind it; with no way to interrupt that, one title
+   * could hold a scan for the better part of an hour and no button could stop it.
    */
-  async cache(url: string, kind: ImageKind): Promise<string | null> {
+  async cache(url: string, kind: ImageKind, signal?: AbortSignal): Promise<string | null> {
+    if (signal?.aborted) return null;
     const existing = this.findByUrl(url);
     if (existing) {
       // Trust the row only if the file is still on disk.
@@ -65,17 +71,17 @@ export class ImageCache {
     }
 
     try {
-      return await withRetry(() => this.download(url, kind), { attempts: 2 });
+      return await withRetry(() => this.download(url, kind, signal), { attempts: 2 });
     } catch (error) {
       this.logger.warn({ err: error, url }, 'failed to cache artwork');
       return null;
     }
   }
 
-  private async download(url: string, kind: ImageKind): Promise<string> {
+  private async download(url: string, kind: ImageKind, signal?: AbortSignal): Promise<string> {
     const response = await fetch(url, {
       headers: { Accept: 'image/*' },
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+      signal: requestSignal(DOWNLOAD_TIMEOUT_MS, signal),
     });
     if (!response.ok || !response.body) {
       throw new HttpError(response.status, `image download failed (${response.status})`);
@@ -132,10 +138,11 @@ export class ImageCache {
    * sequence: a metadata edit is rarely more than a handful of screenshots, and
    * hammering a provider in parallel is what gets an IP rate-limited.
    */
-  async cacheMany(urls: string[], kind: ImageKind): Promise<string[]> {
+  async cacheMany(urls: string[], kind: ImageKind, signal?: AbortSignal): Promise<string[]> {
     const ids: string[] = [];
     for (const url of urls) {
-      const id = await this.cache(url, kind);
+      if (signal?.aborted) break;
+      const id = await this.cache(url, kind, signal);
       if (id) ids.push(id);
     }
     return ids;

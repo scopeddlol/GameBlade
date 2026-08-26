@@ -782,4 +782,48 @@ export const migrations: Migration[] = [
       CREATE INDEX discord_reaction_roles_message_idx ON discord_reaction_roles(message_id);
     `,
   },
+  {
+    id: '0020_query_indexes',
+    sql: /* sql */ `
+      -- Indexes for the queries this server actually runs, rather than for the
+      -- columns that looked worth indexing when the tables were written.
+      --
+      -- Every shelf, every library page and every filter starts with
+      -- "missing_at IS NULL" and then sorts. A single-column index on
+      -- missing_at satisfies only the first half of that: SQLite finds the
+      -- live rows and then sorts them itself, which on a catalog of thousands
+      -- is a temporary B-tree built per request. Leading each of these with
+      -- missing_at means the index is already in the order the query wants,
+      -- so the sort disappears.
+      CREATE INDEX IF NOT EXISTS games_live_sort_title_idx ON games(missing_at, sort_title);
+      CREATE INDEX IF NOT EXISTS games_live_added_idx ON games(missing_at, added_at DESC);
+      CREATE INDEX IF NOT EXISTS games_live_rating_idx ON games(missing_at, rating DESC);
+      CREATE INDEX IF NOT EXISTS games_live_size_idx ON games(missing_at, size_bytes DESC);
+      CREATE INDEX IF NOT EXISTS games_live_released_idx ON games(missing_at, release_date DESC);
+
+      -- The enrichment queue's exact filter. Without it the pass that runs at
+      -- the end of every scan reads the whole catalog to find the handful of
+      -- rows still waiting on a provider.
+      CREATE INDEX IF NOT EXISTS games_pending_meta_idx
+        ON games(missing_at, metadata_locked_at, match_status);
+
+      -- Matching an imported achievement schema back to a game.
+      CREATE INDEX IF NOT EXISTS games_igdb_idx ON games(igdb_id);
+      CREATE INDEX IF NOT EXISTS games_steam_app_idx ON games(steam_app_id);
+
+      -- "How many people have this one?" reads by achievement, but the only
+      -- index on that table leads with the user, so the count scanned every
+      -- unlock on the server.
+      CREATE INDEX IF NOT EXISTS user_achievements_achievement_idx
+        ON user_achievements(achievement_id);
+
+      -- The most-played shelf groups playtime by game across every account;
+      -- the two existing indexes both lead with the user.
+      CREATE INDEX IF NOT EXISTS user_game_stats_game_idx ON user_game_stats(game_id);
+
+      -- Sweeping expired rows, which otherwise walks the whole table.
+      CREATE INDEX IF NOT EXISTS devices_last_seen_idx ON devices(last_seen_at);
+      CREATE INDEX IF NOT EXISTS save_versions_created_idx ON save_versions(created_at);
+    `,
+  },
 ];

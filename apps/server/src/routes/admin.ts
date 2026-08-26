@@ -14,6 +14,7 @@ import {
   defaultLandingBlocks,
   landingPageSchema,
   createLibrarySchema,
+  databaseMaintenanceSchema,
   featuredArtworkSchema,
   featuredSchema,
   MAX_INSTALLER_BYTES,
@@ -62,6 +63,7 @@ import {
   libraries,
   users,
 } from '../db/schema.js';
+import { maintain } from '../db/index.js';
 import { ApiError } from '../lib/errors.js';
 import { isLikelyGameExecutable, listZipExecutables, sortCandidates } from '../lib/executables.js';
 import { newId, newInviteCode } from '../lib/ids.js';
@@ -97,6 +99,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     discord,
     discordBot,
     media,
+    sqlite,
   } = app.gameblade;
 
   app.addHook('onRequest', async (request) => {
@@ -371,6 +374,41 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/admin/scan/progress', async () => scanner.getProgress());
 
+  // ---- Database ----
+
+  /**
+   * Statistics, a checkpoint and — only when asked — a full rewrite.
+   *
+   * The first two run hourly on their own; this is the button for after a
+   * large import, when waiting an hour for the planner to notice the catalog
+   * has quadrupled is exactly the wrong thing to do. `vacuum` is opt-in
+   * because it needs room for a second copy of the database on the same disk
+   * and holds a write lock throughout — on a spinning disk holding a large
+   * catalog that is minutes, not seconds, and it is the operator's call.
+   */
+  app.post('/admin/database/maintenance', async (request) => {
+    const input = databaseMaintenanceSchema.parse(request.body ?? {});
+    const started = Date.now();
+    const result = maintain(sqlite, { vacuum: input.vacuum });
+    return { ...result, tookMs: Date.now() - started };
+  });
+
+  /** What the database currently costs on disk, split by file. */
+  app.get('/admin/database', async () => {
+    const pageCount = Number(sqlite.pragma('page_count', { simple: true }) ?? 0);
+    const pageSize = Number(sqlite.pragma('page_size', { simple: true }) ?? 0);
+    const freePages = Number(sqlite.pragma('freelist_count', { simple: true }) ?? 0);
+
+    return {
+      sizeBytes: pageCount * pageSize,
+      pageSize,
+      // Space the file holds but is not using. A large share of it is what a
+      // VACUUM would give back, and the only honest reason to run one.
+      freeBytes: freePages * pageSize,
+      journalMode: String(sqlite.pragma('journal_mode', { simple: true }) ?? ''),
+    };
+  });
+
   /**
    * Move the running scan past whatever it is stuck on.
    *
@@ -385,6 +423,23 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       });
     }
     return { skipped: true };
+  });
+
+  /**
+   * Stop the whole run.
+   *
+   * Skip is the wrong tool when the problem is the run rather than one title
+   * in it — and until now restarting the container was the only other option.
+   * What has already been indexed stays indexed; a cancelled scan is a partial
+   * scan, and the next one picks up from there.
+   */
+  app.post('/admin/scan/cancel', async (_request, reply) => {
+    if (!scanner.cancel()) {
+      return reply.code(409).send({
+        error: { code: 'no_scan_running', message: 'No scan is running' },
+      });
+    }
+    return { canceling: true };
   });
 
   // ---- Removing catalog entries ----

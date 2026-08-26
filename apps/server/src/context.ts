@@ -39,6 +39,14 @@ import { BugService } from './services/bugs.js';
 export interface GamebladeContext {
   config: Config;
   db: Db;
+  /**
+   * The raw handle, for pragmas and maintenance the query builder cannot say.
+   *
+   * Everything that reads or writes rows goes through `db`; this is only for
+   * VACUUM, ANALYZE and checkpoints — statements that act on the file rather
+   * than on any table in it.
+   */
+  sqlite: Database.Database;
   auth: AuthService;
   settings: SettingsService;
   metadata: MetadataService;
@@ -157,6 +165,7 @@ export function createContext(
   return {
     config,
     db,
+    sqlite,
     auth,
     settings,
     metadata,

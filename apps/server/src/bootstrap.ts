@@ -2,6 +2,7 @@ import path from 'node:path';
 import { stat } from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
+import { maintain } from './db/index.js';
 import { libraries } from './db/schema.js';
 import { newId } from './lib/ids.js';
 
@@ -111,6 +112,7 @@ export function startSchedules(app: FastifyInstance): () => void {
     backups,
     saveManifest,
     discord,
+    sqlite,
   } = app.gameblade;
   const timers: NodeJS.Timeout[] = [];
 
@@ -224,6 +226,33 @@ export function startSchedules(app: FastifyInstance): () => void {
   }, 15 * 60_000);
   announceTimer.unref();
   timers.push(announceTimer);
+
+  /**
+   * Statistics and a WAL checkpoint, hourly.
+   *
+   * Both matter more here than they would on an SSD. SQLite plans from
+   * statistics it only gathers when asked, so a catalog that grew from fifty
+   * games to five thousand is still being planned as if it were small — and on
+   * a disk that charges milliseconds per seek, a plan that scans instead of
+   * seeking is the difference between a page load and a wait. The checkpoint
+   * folds the write-ahead log back into the database so reads stop having to
+   * consult both files.
+   *
+   * VACUUM is deliberately not part of this: it needs room for a second copy
+   * of the database and holds a write lock for as long as it takes, which is
+   * not something to do to somebody's server unasked. It is a button in the
+   * panel instead.
+   */
+  const maintenance = setInterval(() => {
+    try {
+      const result = maintain(sqlite);
+      app.log.debug({ walPages: result.walPages }, 'database maintenance');
+    } catch (error) {
+      app.log.warn({ err: error }, 'database maintenance failed');
+    }
+  }, 60 * 60_000);
+  maintenance.unref();
+  timers.push(maintenance);
 
   const cleanup = setInterval(() => {
     try {

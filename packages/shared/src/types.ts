@@ -163,20 +163,38 @@ export interface LibraryInfo {
 
 export interface ScanProgress {
   libraryId: string | null;
-  state: 'idle' | 'scanning' | 'matching' | 'error';
+  state: 'idle' | 'scanning' | 'matching' | 'error' | 'canceled';
   /**
    * What the run is doing right now, which `state` alone does not say.
    *
-   * `reading` is the walk of a library root, which reports no count because it
-   * does not know one yet — the phase that used to be indistinguishable from a
-   * stall.
+   * `reading` is the walk of a library root. It used to report no count at
+   * all — and, worse, left the previous library's finished tally on screen, so
+   * a run part-way through its second root read "25 / 25" for as long as the
+   * walk took. It now counts the entries it has found so far, which is a real
+   * number that moves.
    */
   phase: 'reading' | 'indexing' | 'matching' | null;
   /** Name of the library being worked on, for a run covering several. */
   library: string | null;
+  /** Which library of how many, so a multi-root run says where it is. */
+  libraryIndex: number;
+  libraryCount: number;
+  /**
+   * Progress within the current phase, reset whenever the phase or the library
+   * changes. Carrying one phase's totals into the next is what produced counts
+   * that were already complete before the work started.
+   */
   processed: number;
   total: number;
   currentItem: string | null;
+  /**
+   * When a counter last moved.
+   *
+   * A scan that is working and a scan that is wedged look identical from a
+   * progress readout alone. This is what lets the panel say "no progress for
+   * four minutes" instead of leaving somebody watching a spinner.
+   */
+  heartbeatAt: string | null;
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
@@ -187,6 +205,10 @@ export interface ScanProgress {
   log: ScanLogEntry[];
   /** How many items the operator has skipped in this run. */
   skipped: number;
+  /** How many items failed on their own — a provider error, an unreadable folder. */
+  failed: number;
+  /** True between asking to stop and the run actually stopping. */
+  canceling: boolean;
 }
 
 export interface ScanLogEntry {

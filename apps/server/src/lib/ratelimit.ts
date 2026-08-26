@@ -147,11 +147,14 @@ function isRetryable(error: unknown): boolean {
   if (error instanceof HttpError) {
     return error.status === 429 || error.status >= 500;
   }
-  // An abandoned request is worth one more go: the usual cause is a provider
-  // being briefly slow rather than the request being unanswerable.
-  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-    return true;
-  }
+  // A request the *caller* abandoned is not worth retrying, and retrying it was
+  // actively wrong: pressing skip during a scan aborts the in-flight request,
+  // which arrived here as an AbortError and was answered by two more attempts
+  // against the same already-aborted signal. Skip then took three rounds of
+  // backoff to visibly do anything. A deadline the request blew on its own
+  // still gets one more go, because that usually is just a slow provider.
+  if (error instanceof Error && error.name === 'TimeoutError') return true;
+  if (error instanceof Error && error.name === 'AbortError') return false;
   // Network-level failures (DNS, reset, timeout) are worth another try.
   return error instanceof TypeError || (error as { code?: string })?.code !== undefined;
 }
