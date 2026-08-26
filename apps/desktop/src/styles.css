@@ -1505,9 +1505,12 @@ textarea::placeholder {
   overflow-x: auto;
   padding-bottom: 2px;
 }
+/* Wider than they were: these are the previews somebody scans before deciding
+   which one to open, and at 160px a screenshot is a smudge. */
 .screenshot-thumb {
+  position: relative;
   flex-shrink: 0;
-  width: 160px;
+  width: 220px;
   aspect-ratio: 16 / 9;
   border: 0;
   border-radius: 8px;
@@ -1515,18 +1518,19 @@ textarea::placeholder {
   cursor: pointer;
   padding: 0;
   background: var(--ink-850);
+  transition:
+    transform var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
-.screenshot-thumb .artwork {
+.screenshot-thumb:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+.screenshot-thumb .artwork,
+.screenshot-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-.screenshot-lightbox {
-  border-radius: 10px;
-  overflow: hidden;
-}
-.screenshot-lightbox .artwork {
-  width: 100%;
   display: block;
 }
 
@@ -3901,4 +3905,343 @@ textarea::placeholder {
 .request-body-link:hover .request-title,
 .request-body-link:focus-visible .request-title {
   color: var(--accent);
+}
+
+/* --------------------------------------------------------- the media viewer */
+
+/* The whole viewport, because the point of opening a screenshot is to look at
+   it. This replaces a 440px dialog — the shell built for confirmation prompts
+   — which rendered a 1920×1080 capture at about a fifth of its size. */
+.media-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  background: rgb(0 0 0 / 0.92);
+  animation: backdrop-in var(--dur-fast) var(--ease);
+}
+.media-viewer:focus {
+  outline: none;
+}
+
+.media-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  color: var(--ink-200);
+  background: linear-gradient(rgb(0 0 0 / 0.55), transparent);
+}
+.media-viewer-title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 50vw;
+}
+
+.media-viewer-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 56px;
+}
+
+/* Fit inside the stage rather than at natural size: an image larger than the
+   window would otherwise open scrolled into one corner of itself. */
+.media-viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+}
+/* And the deliberate opposite, for reading small text in a screenshot. The
+   stage scrolls in both directions at this size. */
+.media-viewer-image.actual {
+  max-width: none;
+  max-height: none;
+}
+.media-viewer-stage:has(.media-viewer-image.actual) {
+  overflow: auto;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.media-viewer-video {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 4px;
+  background: #000;
+}
+
+/* 16:9, bounded by whichever of the two dimensions runs out first. A trailer
+   in a tall window should not be a letterboxed strip in the middle of it. */
+.media-viewer-frame {
+  width: min(100%, calc((100vh - 190px) * 16 / 9));
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: 4px;
+  background: #000;
+}
+
+.media-viewer-pending {
+  width: min(60vw, 900px);
+  aspect-ratio: 16 / 9;
+}
+.media-viewer-pending .skeleton {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+}
+
+.media-viewer-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 64px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 0.06);
+  color: var(--ink-100);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.media-viewer-nav:hover {
+  background: rgb(255 255 255 / 0.16);
+}
+.media-viewer-nav.prev {
+  left: 6px;
+}
+.media-viewer-nav.next {
+  right: 6px;
+}
+
+.media-viewer-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 12px 14px;
+  scrollbar-width: thin;
+}
+.media-viewer-thumb {
+  flex: 0 0 auto;
+  width: 108px;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--ink-850);
+  cursor: pointer;
+  opacity: 0.55;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.media-viewer-thumb:hover {
+  opacity: 0.85;
+}
+.media-viewer-thumb.active {
+  opacity: 1;
+  border-color: var(--accent);
+}
+.media-viewer-thumb img,
+.media-viewer-thumb .skeleton {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+@media (max-width: 720px) {
+  .media-viewer-stage {
+    padding: 0 44px;
+  }
+  .media-viewer-title {
+    max-width: 40vw;
+  }
+}
+
+/* An attachment in a post, as something you can open. Images become buttons;
+   a clip keeps its own controls and gets a corner button instead, so clicking
+   the video still does what clicking a video does. */
+.post-media-open {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.post-media-open img {
+  display: block;
+  width: 100%;
+}
+.post-clip {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.post-clip video {
+  display: block;
+  width: 100%;
+  background: #000;
+}
+.post-media-expand {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.6);
+  color: var(--ink-100);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.post-clip:hover .post-media-expand,
+.post-media-expand:focus-visible {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------ profile decoration */
+
+/* Which band of a tall picture survives the banner's wide crop. Falls back to
+   the centre, which is what every banner did before it could be framed. */
+.profile-banner .artwork,
+.settings-banner .artwork {
+  object-position: center var(--banner-position, 50%);
+}
+
+.profile-pronouns {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-400);
+  vertical-align: middle;
+}
+.profile-tagline {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--ink-200);
+}
+
+.profile-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.favorite-game {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  background: var(--ink-850);
+}
+.favorite-game-cover {
+  width: 40px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  object-fit: cover;
+}
+.favorite-game-title {
+  min-width: 0;
+  flex: 1;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.favorite-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.favorite-picker-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.favorite-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--ink-850);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.favorite-picker-option:hover {
+  border-color: var(--ink-700);
+}
+.favorite-picker-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-links-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+.profile-links-edit li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--ink-850);
+}
+.profile-links-edit li .muted {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-links-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: 6px;
+}
+
+/* Two settings fields side by side, for the ones that are a word each. */
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
 }

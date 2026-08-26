@@ -174,6 +174,26 @@ const hexColor = z
   .trim()
   .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex color such as #7c5cff');
 
+/** How many labelled links a profile may carry. */
+export const MAX_PROFILE_LINKS = 5;
+
+/**
+ * One link on a profile.
+ *
+ * The scheme is checked rather than trusted: this string ends up in an
+ * `href`, and `javascript:` there is a script somebody else wrote running on
+ * the page of whoever opened their profile.
+ */
+export const profileLinkSchema = z.object({
+  label: z.string().trim().min(1).max(24),
+  url: z
+    .string()
+    .trim()
+    .max(300)
+    .refine((value) => /^https?:\/\//i.test(value), 'A link has to start with http:// or https://'),
+});
+export type ProfileLinkInput = z.infer<typeof profileLinkSchema>;
+
 export const updateProfileSchema = z.object({
   displayName: z.string().trim().min(1).max(48).optional(),
   bio: z.string().trim().max(500).nullable().optional(),
@@ -183,6 +203,12 @@ export const updateProfileSchema = z.object({
   showActivity: z.boolean().optional(),
   avatarMediaId: z.string().trim().max(64).nullable().optional(),
   bannerMediaId: z.string().trim().max(64).nullable().optional(),
+  pronouns: z.string().trim().max(32).nullable().optional(),
+  tagline: z.string().trim().max(80).nullable().optional(),
+  /** Where the banner is cropped, as a percentage down the source image. */
+  bannerPosition: z.coerce.number().int().min(0).max(100).optional(),
+  links: z.array(profileLinkSchema).max(MAX_PROFILE_LINKS).nullable().optional(),
+  favoriteGameId: z.string().trim().max(64).nullable().optional(),
 });
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 

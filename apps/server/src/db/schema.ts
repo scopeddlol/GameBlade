@@ -324,6 +324,31 @@ export const userProfiles = sqliteTable(
     country: text('country'),
     avatarMediaId: text('avatar_media_id'),
     bannerMediaId: text('banner_media_id'),
+    /**
+     * How they would like to be referred to. Free text rather than a fixed
+     * list: no list is complete, and one that is not gets it wrong for
+     * exactly the people it matters most to.
+     */
+    pronouns: text('pronouns'),
+    /** One line, under the name. Not the bio — this is "what, right now". */
+    tagline: text('tagline'),
+    /**
+     * Where the banner is cropped, 0–100, as a CSS `object-position` share.
+     *
+     * A banner is a wide crop of a much taller image, and which band of it
+     * survives is the whole difference between a good one and a beheading.
+     */
+    bannerPosition: integer('banner_position').notNull().default(50),
+    /**
+     * Up to a handful of labelled links.
+     *
+     * JSON on the row rather than a table: they are read only as a set, never
+     * queried across, and a table would mean a join on every profile read for
+     * something with a hard cap of five.
+     */
+    links: text('links', { mode: 'json' }).$type<Array<{ label: string; url: string }>>(),
+    /** A game they want on their profile, whatever their playtime says. */
+    favoriteGameId: text('favorite_game_id').references(() => games.id, { onDelete: 'set null' }),
     visibility: text('visibility', { enum: ['public', 'friends', 'private'] })
       .notNull()
       .default('friends'),

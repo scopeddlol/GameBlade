@@ -418,10 +418,25 @@ export interface ProfileSummary {
   discordUsername?: string | null;
 }
 
+/** One labelled link on a profile. */
+export interface ProfileLink {
+  label: string;
+  url: string;
+}
+
 export interface ProfileDetail extends ProfileSummary {
   bio: string | null;
   bannerUrl: string | null;
   country: string | null;
+  /** How they would like to be referred to; free text, and often absent. */
+  pronouns: string | null;
+  /** One line under the name — "what, right now", as distinct from the bio. */
+  tagline: string | null;
+  /** Which band of the banner image survives its wide crop, 0-100. */
+  bannerPosition: number;
+  links: ProfileLink[];
+  /** A game they chose to show, whatever their playtime says. */
+  favoriteGame: { id: string; title: string; coverUrl: string | null } | null;
   visibility: Visibility;
   showActivity: boolean;
   createdAt: string;

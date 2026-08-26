@@ -30,7 +30,8 @@
         "script-src": "'self'",
         "connect-src": "'self' ipc: http://ipc.localhost",
         "img-src": "'self' data: blob: https: http:",
-        "media-src": "'self' blob: https: http:"
+        "media-src": "'self' blob: https: http:",
+        "frame-src": "https://www.youtube-nocookie.com https://www.youtube.com"
       }
     }
   },

@@ -826,4 +826,32 @@ export const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS save_versions_created_idx ON save_versions(created_at);
     `,
   },
+  {
+    id: '0021_profile_customisation',
+    sql: /* sql */ `
+      -- Room for a profile to be somebody's rather than a name and an avatar.
+      --
+      -- Pronouns are free text rather than an enum on purpose: no fixed list
+      -- is complete, and one that is not gets it wrong for exactly the people
+      -- it matters most to.
+      ALTER TABLE user_profiles ADD COLUMN pronouns TEXT;
+
+      -- One line under the name — "what, right now", as distinct from the bio.
+      ALTER TABLE user_profiles ADD COLUMN tagline TEXT;
+
+      -- Which band of a tall image survives the banner's wide crop, 0-100.
+      ALTER TABLE user_profiles ADD COLUMN banner_position INTEGER NOT NULL DEFAULT 50;
+
+      -- A handful of labelled links, as JSON. They are only ever read as a
+      -- set and never queried across, so a table would buy a join on every
+      -- profile read for something capped at five rows.
+      ALTER TABLE user_profiles ADD COLUMN links TEXT;
+
+      -- A game they want on their profile, whatever their playtime says.
+      -- Nullable and cleared rather than cascading: losing a game from the
+      -- catalog should not delete somebody's profile.
+      ALTER TABLE user_profiles ADD COLUMN favorite_game_id TEXT
+        REFERENCES games(id) ON DELETE SET NULL;
+    `,
+  },
 ];

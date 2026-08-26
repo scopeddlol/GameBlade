@@ -15,6 +15,7 @@ import clsx from 'clsx';
 import {
   Check,
   ImagePlus,
+  Maximize2,
   MessageSquare,
   Pencil,
   Search,
@@ -34,6 +35,7 @@ import {
   Modal,
   SectionHeader,
 } from '../components/ui.js';
+import { MediaViewer, type MediaItem } from '../components/MediaViewer.js';
 import { useArtwork } from '../hooks/useArtwork.js';
 import { formatRelative } from '../lib/format.js';
 import { errorMessage, ipc, queryString } from '../lib/ipc.js';
@@ -343,11 +345,7 @@ export function PostCard({
       {post.body ? <p className="post-body">{post.body}</p> : null}
 
       {post.media.length > 0 ? (
-        <div className={clsx('post-media', post.media.length > 1 && 'multi')}>
-          {post.media.map((media) => (
-            <Attachment key={media.id} media={media} />
-          ))}
-        </div>
+        <PostMedia media={post.media} author={post.author.displayName} />
       ) : null}
 
       {post.game ? <p className="post-game muted small">Playing {post.game.title}</p> : null}
@@ -490,14 +488,59 @@ function EditPostDialog({
  * cannot send the device token either — so both are fixed by resolving the URL
  * on the Rust side, where the server address and the token live.
  */
-function Attachment({ media }: { media: MediaInfo }) {
+function PostMedia({ media, author }: { media: MediaInfo[]; author: string }) {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+
+  const items: MediaItem[] = media.map((entry, index) => ({
+    kind: entry.kind === 'clip' ? 'video' : 'image',
+    path: entry.url,
+    thumbnailPath: entry.thumbnailUrl,
+    label: `${author} — ${entry.kind === 'clip' ? 'clip' : 'screenshot'} ${index + 1}`,
+  }));
+
+  return (
+    <>
+      <div className={clsx('post-media', media.length > 1 && 'multi')}>
+        {media.map((entry, index) => (
+          <Attachment key={entry.id} media={entry} onOpen={() => setOpenIndex(index)} />
+        ))}
+      </div>
+
+      {openIndex !== null ? (
+        <MediaViewer items={items} startIndex={openIndex} onClose={() => setOpenIndex(null)} />
+      ) : null}
+    </>
+  );
+}
+
+function Attachment({ media, onOpen }: { media: MediaInfo; onOpen: () => void }) {
   const url = useArtwork(media.url);
   if (!url) return <div className="post-media-pending" aria-hidden />;
 
-  return media.kind === 'clip' ? (
-    <video src={url} controls preload="metadata" />
-  ) : (
-    <img src={url} alt="" loading="lazy" />
+  // A clip plays where it sits, with the browser's own controls — scrubbing,
+  // volume, playback rate, picture-in-picture. The expand button is what takes
+  // it to the full viewer, so clicking the video itself still just plays it.
+  if (media.kind === 'clip') {
+    return (
+      <div className="post-clip">
+        <video src={url} controls preload="metadata" playsInline />
+        <button
+          type="button"
+          className="post-media-expand"
+          aria-label="Open this clip full screen"
+          title="Open full screen"
+          onClick={onOpen}
+        >
+          <Maximize2 size={14} aria-hidden />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button type="button" className="post-media-open" onClick={onOpen} aria-label="Open full size">
+      <img src={url} alt="" loading="lazy" />
+    </button>
   );
 }
 
