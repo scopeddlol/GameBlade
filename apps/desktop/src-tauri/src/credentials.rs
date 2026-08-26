@@ -12,6 +12,15 @@ pub struct StoredSession {
     pub token: String,
     pub username: String,
     pub role: String,
+    /// The account's own id, learned from the first successful session check.
+    ///
+    /// Kept so a restart with no server still knows *who* is signed in — the
+    /// client needs it to render its own profile, and asking for it is exactly
+    /// the thing that cannot be done offline. Defaulted rather than required,
+    /// so a credential saved before this field existed still loads instead of
+    /// silently signing somebody out.
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 /// The device token is a long-lived credential, so it goes in the OS credential

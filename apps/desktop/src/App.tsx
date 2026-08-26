@@ -41,6 +41,8 @@ import { TitleBar } from './components/TitleBar.js';
 import { GameDetailPanel } from './components/GameDetail.js';
 import { Avatar, Loading } from './components/ui.js';
 import { useAutoSync } from './hooks/useAutoSync.js';
+import { ConnectivityProvider, useConnectivity } from './hooks/useConnectivity.js';
+import { OfflineBanner } from './components/OfflineBanner.js';
 import { RealtimeProvider, useRealtime } from './hooks/useRealtime.js';
 import { SessionProvider, useSession } from './hooks/useSession.js';
 import { useTheme } from './hooks/useTheme.js';
@@ -126,9 +128,11 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <SessionProvider>
-        <RealtimeProvider>
-          <Shell />
-        </RealtimeProvider>
+        <ConnectivityProvider>
+          <RealtimeProvider>
+            <Shell />
+          </RealtimeProvider>
+        </ConnectivityProvider>
       </SessionProvider>
     </QueryClientProvider>
   );
@@ -334,6 +338,7 @@ function Shell() {
         </TitleBar>
 
         <UpdateBanner />
+        <OfflineBanner />
 
         <div className="scroll" ref={scrollRef}>
           {/* Keyed on the tab so React remounts the wrapper and the enter
@@ -501,6 +506,7 @@ function CustomButtons({ placement }: { placement: 'sidebar' | 'home' }) {
 
 function TopBar({ running, tab }: { running: RunningGame | null; tab: TabId }) {
   const { connected } = useRealtime();
+  const { online } = useConnectivity();
   const queryClient = useQueryClient();
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -554,10 +560,10 @@ function TopBar({ running, tab }: { running: RunningGame | null; tab: TabId }) {
       <span className="spacer" />
 
       <span
-        className={clsx('conn', connected ? 'ok' : 'off')}
-        title={connected ? 'Connected' : 'Reconnecting…'}
+        className={clsx('conn', connected && online ? 'ok' : 'off')}
+        title={!online ? 'The server is not reachable' : connected ? 'Connected' : 'Reconnecting…'}
       >
-        {connected ? <Wifi size={14} aria-hidden /> : <WifiOff size={14} aria-hidden />}
+        {connected && online ? <Wifi size={14} aria-hidden /> : <WifiOff size={14} aria-hidden />}
       </span>
 
       <div className="notif-wrap" ref={wrapRef}>

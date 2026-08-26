@@ -25,7 +25,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [session, setSessionState] = useState<SessionInfo | null | undefined>(undefined);
 
-  // Restore the saved device token, then confirm the server still accepts it.
+  /**
+   * Restore the saved device token, then confirm the server still accepts it.
+   *
+   * The confirmation can fail two ways and they are not the same thing. A
+   * revoked device is the server saying no, and belongs at the sign-in screen.
+   * An unreachable server is not saying anything — and treating that as a
+   * rejection is exactly why the whole client was unusable offline: the check
+   * failed, the app fell back to sign-in, and sign-in could not reach the
+   * server either. The Rust side now answers a network failure with the stored
+   * session rather than an error, so this only lands in the failure branch
+   * when the token is genuinely gone.
+   */
   useEffect(() => {
     let canceled = false;
 
@@ -40,7 +51,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         await ipc.verifySession();
         if (!canceled) setSessionState(restored);
       } catch {
-        // Token revoked or server unreachable — fall back to the sign-in screen.
         if (!canceled) setSessionState(null);
       }
     })();

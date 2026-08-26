@@ -143,8 +143,22 @@ export const ipc = {
   patch: <T>(path: string, body?: unknown) => invoke<T>('api_patch', { path, body }),
   del: <T>(path: string) => invoke<T>('api_delete', { path }),
 
-  /** Artwork paths need the device token appended before an <img> can load them. */
+  /**
+   * Turns a server-relative artwork path into one the webview can load.
+   *
+   * The result goes through the client's own image scheme rather than straight
+   * at the server, so artwork is on local disk after the first look — faster on
+   * every launch after that, and still there when the server is not.
+   */
   imageUrl: (path: string) => invoke<string>('image_url', { path }),
+
+  /* -------------------------------------------------------------- offline */
+
+  /** Whether the server answered the last time anything asked it. */
+  connectivity: () => invoke<{ online: boolean; cachedAtMs: number | null }>('connectivity'),
+
+  /** Asks the server whether it is back. The only deliberate probe there is. */
+  recheckConnection: () => invoke<boolean>('recheck_connection'),
 
   /** Reads one of a game's own files, for evaluating achievement rules. */
   readRuleFile: (gameId: string, template: string) =>

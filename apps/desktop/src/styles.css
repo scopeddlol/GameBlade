@@ -4245,3 +4245,31 @@ textarea::placeholder {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
 }
+
+/* ------------------------------------------------------------- offline */
+
+/* Says what still works, not only that something is wrong. The distinction
+   matters: the app used to be genuinely unusable without a server, and now it
+   is not, so the banner's job is to explain that rather than to apologise. */
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: color-mix(in srgb, var(--warning, #f6c344) 12%, var(--ink-900));
+  border-bottom: 1px solid color-mix(in srgb, var(--warning, #f6c344) 35%, transparent);
+  color: var(--ink-100);
+}
+.offline-banner > span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.offline-banner strong {
+  font-size: 13px;
+}
+.offline-banner .btn {
+  flex-shrink: 0;
+}

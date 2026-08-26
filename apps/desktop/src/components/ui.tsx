@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { AlertTriangle, CloudUpload, Loader2, Trophy } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useArtwork } from '../hooks/useArtwork.js';
 
 export function Spinner({ className }: { className?: string }) {
@@ -121,15 +121,31 @@ export function Artwork({
   fallbackText?: string;
 }) {
   const url = useArtwork(path);
+  // A URL that resolves and then fails to load is the offline case: the client
+  // knows the cover's address, has never cached the bytes, and the server is
+  // not there to supply them. Without this the grid fills with broken-image
+  // icons, which is a worse answer than the initials it already draws for a
+  // game that has no artwork at all.
+  const [broken, setBroken] = useState(false);
 
-  if (!url) {
+  useEffect(() => setBroken(false), [url]);
+
+  if (!url || broken) {
     return (
       <div className={clsx('artwork placeholder', className)} aria-label={alt} role="img">
         <span>{initials(fallbackText ?? alt)}</span>
       </div>
     );
   }
-  return <img src={url} alt={alt} className={clsx('artwork', className)} loading="lazy" />;
+  return (
+    <img
+      src={url}
+      alt={alt}
+      className={clsx('artwork', className)}
+      loading="lazy"
+      onError={() => setBroken(true)}
+    />
+  );
 }
 
 function initials(value: string): string {

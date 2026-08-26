@@ -4,6 +4,7 @@ mod download;
 mod error;
 mod install;
 mod launcher;
+mod offline;
 mod realtime;
 mod saves;
 mod settings;
@@ -19,8 +20,9 @@ use saves::{LocalSave, SaveRule};
 use serde::Serialize;
 use settings::Settings;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tokio::sync::RwLock;
 
 /// The only server this client will talk to.
@@ -48,6 +50,12 @@ struct AppState {
     installs: Arc<InstallManager>,
     launcher: Arc<Launcher>,
     realtime: RealtimeClient,
+    /// Last known state of the server, from whichever request spoke to it most
+    /// recently. Not a ping: the app finds out the same way the user does.
+    online: Arc<AtomicBool>,
+    /// The last answer to each GET, and the artwork, kept so the client is
+    /// still a client with the server switched off.
+    cache: Arc<offline::Cache>,
 }
 
 impl AppState {
@@ -59,6 +67,29 @@ impl AppState {
 
     async fn install_dir(&self) -> PathBuf {
         self.settings.read().await.install_dir.clone()
+    }
+
+    /// Records whether the server just answered, and says so once when it
+    /// changes.
+    ///
+    /// Emitted on the transition rather than per request: every page makes
+    /// several, and an event per response would either spam a banner into
+    /// existence or be ignored entirely.
+    fn set_online(&self, app: &tauri::AppHandle, online: bool) {
+        if self.online.swap(online, Ordering::SeqCst) != online {
+            let _ = app.emit(
+                if online {
+                    "net://online"
+                } else {
+                    "net://offline"
+                },
+                online,
+            );
+        }
+    }
+
+    fn is_online(&self) -> bool {
+        self.online.load(Ordering::SeqCst)
     }
 }
 
@@ -73,6 +104,32 @@ impl AppState {
 struct SessionInfo {
     username: String,
     role: String,
+}
+
+/// The scheme artwork is served over inside the app.
+///
+/// On Windows and Android the webview rewrites this to
+/// `http://gbimg.localhost/...`, which the page's `img-src http:` already
+/// allows; elsewhere it stays `gbimg://localhost/...`, which the CSP names.
+const IMAGE_SCHEME: &str = "gbimg";
+
+/// Guesses a content type from the first few bytes.
+///
+/// The alternative is a sidecar file per image recording what the server said,
+/// which is a second write and a second read for something four magic numbers
+/// answer. Anything unrecognised is served as a generic image and left to the
+/// webview, which sniffs too.
+fn sniff_image_type(bytes: &[u8]) -> &'static str {
+    match bytes {
+        [0xFF, 0xD8, 0xFF, ..] => "image/jpeg",
+        [0x89, b'P', b'N', b'G', ..] => "image/png",
+        [b'G', b'I', b'F', ..] => "image/gif",
+        _ if bytes.len() > 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" => {
+            "image/webp"
+        }
+        _ if bytes.len() > 12 && &bytes[4..12] == b"ftypavif" => "image/avif",
+        _ => "application/octet-stream",
+    }
 }
 
 /* ------------------------------------------------------------------ session */
@@ -101,8 +158,12 @@ async fn sign_in(
         token: token.clone(),
         username: user.username.clone(),
         role: user.role.clone(),
+        user_id: Some(user.id.clone()),
     };
 
+    // A different account than last time gets a clean slate: the cache holds
+    // the previous one's library, friends and artwork.
+    state.cache.clear();
     credentials::save(&stored)?;
     state.realtime.start(app, stored.server_url.clone(), token);
     *state.session.write().await = Some(stored);
@@ -117,6 +178,10 @@ async fn sign_out(state: State<'_, AppState>) -> AppResult<()> {
     state.realtime.stop();
     credentials::clear()?;
     *state.session.write().await = None;
+    // Everything the offline cache holds belongs to the account that just left:
+    // its library, its friends, its artwork. Whoever signs in next must not
+    // open onto it.
+    state.cache.clear();
     Ok(())
 }
 
@@ -126,6 +191,15 @@ async fn verify_session(app: tauri::AppHandle, state: State<'_, AppState>) -> Ap
     let client = state.client().await?;
     match client.session().await {
         Ok(user) => {
+            state.set_online(&app, true);
+            // The id is only ever handed out here, and it is what lets a signed
+            // -in session be restored offline next time.
+            if let Some(session) = state.session.write().await.as_mut() {
+                if session.user_id.as_deref() != Some(user.id.as_str()) {
+                    session.user_id = Some(user.id.clone());
+                    let _ = credentials::save(session);
+                }
+            }
             // A restored session has no socket yet, so opening it here is what
             // makes presence work after a restart rather than only after a login.
             if !state.realtime.is_running() {
@@ -140,12 +214,32 @@ async fn verify_session(app: tauri::AppHandle, state: State<'_, AppState>) -> Ap
             state.downloads.wake().await;
             Ok(user)
         }
+
+        // The server is not there. That is not a reason to sign anybody out —
+        // and treating it as one is what made the whole client unusable
+        // offline: the check failed, the app fell back to the sign-in screen,
+        // and the sign-in screen could not reach the server either. The stored
+        // session is still valid; it simply cannot be confirmed right now.
+        Err(AppError::Network(_)) => {
+            state.set_online(&app, false);
+            let session = state.session.read().await;
+            match session.as_ref() {
+                Some(stored) => Ok(UserInfo {
+                    id: stored.user_id.clone().unwrap_or_default(),
+                    username: stored.username.clone(),
+                    role: stored.role.clone(),
+                }),
+                None => Err(AppError::NotSignedIn),
+            }
+        }
+
         Err(err) => {
             // The token is gone or revoked, so drop it rather than retrying forever.
             if matches!(err, AppError::Server(_)) {
                 let _ = credentials::clear();
                 *state.session.write().await = None;
                 state.realtime.stop();
+                state.cache.clear();
             }
             Err(err)
         }
@@ -158,52 +252,143 @@ async fn verify_session(app: tauri::AppHandle, state: State<'_, AppState>) -> Ap
 /// mirroring every endpoint in Rust would only create somewhere for the two to
 /// disagree.
 #[tauri::command]
-async fn api_get(state: State<'_, AppState>, path: String) -> AppResult<serde_json::Value> {
-    state.client().await?.get_json(&path).await
+async fn api_get(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<serde_json::Value> {
+    let client = state.client().await?;
+    match client.get_json(&path).await {
+        Ok(value) => {
+            state.set_online(&app, true);
+            state.cache.put_json(&path, &value);
+            Ok(value)
+        }
+        // Only a *network* failure falls back. A 404 or a 403 is the server
+        // answering, and serving a cached page over the top of it would hide a
+        // permissions change or a deleted game behind stale data.
+        Err(AppError::Network(err)) => {
+            state.set_online(&app, false);
+            match state.cache.get_json(&path) {
+                Some(cached) => Ok(cached),
+                None => Err(AppError::Offline(err.to_string())),
+            }
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Whether the server answered last time anybody asked, and what is on disk.
+///
+/// The client does not poll for this. Connectivity is discovered the same way
+/// the user discovers it — by something failing — and a heartbeat would only
+/// add traffic to a server that is either there or is not.
+#[tauri::command]
+async fn connectivity(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    // "Home", because it is the first thing every session asks for and so the
+    // most reliable evidence that this client has ever spoken to the server.
+    let cached_at = state
+        .cache
+        .cached_at("/home")
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_millis() as u64);
+
+    Ok(serde_json::json!({
+        "online": state.is_online(),
+        "cachedAtMs": cached_at,
+    }))
+}
+
+/// Ask the server whether it is there, and update the banner either way.
+///
+/// The one deliberate probe, behind the "try again" button — an app that has
+/// decided it is offline has no other way back to online until the next thing
+/// somebody clicks fails.
+#[tauri::command]
+async fn recheck_connection(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<bool> {
+    let client = state.client().await?;
+    let reachable = client.session().await.is_ok();
+    state.set_online(&app, reachable);
+    Ok(reachable)
+}
+
+/// Turns a transport failure into something the UI can say out loud.
+///
+/// A write has nothing to fall back on — there is no cached answer to
+/// "post this" — so the only useful thing to do is name the reason. "GameBlade
+/// cannot reach the server" is actionable; a TLS handshake error is not.
+fn offline_if_unreachable(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    result: AppResult<serde_json::Value>,
+    what: &str,
+) -> AppResult<serde_json::Value> {
+    match result {
+        Ok(value) => {
+            state.set_online(app, true);
+            Ok(value)
+        }
+        Err(AppError::Network(_)) => {
+            state.set_online(app, false);
+            Err(AppError::RequiresConnection(what.to_string()))
+        }
+        Err(other) => Err(other),
+    }
 }
 
 #[tauri::command]
 async fn api_post(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
     body: Option<serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    state
+    let result = state
         .client()
         .await?
         .post_json(&path, &body.unwrap_or(serde_json::Value::Null))
-        .await
+        .await;
+    offline_if_unreachable(&app, &state, result, "That")
 }
 
 #[tauri::command]
 async fn api_put(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
     body: Option<serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    state
+    let result = state
         .client()
         .await?
         .put_json(&path, &body.unwrap_or(serde_json::Value::Null))
-        .await
+        .await;
+    offline_if_unreachable(&app, &state, result, "That")
 }
 
 #[tauri::command]
 async fn api_patch(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
     body: Option<serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    state
+    let result = state
         .client()
         .await?
         .patch_json(&path, &body.unwrap_or(serde_json::Value::Null))
-        .await
+        .await;
+    offline_if_unreachable(&app, &state, result, "That")
 }
 
 #[tauri::command]
-async fn api_delete(state: State<'_, AppState>, path: String) -> AppResult<serde_json::Value> {
-    state.client().await?.delete_json(&path).await
+async fn api_delete(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<serde_json::Value> {
+    let result = state.client().await?.delete_json(&path).await;
+    offline_if_unreachable(&app, &state, result, "That")
 }
 
 /// Artwork needs the device token, which an `<img>` tag cannot send, so the URL
@@ -217,13 +402,22 @@ async fn api_delete(state: State<'_, AppState>, path: String) -> AppResult<serde
 /// assumed.
 #[tauri::command]
 async fn image_url(state: State<'_, AppState>, path: String) -> AppResult<String> {
-    let session = state.session.read().await;
-    let session = session.as_ref().ok_or(AppError::NotSignedIn)?;
-    let separator = if path.contains('?') { '&' } else { '?' };
-    Ok(format!(
-        "{}{}{}token={}",
-        session.server_url, path, separator, session.token
-    ))
+    // Through this client's own scheme rather than straight at the server.
+    //
+    // Two things fall out of that. Artwork is on disk after the first look, so
+    // a library of four hundred covers opens from local files instead of four
+    // hundred round trips — and it still opens with the server switched off,
+    // which is most of what "the library must work offline" means. And the
+    // device token stops being pasted into every `src` attribute in the page.
+    let _ = state
+        .session
+        .read()
+        .await
+        .as_ref()
+        .ok_or(AppError::NotSignedIn)?;
+    // The server path is carried through verbatim, query string and all, so
+    // the handler has exactly what to ask the server for if it has to.
+    Ok(format!("{IMAGE_SCHEME}://localhost{path}"))
 }
 
 /// The version this client was built as, for comparing against the server's.
@@ -1020,6 +1214,84 @@ async fn file_sha256(path: &std::path::Path) -> AppResult<String> {
 
 /// Percent-encodes the few characters that would break a query string. These
 /// values are ISO timestamps and digests, so a full encoder would be overkill.
+/// Answers one artwork request: from disk if it is there, from the server if
+/// not, and with a 404 if neither can help.
+///
+/// Deliberately silent about failure. Artwork is decoration — a cover that
+/// cannot be fetched should leave the initials placeholder the UI already
+/// draws, not raise anything.
+async fn serve_image(
+    app: &tauri::AppHandle,
+    request: &tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let uri = request.uri();
+    let path = match uri.query() {
+        Some(query) => format!("{}?{}", uri.path(), query),
+        None => uri.path().to_string(),
+    };
+
+    let missing = || {
+        tauri::http::Response::builder()
+            .status(404)
+            .body(Vec::new())
+            .unwrap_or_default()
+    };
+
+    let Some(state) = app.try_state::<AppState>() else {
+        return missing();
+    };
+
+    let served = |bytes: Vec<u8>| {
+        let content_type = sniff_image_type(&bytes);
+        tauri::http::Response::builder()
+            .status(200)
+            .header("Content-Type", content_type)
+            // The bytes behind one of these ids never change — a new cover is
+            // a new id — so the webview can hold on to it for as long as it
+            // likes.
+            .header("Cache-Control", "public, max-age=31536000, immutable")
+            .body(bytes)
+            .unwrap_or_else(|_| missing())
+    };
+
+    if let Some(bytes) = state.cache.read_image(&path) {
+        return served(bytes);
+    }
+
+    let Ok(client) = state.client().await else {
+        return missing();
+    };
+    let Some(session) = state.session.read().await.clone() else {
+        return missing();
+    };
+
+    let separator = if path.contains('?') { '&' } else { '?' };
+    let url = format!(
+        "{}{path}{separator}token={}",
+        session.server_url, session.token
+    );
+
+    match client.http().get(url).send().await {
+        Ok(response) if response.status().is_success() => match response.bytes().await {
+            Ok(bytes) => {
+                state.set_online(app, true);
+                state.cache.put_image(&path, &bytes);
+                served(bytes.to_vec())
+            }
+            Err(_) => missing(),
+        },
+        Ok(_) => missing(),
+        Err(err) => {
+            // A transport failure here is the same signal as one from any other
+            // request, and artwork is usually the first thing to notice.
+            if err.is_connect() || err.is_timeout() {
+                state.set_online(app, false);
+            }
+            missing()
+        }
+    }
+}
+
 fn urlencode(value: &str) -> String {
     value
         .chars()
@@ -1056,6 +1328,16 @@ fn sanitise_folder_name(title: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Artwork comes through here rather than straight from the server, so
+        // it is on local disk after the first look — which is both faster on
+        // every subsequent launch and the reason a library still renders with
+        // the server switched off.
+        .register_asynchronous_uri_scheme_protocol(IMAGE_SCHEME, |context, request, responder| {
+            let app = context.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                responder.respond(serve_image(&app, &request).await);
+            });
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -1108,6 +1390,8 @@ pub fn run() {
             });
             downloads.start_scheduler(app.handle().clone());
 
+            let cache = Arc::new(offline::Cache::new(&app_data));
+
             app.manage(AppState {
                 session,
                 settings: RwLock::new(loaded),
@@ -1116,6 +1400,11 @@ pub fn run() {
                 downloads,
                 launcher: Arc::new(Launcher::default()),
                 realtime: RealtimeClient::default(),
+                // Optimistic until something says otherwise: assuming the
+                // server is down before anybody has tried would put an offline
+                // banner over a perfectly healthy first launch.
+                online: Arc::new(AtomicBool::new(true)),
+                cache,
             });
             Ok(())
         })
@@ -1125,6 +1414,8 @@ pub fn run() {
             sign_out,
             verify_session,
             api_get,
+            connectivity,
+            recheck_connection,
             api_post,
             api_put,
             api_patch,
