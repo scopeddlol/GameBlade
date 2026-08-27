@@ -884,6 +884,121 @@ cp .env.example .env</code></pre>
           </p>
         </section>
 
+        <section id="mesh">
+          <h2>The mesh: downloading without the tunnel</h2>
+          <p>
+            Every byte of every download crosses the proxy, because the proxy is the only thing on
+            the public internet. On a VPS with modest bandwidth that is the ceiling on how fast
+            anyone can install anything. The mesh removes it: a client connects straight to a
+            machine holding the files, and the server keeps doing the part that is actually small —
+            saying who is out there and granting permission.
+          </p>
+
+          <div class="note">
+            <p>
+              <strong>It is not a VPN, and nothing is installed.</strong> A VPN would mean a virtual
+              network adapter, which on Windows means a driver, an elevation prompt, antivirus
+              attention and a firewall dialog — all so the operating system can route packets that
+              only ever reach one process. The client speaks QUIC directly instead, terminated
+              inside the app. There is nothing for a player to install, approve or notice.
+            </p>
+          </div>
+
+          <h3>What a node is</h3>
+          <p>
+            A node is a machine that holds game files and serves them to clients. The machine
+            running the server is usually the first one. A node is known by its Ed25519 key rather
+            than its address, because a machine on a home connection gets a new address whenever
+            the lease renews.
+          </p>
+          <p>
+            Nothing a node says is trusted. Its claim to hold a game is a hint about who to ask,
+            not a promise; every chunk is verified against a hash this server computed, on the node
+            before it sends and on the client before it is used. A node can be stale, wrong,
+            offline or hostile and the worst outcome is a slower download. That is what makes
+            enrolling one an operational decision rather than a security one.
+          </p>
+
+          <h3>Turning it on</h3>
+          <ol>
+            <li>
+              <strong>Hash the games.</strong> A game is only eligible once every one of its files
+              has per-chunk hashes: without them a client cannot check a piece that came from
+              somewhere else, so it will not accept one. Use
+              <strong>Admin → Catalog → Games → Compute chunk hashes</strong>. It reads every byte
+              once and produces the whole-file checksums at the same time.
+            </li>
+            <li>
+              <strong>Enrol the node.</strong> <strong>Admin → Settings → Nodes</strong> generates a
+              one-time code. It is shown once and stored only as a hash; it expires in 24 hours and
+              is spent the moment a node registers with it.
+            </li>
+            <li>
+              <strong>Run the agent</strong> on the machine holding the files, and give it the code.
+              It registers, receives its own credential, and starts announcing what it holds.
+            </li>
+            <li>
+              <strong>Switch the mesh on</strong> in <strong>Admin → Settings → Bandwidth</strong>.
+              Until this is on, nodes may register and sync but no client is ever pointed at one —
+              so a node can be enrolled and left to fill up first, and turning it on is a switch
+              rather than a migration.
+            </li>
+          </ol>
+
+          <div class="warn">
+            <p>
+              <strong>Forward one UDP port to the node.</strong> This is the single cheapest thing
+              you can do for reliability. Two machines both behind NAT have to punch a hole through
+              it, which usually works and sometimes cannot — a symmetric NAT or a carrier-grade one
+              defeats it. If <em>one</em> side is directly reachable, the problem essentially
+              disappears regardless of what the other side is behind. Without a forwarded port,
+              expect some players to quietly fall back to downloading through the proxy.
+            </p>
+          </div>
+
+          <h3>What the server still does</h3>
+          <p>
+            Coordination is kilobytes — keys, addresses, counters — which is why it fits on a small
+            VPS. No game data is ever stored here for the mesh.
+          </p>
+          <p>
+            Transfer allowances survive the change. A client is issued a signed grant carrying a
+            byte ceiling, the node enforces it locally and reports back what it served, and those
+            bytes count against the same monthly quota as anything downloaded from this server. A
+            node that stops reporting is a node whose grants stop being renewed.
+          </p>
+          <p>
+            A mirror announces the fingerprint of the copy it verified. When a game changes on the
+            origin the fingerprint changes with it, and mirrors still announcing the old one stop
+            being offered — no diffing, and no relying on a mirror to notice.
+          </p>
+
+          <h3>Letting players share</h3>
+          <p>
+            <strong>Let players share what they have downloaded</strong> is a separate switch, also
+            off by default, and deliberately not implied by the one above. The first shares machines
+            you run; this one turns players into distributors of each other's downloads, using their
+            upload bandwidth. Each player must also opt in on their own client, and neither switch
+            turns the other on.
+          </p>
+          <p>
+            A sharing client serves only games it has fully installed, only to accounts holding a
+            valid grant, and never to its owner. Every piece is re-checked against the manifest
+            before it is sent, so an edited or modded install simply stops being a source. Turning
+            the server switch off stops every sharing client within one heartbeat, without having to
+            reach any of them.
+          </p>
+
+          <h3>When it does not apply</h3>
+          <p>
+            All of these fall back to downloading from this server, and none of them are errors: the
+            mesh is switched off, the client is an older build, the game has no chunk hashes, no node
+            holds a current copy, or nothing would connect. The origin is always in the list of
+            sources and can never be removed from it, which is what keeps the mesh an optimisation
+            rather than something to depend on.
+          </p>
+        </section>
+
         <section id="providers">
           <h2>Metadata providers</h2>
           <p>
