@@ -16,6 +16,7 @@
 //!   resuming after the server-side file changed produces an honest restart
 //!   rather than a corrupt hybrid stitched from two versions.
 
+use super::mesh::MeshContext;
 use super::{part_path_for, sanitise_relative_path, urlencode, DownloadState, DownloadStatus};
 use crate::api::{ApiClient, ChunkRef, DownloadManifest, ManifestFile};
 use crate::error::{AppError, AppResult};
@@ -336,6 +337,19 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
     let downloaded = Arc::new(AtomicU64::new(0));
     let semaphore = Arc::new(Semaphore::new(job.connections));
 
+    // Set up once per game, not per file: the handshakes are worth paying for
+    // once and pointless to repeat for every one of a folder game's files.
+    //
+    // `None` covers every reason not to use nodes — mesh off, older server, no
+    // chunk hashes, nobody holding this game, nothing reachable — and none of
+    // them are errors. The download proceeds over HTTP exactly as before.
+    let mesh = MeshContext::prepare(
+        &job.client,
+        &job.game_id,
+        manifest.chunk_bytes == Some(CHUNK_BYTES),
+    )
+    .await;
+
     // Drive the progress event from one place so the UI gets a steady rate
     // reading rather than a spike per chunk.
     let reporter = {
@@ -394,6 +408,7 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
             &tokens,
             &job.game_id,
             file,
+            mesh.as_ref(),
             &job.root,
             &job.state,
             &job.cancel_flag,
@@ -430,6 +445,19 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
         guard.current_file = None;
     }
     reporter.abort();
+
+    if let Some(mesh) = &mesh {
+        // Diagnostics only, and deliberately not shown to the player. Where the
+        // bytes came from is not something anyone downloading a game should
+        // have to think about — the whole point was that this is invisible —
+        // but it is the first thing worth knowing when one is slow.
+        eprintln!(
+            "mesh: {} served chunks of {}",
+            mesh.describe().await,
+            job.game_id
+        );
+        mesh.close().await;
+    }
 
     outcome
 }
@@ -481,6 +509,7 @@ async fn download_file(
     tokens: &Arc<Mutex<Tokens>>,
     game_id: &str,
     file: &ManifestFile,
+    mesh: Option<&Arc<MeshContext>>,
     root: &Path,
     state: &Arc<Mutex<DownloadState>>,
     cancel: &Arc<AtomicBool>,
@@ -565,6 +594,7 @@ async fn download_file(
             semaphore,
             connections,
             chunk_hashes.as_deref(),
+            mesh,
         )
         .await;
 
@@ -652,6 +682,7 @@ async fn fetch_all_chunks(
     semaphore: &Arc<Semaphore>,
     connections: usize,
     chunk_hashes: Option<&[ChunkRef]>,
+    mesh: Option<&Arc<MeshContext>>,
 ) -> Result<(), Stop> {
     if file.size_bytes == 0 {
         return Ok(());
@@ -711,6 +742,12 @@ async fn fetch_all_chunks(
                     .filter(|chunk| chunk.index == *index)
                     .map(|chunk| chunk.sha256.clone());
 
+                // A node is only ever offered for a chunk whose hash is
+                // known: without one there is nothing to check the bytes
+                // against, and unverifiable bytes from a third party are worse
+                // than a slower download.
+                let chunk_mesh = expected_hash.as_ref().and(mesh).map(Arc::clone);
+
                 tasks.push(tauri::async_runtime::spawn(download_chunk(
                     client.clone(),
                     tokens.clone(),
@@ -726,6 +763,11 @@ async fn fetch_all_chunks(
                     cancel.clone(),
                     abandon.clone(),
                     expected_hash,
+                    ChunkMesh {
+                        context: chunk_mesh,
+                        game_id: game_id.to_string(),
+                        file_id: file.id.clone(),
+                    },
                     permit,
                 )));
             }
@@ -768,6 +810,65 @@ async fn fetch_all_chunks(
     }
 }
 
+/// What one chunk task knows about the mesh.
+///
+/// Bundled so the worker's already-long argument list does not grow three more
+/// entries, and so "there is no mesh for this chunk" is one `None` rather than
+/// a combination of them that could be got wrong.
+pub(crate) struct ChunkMesh {
+    pub context: Option<Arc<MeshContext>>,
+    pub game_id: String,
+    pub file_id: String,
+}
+
+impl ChunkMesh {
+    /// Verified bytes from whichever node the pool picked, or nothing.
+    ///
+    /// Nothing means "use HTTP for this chunk" and never means "give up". The
+    /// pool has already recorded why, and the origin cannot be retired, so a
+    /// caller that keeps falling through here still finishes the download.
+    async fn fetch(&self, index: u64, sha256: Option<&str>, length: u64) -> Option<Vec<u8>> {
+        let context = self.context.as_ref()?;
+        let sha256 = sha256?;
+
+        // Cheap and worth re-checking every chunk: nodes are written off as a
+        // download proceeds, and once the last one is gone this stops paying
+        // for a pool lookup on every chunk of a 40 GB transfer.
+        if !context.has_live_node().await {
+            return None;
+        }
+
+        let source = context.pick().await;
+        if source == "origin" {
+            return None;
+        }
+
+        context
+            .fetch_chunk(&source, &self.game_id, &self.file_id, index, sha256, length)
+            .await
+    }
+}
+
+/// Write one chunk's bytes at its own offset.
+///
+/// Separate from the streaming path because bytes from a node arrive complete
+/// and already verified, so there is nothing to stream and nothing to check.
+async fn write_chunk_at(dest: &Path, start: u64, bytes: &[u8]) -> AppResult<()> {
+    let mut target = tokio::fs::OpenOptions::new()
+        .write(true)
+        .open(dest)
+        .await
+        .map_err(AppError::Io)?;
+
+    target
+        .seek(std::io::SeekFrom::Start(start))
+        .await
+        .map_err(AppError::Io)?;
+    target.write_all(bytes).await.map_err(AppError::Io)?;
+    target.flush().await.map_err(AppError::Io)?;
+    Ok(())
+}
+
 /// Downloads one chunk, retrying transient failures indefinitely.
 ///
 /// "Indefinitely" is the point: every previous failure mode here was a
@@ -790,6 +891,7 @@ async fn download_chunk(
     cancel: Arc<AtomicBool>,
     abandon: Arc<AtomicBool>,
     expected_hash: Option<String>,
+    mesh: ChunkMesh,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<(), Stop> {
     let expected = end - start + 1;
@@ -819,6 +921,28 @@ async fn download_chunk(
             return Err(Stop::Stopped);
         }
         received = 0;
+
+        // A node first, when one is offering and has not been written off.
+        //
+        // This returns verified bytes or nothing at all: `fetch_chunk` has no
+        // failure the caller must handle, because a download must never fail
+        // on account of a node. Falling through to the HTTP path below is the
+        // whole of the error handling.
+        if let Some(bytes) = mesh.fetch(index, expected_hash.as_deref(), expected).await {
+            match write_chunk_at(&dest, start, &bytes).await {
+                Ok(()) => {
+                    downloaded.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                    let mut guard = journal.lock().await;
+                    guard.mark_done(index);
+                    return save_journal(&journal_path, &guard)
+                        .await
+                        .map_err(Stop::Fatal);
+                }
+                // A disk that will not take the bytes is fatal wherever they
+                // came from; the HTTP path would fail the same way.
+                Err(err) => return Err(Stop::Fatal(err)),
+            }
+        }
 
         // Fresh token, refreshed proactively near expiry so it never lapses
         // underneath an in-flight request.

@@ -7,6 +7,7 @@
 //! every pending install with it.
 
 pub(crate) mod engine;
+pub(crate) mod mesh;
 
 use crate::api::{ApiClient, DownloadManifest};
 use crate::error::{AppError, AppResult};

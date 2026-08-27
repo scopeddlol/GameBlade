@@ -23,6 +23,10 @@ tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Direct node-to-client transfer. Its own crate so the node agent can share it
+# without dragging a GUI toolkit along.
+gameblade-mesh = { path = "../../../crates/gameblade-mesh" }
+
 # Download engine
 reqwest = { version = "0.12", default-features = false, features = [
     "stream",

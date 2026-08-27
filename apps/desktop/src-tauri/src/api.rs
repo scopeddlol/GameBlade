@@ -85,6 +85,52 @@ pub struct DownloadManifest {
     pub sources: Option<Vec<ManifestSource>>,
 }
 
+/// One node the coordinator is offering, with the grant to use it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MeshNode {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(rename = "publicKey")]
+    pub public_key: String,
+    #[serde(default)]
+    pub endpoints: Vec<MeshEndpoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshEndpoint {
+    #[serde(default)]
+    pub kind: String,
+    pub address: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshGrant {
+    #[serde(rename = "nodeId")]
+    pub node_id: String,
+    pub grant: String,
+    #[serde(rename = "expiresAt", default)]
+    pub expires_at: Option<String>,
+}
+
+/// What `POST /mesh/resolve/:gameId` hands back.
+///
+/// Defaults to empty on purpose: an older server, a disabled mesh and a
+/// network hiccup all mean "download from the origin", and the caller should
+/// not have to tell them apart.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MeshResolution {
+    #[serde(default)]
+    pub nodes: Vec<MeshNode>,
+    #[serde(default)]
+    pub grants: Vec<MeshGrant>,
+    #[serde(rename = "coordinatorPublicKey", default)]
+    pub coordinator_public_key: Option<String>,
+}
+
 /// What `POST /download/:gameId/token` hands back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssuedDownloadToken {
@@ -330,6 +376,32 @@ impl ApiClient {
         )?;
         let response = check_status(request.send().await?).await?;
         Ok(response.json().await?)
+    }
+
+    /// Ask the coordinator where a game can be fetched from, and for
+    /// permission to fetch it.
+    ///
+    /// One call rather than two: knowing about a node is useless without a
+    /// grant, and a grant is meaningless for a node you were not told about.
+    /// A server that has never heard of the mesh 404s here, which is an empty
+    /// answer rather than an error — the origin was always going to be the
+    /// fallback anyway.
+    pub async fn resolve_mesh(&self, game_id: &str) -> MeshResolution {
+        let Ok(request) = self.authorised(
+            self.http
+                .post(self.endpoint(&format!("/mesh/resolve/{game_id}"))),
+        ) else {
+            return MeshResolution::default();
+        };
+
+        match request.send().await {
+            Ok(response) if response.status().is_success() => {
+                response.json().await.unwrap_or_default()
+            }
+            // Every failure here means the same thing: use the origin. There is
+            // nothing a caller could usefully do with the distinction.
+            _ => MeshResolution::default(),
+        }
     }
 
     /// Reads a non-2xx response into its structured parts without turning it
