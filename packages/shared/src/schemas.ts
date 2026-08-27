@@ -213,6 +213,19 @@ export const meshHeartbeatSchema = z.object({
 });
 export type MeshHeartbeatInput = z.infer<typeof meshHeartbeatSchema>;
 
+/**
+ * The candidate addresses a client offers when asking where a game is.
+ *
+ * Its reflexive address is the one that matters: a node has to punch toward the
+ * external address of the client's *UDP* socket, and the coordinator can only
+ * see where its TCP request came from — a different mapping, on a different
+ * port.
+ */
+export const meshResolveSchema = z.object({
+  endpoints: z.array(meshEndpointSchema).max(8).default([]),
+});
+export type MeshResolveInput = z.infer<typeof meshResolveSchema>;
+
 export const meshReportSchema = z.object({
   nonce: z.string().trim().min(4).max(64),
   bytesServed: z.number().int().min(0),

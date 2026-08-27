@@ -28,6 +28,14 @@ use crate::api::{ApiClient, MeshResolution};
 /// throughput for no possible gain.
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// How long to let a node act on its punch instruction before dialling.
+///
+/// Hole punching needs both ends sending at roughly the same moment. The
+/// coordinator wakes the node the instant this client asks, so this only has to
+/// cover the node's own round trip — long enough for its packets to be in
+/// flight, short enough not to be felt at the start of a download.
+const PUNCH_LEAD: Duration = Duration::from_millis(300);
+
 /// Everything a download needs to use nodes, or the knowledge that it cannot.
 pub struct MeshContext {
     endpoint: MeshEndpoint,
@@ -49,8 +57,23 @@ impl MeshContext {
             return None;
         }
 
-        let resolution = client.resolve_mesh(game_id).await;
+        // Bound and address-discovered before anything else: the reflexive
+        // address belongs to this socket alone, and it is what the coordinator
+        // needs in order to tell a node where to punch.
+        let endpoint = MeshEndpoint::client_with_discovery(
+            NodeIdentity::generate(),
+            gameblade_mesh::diagnostics::DEFAULT_STUN_SERVERS,
+        )
+        .ok()?;
+
+        let candidates: Vec<(String, u16)> = endpoint
+            .reflexive_addr()
+            .map(|address| vec![(address.ip().to_string(), address.port())])
+            .unwrap_or_default();
+
+        let resolution = client.resolve_mesh(game_id, &candidates).await;
         if resolution.nodes.is_empty() {
+            endpoint.close();
             return None;
         }
 
@@ -61,13 +84,22 @@ impl MeshContext {
         // The client does not verify grants — the node does — but a coordinator
         // that would not publish a usable key is one whose grants no node will
         // accept either, so there is no point starting.
-        coordinator?;
-
-        let endpoint = MeshEndpoint::client(NodeIdentity::generate()).ok()?;
-        let candidates = candidates_from(&resolution);
-        if candidates.is_empty() {
+        if coordinator.is_none() {
+            endpoint.close();
             return None;
         }
+
+        let nodes = candidates_from(&resolution);
+        if nodes.is_empty() {
+            endpoint.close();
+            return None;
+        }
+
+        // A beat for the nodes to act on the punch the coordinator just queued.
+        // Both sides have to be sending at roughly the same time; dialling the
+        // instant resolve returns means arriving before the far side's packet
+        // has opened its NAT.
+        tokio::time::sleep(PUNCH_LEAD).await;
 
         let mut pool = SourcePool::new("Origin");
         let mut sessions = Vec::new();
@@ -75,7 +107,7 @@ impl MeshContext {
         // Connected up front rather than lazily. A handshake costs a round trip
         // and the first chunk should not pay for it, and how long the handshake
         // took is the first real signal of how good a source is.
-        for (position, candidate) in candidates.iter().enumerate() {
+        for (position, candidate) in nodes.iter().enumerate() {
             match connect_to_node(&endpoint, candidate).await {
                 Ok(session) => {
                     pool.add_node(&candidate.node_id, &candidate.label, position);

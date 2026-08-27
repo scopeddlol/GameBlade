@@ -1,5 +1,7 @@
 import {
   MESH_HEARTBEAT_INTERVAL_SECONDS,
+  MESH_RENDEZVOUS_POLL_SECONDS,
+  meshResolveSchema,
   meshEnrolmentSchema,
   meshHeartbeatSchema,
   meshPeerRegisterSchema,
@@ -9,7 +11,7 @@ import {
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { requireAdmin, requireUser } from '../auth/middleware.js';
-import { games } from '../db/schema.js';
+import { gameFiles, games } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 
 /**
@@ -130,6 +132,45 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
+   * The file layout of one game, for a node that has to serve pieces of it.
+   *
+   * Node-facing rather than reusing the client manifest, and deliberately
+   * carrying no download token: a node serves bytes it already holds and has no
+   * business being handed authority to fetch them from here.
+   */
+  app.get('/mesh/catalog/:gameId', async (request) => {
+    requireNode(request);
+    const { gameId } = request.params as { gameId: string };
+
+    const game = db.select().from(games).where(eq(games.id, gameId)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    if (!chunks.isGameChunked(gameId)) {
+      // Not an error: a node simply cannot serve a game whose pieces nobody can
+      // verify, so there is nothing useful to send.
+      throw ApiError.gone('That game has no chunk hashes yet');
+    }
+
+    const files = db.select().from(gameFiles).where(eq(gameFiles.gameId, gameId)).all();
+    const byFile = chunks.chunksForGame(gameId);
+
+    return {
+      gameId,
+      kind: game.kind,
+      /** Relative to the library root, which is where a node's copy begins. */
+      relPath: game.relPath,
+      contentHash: mesh.contentHashFor(gameId),
+      files: files.map((file) => ({
+        id: file.id,
+        path: file.relPath,
+        sizeBytes: file.sizeBytes,
+        sha256: file.sha256,
+        chunks: byFile.get(file.id) ?? [],
+      })),
+    };
+  });
+
+  /**
    * Report what was actually served under a grant.
    *
    * This is what keeps a byte allowance honest once transfers stop passing
@@ -142,6 +183,31 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
 
     mesh.reportTransfer({ nonce: body.nonce, nodeId, bytesServed: body.bytesServed });
     return { ok: true };
+  });
+
+  /**
+   * Wait to be told to punch toward a client.
+   *
+   * Held open rather than polled on a timer, because the whole value is in
+   * being immediate: a client asks, the node punches within milliseconds, and
+   * both ends' packets cross while the mappings are fresh. A poll every few
+   * seconds would mean the client had given up and fallen back to HTTP long
+   * before the node heard.
+   *
+   * A long-poll rather than a WebSocket because it survives any proxy
+   * unchanged, needs no upgrade negotiation, and there is exactly one message
+   * shape to carry.
+   */
+  app.get('/mesh/rendezvous', {
+    // A node holds this open continuously by design; the abuse limiter would
+    // read a well-behaved agent as a flood.
+    config: { rateLimit: false },
+    handler: async (request) => {
+      const { nodeId } = requireNode(request);
+
+      const punches = await mesh.waitForPunch(nodeId, MESH_RENDEZVOUS_POLL_SECONDS * 1000);
+      return { punches, pollSeconds: MESH_RENDEZVOUS_POLL_SECONDS };
+    },
   });
 
   /* ---------------------------------------------------------- client-facing */
@@ -171,6 +237,26 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
     const quota = bandwidth.assertWithinQuota(context.user.id);
 
     const nodes = mesh.nodesForGame(gameId, { excludeOwnerId: context.user.id });
+
+    // Tell every candidate node to punch toward this client, now.
+    //
+    // The client's own reflexive address is what it sends here, and it is the
+    // only usable one: the address this HTTP request arrived from belongs to a
+    // TCP connection through a different NAT mapping on a different port.
+    // Punching at that would open a hole nothing uses.
+    const candidates = meshResolveSchema.parse(request.body ?? {}).endpoints;
+    const queuedAt = new Date().toISOString();
+
+    for (const node of nodes) {
+      for (const candidate of candidates) {
+        mesh.requestPunch(node.id, {
+          address: candidate.address,
+          port: candidate.port,
+          userId: context.user.id,
+          queuedAt,
+        });
+      }
+    }
 
     // The ceiling on one grant. With no quota configured this is still bounded,
     // because an unbounded grant would be a permanent credential if it leaked.

@@ -164,7 +164,9 @@ impl AppState {
     async fn coordinator_key(&self, client: &ApiClient) -> Option<gameblade_mesh::PublicKey> {
         // Any game will do — the key is per server, not per game — and resolve
         // is the only endpoint that publishes it.
-        let resolution = client.resolve_mesh("unknown").await;
+        // No candidates: this is only fetching the coordinator's public key,
+        // not setting up a transfer, so there is nobody to be punched toward.
+        let resolution = client.resolve_mesh("unknown", &[]).await;
         resolution
             .coordinator_public_key
             .as_deref()

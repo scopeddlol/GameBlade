@@ -189,6 +189,44 @@ export const MESH_HEARTBEAT_INTERVAL_SECONDS = 30;
  */
 export const MESH_MAX_SOURCES_PER_GAME = 4;
 
+/* ------------------------------------------------------------- rendezvous */
+
+/**
+ * One side telling the other where to aim a punch.
+ *
+ * Hole punching only works if both ends send at roughly the same moment: each
+ * one's outbound packet is what teaches its own NAT to accept the other's. A
+ * client can start whenever it likes, but a node has no idea the client exists
+ * until it connects — which it cannot do until the node has punched. The
+ * coordinator breaks that circle by telling the node to punch first.
+ */
+export interface MeshPunchRequest {
+  /** Where the node should send its punch packets. */
+  address: string;
+  port: number;
+  /** Which client asked, so a node can rate-limit per account if it needs to. */
+  userId: string;
+  /** When the coordinator queued it, so a node can drop a stale one. */
+  queuedAt: string;
+}
+
+/**
+ * How long a queued punch stays worth acting on.
+ *
+ * A NAT mapping for a socket that has gone quiet lapses in well under a minute,
+ * and a client that asked ten seconds ago has already given up and fallen back
+ * to HTTP. Punching at a stale address is not harmful, only useless.
+ */
+export const MESH_PUNCH_TTL_SECONDS = 10;
+
+/**
+ * How long a node's long-poll for punch requests is held open.
+ *
+ * Comfortably under the sixty seconds most proxies will hold an idle response,
+ * so the request completes normally rather than being cut off.
+ */
+export const MESH_RENDEZVOUS_POLL_SECONDS = 25;
+
 /* ---------------------------------------------------------------- protocol */
 
 /**

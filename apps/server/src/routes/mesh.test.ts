@@ -557,6 +557,132 @@ describe('mesh coordinator', () => {
     expect(app.gameblade.mesh.nodesForGame(gameId, { excludeOwnerId: player.id })).toHaveLength(0);
   });
 
+  /* ------------------------------------------------------------- rendezvous */
+
+  it('wakes a waiting node the moment a client asks', async () => {
+    // The whole value is in being immediate. A node told five seconds late is
+    // a node whose client has already fallen back to HTTP.
+    const node = await enrol('Home archive', 'y'.repeat(44));
+    const contentHash = app.gameblade.mesh.contentHashFor(gameId);
+    await app.inject({
+      method: 'POST',
+      url: '/api/mesh/heartbeat',
+      headers: nodeAuth(node),
+      payload: { endpoints: [], games: [{ gameId, contentHash }] },
+    });
+
+    // Start the long-poll, then resolve while it is still open.
+    const polling = app.inject({
+      method: 'GET',
+      url: '/api/mesh/rendezvous',
+      headers: nodeAuth(node),
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/mesh/resolve/${gameId}`,
+      headers: auth(player),
+      payload: { endpoints: [{ kind: 'observed', address: '203.0.113.9', port: 24132 }] },
+    });
+
+    const punches = (await polling).json() as {
+      punches: { address: string; port: number }[];
+    };
+
+    expect(punches.punches).toHaveLength(1);
+    expect(punches.punches[0]).toMatchObject({ address: '203.0.113.9', port: 24132 });
+  });
+
+  it('hands over a punch queued before the node was listening', async () => {
+    // An agent reconnecting its poll must not miss what arrived in the gap.
+    const node = await enrol('Home archive', 'x'.repeat(44));
+    const contentHash = app.gameblade.mesh.contentHashFor(gameId);
+    await app.inject({
+      method: 'POST',
+      url: '/api/mesh/heartbeat',
+      headers: nodeAuth(node),
+      payload: { endpoints: [], games: [{ gameId, contentHash }] },
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/mesh/resolve/${gameId}`,
+      headers: auth(player),
+      payload: { endpoints: [{ kind: 'observed', address: '203.0.113.9', port: 24132 }] },
+    });
+
+    const polled = await app.inject({
+      method: 'GET',
+      url: '/api/mesh/rendezvous',
+      headers: nodeAuth(node),
+    });
+
+    expect((polled.json() as { punches: unknown[] }).punches).toHaveLength(1);
+  });
+
+  it('does not hand the same punch to a node twice', async () => {
+    const node = await enrol('Home archive', 'w'.repeat(44));
+    const contentHash = app.gameblade.mesh.contentHashFor(gameId);
+    await app.inject({
+      method: 'POST',
+      url: '/api/mesh/heartbeat',
+      headers: nodeAuth(node),
+      payload: { endpoints: [], games: [{ gameId, contentHash }] },
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/mesh/resolve/${gameId}`,
+      headers: auth(player),
+      payload: { endpoints: [{ kind: 'observed', address: '203.0.113.9', port: 24132 }] },
+    });
+
+    const first = await app.inject({
+      method: 'GET',
+      url: '/api/mesh/rendezvous',
+      headers: nodeAuth(node),
+    });
+    expect((first.json() as { punches: unknown[] }).punches).toHaveLength(1);
+
+    // The second poll blocks rather than replaying; taken directly so the test
+    // does not wait out the full poll window.
+    expect(app.gameblade.mesh.takePunches(node.nodeId)).toHaveLength(0);
+  });
+
+  it('drops a punch that has gone stale rather than acting on it', async () => {
+    // The client gave up long ago and its NAT mapping has lapsed.
+    const node = await enrol('Home archive', 'v'.repeat(44));
+
+    app.gameblade.mesh.requestPunch(node.nodeId, {
+      address: '203.0.113.9',
+      port: 24132,
+      userId: player.id,
+      queuedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    expect(app.gameblade.mesh.takePunches(node.nodeId)).toHaveLength(0);
+  });
+
+  it('keeps the rendezvous channel to authenticated nodes', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/mesh/rendezvous' });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('queues nothing for a node that holds no copy of the game', async () => {
+    // Punching costs the node packets and the client a wait; neither is worth
+    // spending on a node that would refuse the request anyway.
+    const node = await enrol('Home archive', 'u'.repeat(44));
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/mesh/resolve/${gameId}`,
+      headers: auth(player),
+      payload: { endpoints: [{ kind: 'observed', address: '203.0.113.9', port: 24132 }] },
+    });
+
+    expect(app.gameblade.mesh.takePunches(node.nodeId)).toHaveLength(0);
+  });
+
   /* ------------------------------------------------------------------ admin */
 
   it('keeps the node list to administrators', async () => {

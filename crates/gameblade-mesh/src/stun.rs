@@ -173,6 +173,64 @@ fn decode_address(value: &[u8], transaction_id: &[u8; 12], xored: bool) -> MeshR
     }
 }
 
+/// Learn this socket's own external address, synchronously.
+///
+/// Takes a plain `std::net::UdpSocket` and is meant to be called *before* the
+/// socket is handed to QUIC. That ordering is not incidental: once quinn owns
+/// the socket it is reading from it continuously, and a second reader would
+/// race it for packets — occasionally consuming a QUIC datagram and dropping it
+/// on the floor. Asking first, then handing the socket over, has no such race.
+///
+/// The answer is only meaningful for *this* socket. A different socket gets a
+/// different NAT mapping, which is the entire reason the address has to be
+/// discovered here rather than anywhere more convenient.
+pub fn discover_reflexive(
+    socket: &std::net::UdpSocket,
+    servers: &[&str],
+    timeout: std::time::Duration,
+) -> Option<SocketAddr> {
+    use rand::RngCore;
+
+    let previous = socket.read_timeout().ok().flatten();
+    socket.set_read_timeout(Some(timeout)).ok()?;
+
+    let mut found = None;
+
+    for server in servers {
+        let mut transaction_id = [0u8; 12];
+        rand::rngs::OsRng.fill_bytes(&mut transaction_id);
+        let request = binding_request(transaction_id);
+
+        let Ok(mut resolved) = std::net::ToSocketAddrs::to_socket_addrs(server) else {
+            continue;
+        };
+        // IPv4 only: the mapping being discovered is the IPv4 NAT's.
+        let Some(target) = resolved.find(|address| address.is_ipv4()) else {
+            continue;
+        };
+
+        if socket.send_to(&request.bytes, target).is_err() {
+            continue;
+        }
+
+        let mut buffer = [0u8; 1024];
+        // One read attempt per server rather than a loop: this socket has no
+        // other traffic yet — QUIC does not own it — so the next packet is
+        // either the answer or nothing.
+        if let Ok((length, _)) = socket.recv_from(&mut buffer) {
+            if let Ok(address) = parse_binding_response(&buffer[..length], &request.transaction_id)
+            {
+                found = Some(address);
+                break;
+            }
+        }
+    }
+
+    // Put the socket back as it was; quinn sets its own expectations.
+    let _ = socket.set_read_timeout(previous);
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

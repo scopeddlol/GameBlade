@@ -43,6 +43,12 @@ pub const MESH_ALPN: &[u8] = b"gameblade-mesh/1";
 /// that a node does not accumulate dead connections from clients that vanished.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How long to spend learning this socket's external address at startup.
+///
+/// Short: it is on the path of every download, and failing to learn it costs a
+/// less reliable connection rather than a broken one.
+const REFLEXIVE_TIMEOUT: Duration = Duration::from_millis(1_200);
+
 /// How many punch packets to send at a candidate.
 ///
 /// Three, spaced out. One can be lost, and the far side may not have started
@@ -211,6 +217,12 @@ pub struct MeshEndpoint {
     /// creates, and a mapping is per source port. A punch sent from any other
     /// socket opens a hole for a port nothing will ever use.
     punch: UdpSocket,
+    /// What the outside world sees this socket as, when that could be learned.
+    ///
+    /// This is the address a peer must be told to aim at. It cannot be guessed
+    /// from anything local — the NAT decides it — and it belongs to this socket
+    /// alone, which is why it is discovered here rather than anywhere tidier.
+    reflexive: Option<SocketAddr>,
 }
 
 impl MeshEndpoint {
@@ -224,6 +236,25 @@ impl MeshEndpoint {
             identity,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
             false,
+            false,
+        )
+    }
+
+    /// Bind a client endpoint and learn its external address on the way.
+    ///
+    /// Costs one round trip to a STUN server at startup and is what makes the
+    /// far side able to punch back: without it the coordinator can tell a node
+    /// only where this client's *TCP* connection came from, which is a
+    /// different NAT mapping and a different port.
+    pub fn client_with_discovery(
+        identity: NodeIdentity,
+        stun_servers: &[&str],
+    ) -> MeshResult<Self> {
+        Self::bind_discovering(
+            identity,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+            false,
+            stun_servers,
         )
     }
 
@@ -237,19 +268,69 @@ impl MeshEndpoint {
         // Dual-stack where the OS allows it: if both ends have IPv6, a direct
         // connection needs no traversal at all.
         let address = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
-        match Self::bind(identity.clone(), address, true) {
+        match Self::bind(identity.clone(), address, true, false) {
             Ok(endpoint) => Ok(endpoint),
             Err(_) => Self::bind(
                 identity,
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
                 true,
+                false,
             ),
         }
     }
 
-    fn bind(identity: NodeIdentity, address: SocketAddr, serve: bool) -> MeshResult<Self> {
-        let socket = UdpSocket::bind(address)?;
+    /// Bind a node endpoint and learn its external address on the way.
+    ///
+    /// A node advertises this to the coordinator, which hands it to clients as
+    /// the candidate most likely to work. Bound IPv4-only: the mapping being
+    /// discovered is an IPv4 NAT's, and a dual-stack socket would report the
+    /// IPv6 side.
+    pub fn node_with_discovery(
+        identity: NodeIdentity,
+        port: u16,
+        stun_servers: &[&str],
+    ) -> MeshResult<Self> {
+        Self::bind_discovering(
+            identity,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
+            true,
+            stun_servers,
+        )
+    }
 
+    fn bind(
+        identity: NodeIdentity,
+        address: SocketAddr,
+        serve: bool,
+        _discover: bool,
+    ) -> MeshResult<Self> {
+        Self::build(identity, UdpSocket::bind(address)?, serve, None)
+    }
+
+    /// Bind, ask what the world sees, then hand the socket to QUIC.
+    ///
+    /// The order matters and is the whole reason this is separate: quinn reads
+    /// from the socket continuously once it owns it, so a STUN exchange
+    /// afterwards would be a second reader racing it for packets. Asking while
+    /// nothing else is listening has no such race.
+    fn bind_discovering(
+        identity: NodeIdentity,
+        address: SocketAddr,
+        serve: bool,
+        stun_servers: &[&str],
+    ) -> MeshResult<Self> {
+        let socket = UdpSocket::bind(address)?;
+        let reflexive = crate::stun::discover_reflexive(&socket, stun_servers, REFLEXIVE_TIMEOUT);
+
+        Self::build(identity, socket, serve, reflexive)
+    }
+
+    fn build(
+        identity: NodeIdentity,
+        socket: UdpSocket,
+        serve: bool,
+        reflexive: Option<SocketAddr>,
+    ) -> MeshResult<Self> {
         // Cloned before quinn takes ownership. Both handles refer to the same
         // kernel socket and therefore the same port, which is the only reason
         // punching from this one helps the connection made on the other.
@@ -291,7 +372,13 @@ impl MeshEndpoint {
             endpoint,
             identity,
             punch,
+            reflexive,
         })
+    }
+
+    /// The address a peer should be told to punch toward, if it is known.
+    pub fn reflexive_addr(&self) -> Option<SocketAddr> {
+        self.reflexive
     }
 
     pub fn local_addr(&self) -> MeshResult<SocketAddr> {

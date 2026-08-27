@@ -402,13 +402,28 @@ impl ApiClient {
     /// A server that has never heard of the mesh 404s here, which is an empty
     /// answer rather than an error — the origin was always going to be the
     /// fallback anyway.
-    pub async fn resolve_mesh(&self, game_id: &str) -> MeshResolution {
+    pub async fn resolve_mesh(&self, game_id: &str, candidates: &[(String, u16)]) -> MeshResolution {
         let Ok(request) = self.authorised(
             self.http
                 .post(self.endpoint(&format!("/mesh/resolve/{game_id}"))),
         ) else {
             return MeshResolution::default();
         };
+
+        // The client's own external address, so nodes can punch toward it. The
+        // address this request arrives from is a different NAT mapping on a
+        // different port, and punching at that would open a hole nothing uses.
+        let body = serde_json::json!({
+            "endpoints": candidates
+                .iter()
+                .map(|(address, port)| serde_json::json!({
+                    "kind": "observed",
+                    "address": address,
+                    "port": port,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        let request = request.json(&body);
 
         match request.send().await {
             Ok(response) if response.status().is_success() => {

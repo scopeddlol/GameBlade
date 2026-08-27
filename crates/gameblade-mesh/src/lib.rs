@@ -36,6 +36,7 @@
 //! verified against a hash the origin computed, so a node can be wrong, stale,
 //! hostile or simply gone and the worst outcome is a slower download.
 
+pub mod agent;
 pub mod client;
 pub mod diagnostics;
 pub mod error;

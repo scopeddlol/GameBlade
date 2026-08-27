@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import {
   MESH_HEARTBEAT_TIMEOUT_SECONDS,
   MESH_MAX_SOURCES_PER_GAME,
+  MESH_PUNCH_TTL_SECONDS,
+  type MeshPunchRequest,
   type MeshEndpoint,
   type MeshNodeInfo,
   type MeshNodeRole,
@@ -447,6 +449,94 @@ export class MeshService {
     });
 
     return sources.sort((a, b) => a.priority - b.priority);
+  }
+
+  /* --------------------------------------------------------------- rendezvous */
+
+  /**
+   * Punch instructions waiting for each node, and whoever is waiting to hear.
+   *
+   * In memory rather than in the database on purpose. These live for seconds,
+   * are worthless the moment they go stale, and arrive on the path of every
+   * download — a write and a poll per connection attempt would be the busiest
+   * thing this coordinator does, in service of data nobody would ever read
+   * twice. A restart losing them costs one download its direct path.
+   */
+  private readonly punches = new Map<string, MeshPunchRequest[]>();
+  private readonly waiters = new Map<string, (() => void)[]>();
+
+  /**
+   * Tell a node to punch toward a client.
+   *
+   * This is what breaks the deadlock at the heart of hole punching: both ends
+   * have to send at roughly the same moment, but a node has no idea a client
+   * exists until it connects — and it cannot connect until the node has
+   * punched. The coordinator knows about both, so it tells the node first.
+   */
+  requestPunch(nodeId: string, request: MeshPunchRequest): void {
+    const queued = this.punches.get(nodeId) ?? [];
+
+    // Bounded, because this is reachable by any signed-in account asking to
+    // resolve a game repeatedly. A node that is not polling should not
+    // accumulate work nobody will collect.
+    queued.push(request);
+    this.punches.set(nodeId, queued.slice(-32));
+
+    // Wake whoever is holding a long-poll open, so the node punches now rather
+    // than whenever its poll happens to time out.
+    for (const wake of this.waiters.get(nodeId) ?? []) wake();
+    this.waiters.delete(nodeId);
+  }
+
+  /** Take everything queued for a node, dropping what has gone stale. */
+  takePunches(nodeId: string): MeshPunchRequest[] {
+    const queued = this.punches.get(nodeId) ?? [];
+    this.punches.delete(nodeId);
+
+    const cutoff = Date.now() - MESH_PUNCH_TTL_SECONDS * 1000;
+    // A client that asked ten seconds ago has already fallen back to HTTP, and
+    // its NAT mapping has probably lapsed. Punching at it is not harmful, just
+    // pointless.
+    return queued.filter((request) => Date.parse(request.queuedAt) >= cutoff);
+  }
+
+  /**
+   * Wait for a punch request, or for the poll to time out.
+   *
+   * Resolves as soon as `requestPunch` wakes it. The timeout is what makes this
+   * a long-poll rather than a hang: the connection completes normally and the
+   * node immediately opens another.
+   */
+  async waitForPunch(nodeId: string, timeoutMs: number): Promise<MeshPunchRequest[]> {
+    const ready = this.takePunches(nodeId);
+    if (ready.length > 0) return ready;
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.removeWaiter(nodeId, wake);
+        resolve();
+      }, timeoutMs);
+
+      const wake = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+
+      const waiting = this.waiters.get(nodeId) ?? [];
+      waiting.push(wake);
+      this.waiters.set(nodeId, waiting);
+    });
+
+    return this.takePunches(nodeId);
+  }
+
+  private removeWaiter(nodeId: string, wake: () => void): void {
+    const waiting = (this.waiters.get(nodeId) ?? []).filter((entry) => entry !== wake);
+    if (waiting.length > 0) {
+      this.waiters.set(nodeId, waiting);
+    } else {
+      this.waiters.delete(nodeId);
+    }
   }
 
   /* ---------------------------------------------------------------- reporting */
