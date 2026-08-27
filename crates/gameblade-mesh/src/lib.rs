@@ -37,15 +37,18 @@
 //! hostile or simply gone and the worst outcome is a slower download.
 
 pub mod client;
+pub mod diagnostics;
 pub mod error;
 pub mod grant;
 pub mod identity;
 pub mod node;
 pub mod protocol;
 pub mod selection;
+pub mod stun;
 pub mod transport;
 
 pub use client::{connect_to_node, NodeCandidate, NodeSession};
+pub use diagnostics::{probe, NatMapping, NetworkReport};
 pub use error::{MeshError, MeshResult, SourceHealth};
 pub use grant::{verify_grant, GrantClaims, GrantLedger};
 pub use identity::{coordinator_key_from_spki, NodeIdentity, PublicKey};

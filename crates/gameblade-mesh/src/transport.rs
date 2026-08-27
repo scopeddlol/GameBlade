@@ -65,14 +65,25 @@ const PUNCH_PAYLOAD: &[u8] = b"gameblade-punch";
 /// re-punching a hole for no reason.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
 
-/// The key a node's certificate carries, extracted for pinning.
+/// The suffix every node identity label ends with.
+const IDENTITY_SUFFIX: &str = ".node.gameblade";
+
+/// The key a node's certificate carries, expressed as a DNS name.
 ///
-/// The key goes into the certificate's subject alternative name as a DNS-style
-/// label rather than into an extension, because that is the field rustls will
-/// hand back without a custom parser: the whole point is to compare 32 bytes,
-/// not to grow an X.509 stack.
+/// The key goes into the certificate's subject alternative name rather than
+/// into an extension, because that is the field rustls hands back without a
+/// custom parser: the whole point is to compare 32 bytes, not to grow an X.509
+/// stack.
+///
+/// Hex, in two labels, and neither choice is cosmetic. Base64url was the
+/// obvious encoding and was wrong twice over: its alphabet includes `-`, and a
+/// DNS label may not begin with one, so roughly one key in thirty-two produced
+/// a name nothing would accept — a node unreachable at random, decided by
+/// whichever key it happened to generate. Hex has no such characters. It also
+/// takes 64 of them and a single label may hold 63, so the key spans two.
 fn identity_dns_name(key: &PublicKey) -> String {
-    format!("{}.node.gameblade", key.to_base64().to_lowercase())
+    let encoded = hex::encode(key.as_bytes());
+    format!("{}.{}{}", &encoded[..32], &encoded[32..], IDENTITY_SUFFIX)
 }
 
 /// Build the certificate a node presents.
@@ -155,14 +166,16 @@ impl ServerCertVerifier for PinnedNode {
     }
 }
 
-/// Pull the single DNS SAN out of a certificate.
+/// Pull the node identity out of a certificate's subject alternative name.
 ///
-/// A deliberately minimal reader for a shape this crate produces itself: find
-/// the SAN extension's dNSName and return it. Anything unexpected is a
-/// rejection rather than a best guess.
+/// A deliberately minimal reader for a shape this crate produces itself. Rather
+/// than assume a fixed key length — which is exactly what broke when the
+/// encoding changed — it finds the suffix and walks backwards over the
+/// characters an identity label may contain. Anything else ends the walk, so a
+/// neighbouring field cannot bleed into the name.
 fn x509_name(cert: &CertificateDer<'_>) -> Result<((), String), rustls::Error> {
     let bytes = cert.as_ref();
-    let needle = b".node.gameblade";
+    let needle = IDENTITY_SUFFIX.as_bytes();
 
     let position = bytes
         .windows(needle.len())
@@ -171,16 +184,15 @@ fn x509_name(cert: &CertificateDer<'_>) -> Result<((), String), rustls::Error> {
             rustls::Error::General("that certificate carries no node identity".into())
         })?;
 
-    // The label is the base64url key immediately before the suffix. Keys are a
-    // fixed 43 characters unpadded, so the start is a fixed distance back.
-    const KEY_CHARS: usize = 43;
-    if position < KEY_CHARS {
-        return Err(rustls::Error::General(
-            "that certificate's node identity is malformed".into(),
-        ));
+    let mut start = position;
+    while start > 0 {
+        let candidate = bytes[start - 1];
+        if !candidate.is_ascii_hexdigit() && candidate != b'.' {
+            break;
+        }
+        start -= 1;
     }
 
-    let start = position - KEY_CHARS;
     let label = std::str::from_utf8(&bytes[start..position + needle.len()]).map_err(|_| {
         rustls::Error::General("that certificate's node identity is not text".into())
     })?;
@@ -437,6 +449,43 @@ mod tests {
             identity_dns_name(&b.public_key())
         );
         assert!(identity_dns_name(&a.public_key()).ends_with(".node.gameblade"));
+    }
+
+    /// The bug this pins, which made a fraction of nodes unreachable at random.
+    ///
+    /// Identity labels were base64url, whose alphabet includes `-`, and a DNS
+    /// label may not begin with one. Roughly one generated key in thirty-two
+    /// produced a name `ServerName` refused, so that node could never be dialled
+    /// — and which nodes were affected was decided by whichever key each one
+    /// happened to generate. A single-key test passes thirty-one times out of
+    /// thirty-two, which is why this generates many.
+    #[test]
+    fn every_generated_identity_produces_a_usable_server_name() {
+        for _ in 0..256 {
+            let identity = NodeIdentity::generate();
+            let name = identity_dns_name(&identity.public_key());
+
+            assert!(
+                ServerName::try_from(name.clone()).is_ok(),
+                "rustls refused the identity label {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_identity_label_uses_only_characters_dns_allows() {
+        for _ in 0..64 {
+            let name = identity_dns_name(&NodeIdentity::generate().public_key());
+
+            for label in name.split('.') {
+                assert!(!label.is_empty(), "empty label in {name}");
+                assert!(label.len() <= 63, "label over 63 characters in {name}");
+                assert!(
+                    label.chars().all(|c| c.is_ascii_alphanumeric()),
+                    "non-alphanumeric label in {name}"
+                );
+            }
+        }
     }
 
     #[test]
