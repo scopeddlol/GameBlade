@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { maintain } from './db/index.js';
 import { libraries } from './db/schema.js';
 import { newId } from './lib/ids.js';
+import { MESH_HEARTBEAT_TIMEOUT_SECONDS } from '@gameblade/shared';
 
 /**
  * First-run setup driven by environment variables.
@@ -103,6 +104,7 @@ export function startSchedules(app: FastifyInstance): () => void {
   const {
     config,
     scanner,
+    mesh,
     auth,
     activity,
     notifications,
@@ -226,6 +228,25 @@ export function startSchedules(app: FastifyInstance): () => void {
   }, 15 * 60_000);
   announceTimer.unref();
   timers.push(announceTimer);
+
+  /**
+   * Mark nodes that have stopped heartbeating.
+   *
+   * Runs on its own short timer rather than with the hourly cleanup below: a
+   * node that dropped an hour ago is a node clients have been queuing
+   * connection attempts against all that time, and the whole point of a direct
+   * path is that it is faster than the tunnel, not slower.
+   */
+  const meshSweep = setInterval(() => {
+    try {
+      const stale = mesh.pruneStale();
+      if (stale > 0) app.log.info({ stale }, 'mesh nodes went stale');
+    } catch (error) {
+      app.log.warn({ err: error }, 'mesh sweep failed');
+    }
+  }, MESH_HEARTBEAT_TIMEOUT_SECONDS * 1000);
+  meshSweep.unref();
+  timers.push(meshSweep);
 
   /**
    * Statistics and a WAL checkpoint, hourly.

@@ -1,6 +1,6 @@
 import { and, eq, gte, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { downloadEvents, users } from '../db/schema.js';
+import { downloadEvents, meshTransfers, users } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import type { SettingsService } from './settings.js';
 
@@ -40,19 +40,32 @@ export class BandwidthService {
     return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
   }
 
-  /** Bytes this account has been sent since the start of the month. */
+  /**
+   * Bytes this account has been sent since the start of the month, from
+   * everywhere.
+   *
+   * Two sources, added together. The download log covers what flowed through
+   * this server. Mesh transfers cover what a node served directly, which this
+   * server never saw a byte of — and leaving those out would make the quota
+   * count only the traffic the mesh exists to avoid, so an account could spend
+   * its whole allowance and the counter would barely move.
+   */
   usedThisPeriod(userId: string): number {
-    const row = this.db
+    const periodStart = BandwidthService.periodStart();
+
+    const served = this.db
       .select({ bytes: sql<number>`coalesce(sum(${downloadEvents.bytesSent}), 0)` })
       .from(downloadEvents)
-      .where(
-        and(
-          eq(downloadEvents.userId, userId),
-          gte(downloadEvents.startedAt, BandwidthService.periodStart()),
-        ),
-      )
+      .where(and(eq(downloadEvents.userId, userId), gte(downloadEvents.startedAt, periodStart)))
       .get();
-    return Number(row?.bytes ?? 0);
+
+    const meshed = this.db
+      .select({ bytes: sql<number>`coalesce(sum(${meshTransfers.bytesServed}), 0)` })
+      .from(meshTransfers)
+      .where(and(eq(meshTransfers.userId, userId), gte(meshTransfers.issuedAt, periodStart)))
+      .get();
+
+    return Number(served?.bytes ?? 0) + Number(meshed?.bytes ?? 0);
   }
 
   /**

@@ -175,6 +175,11 @@ export const ADMIN_SECTIONS: AdminSection[] = [
         label: 'API keys',
         prefetch: [{ key: ['admin', 'api-keys'], path: '/admin/api-keys' }],
       },
+      {
+        to: '/admin/settings/nodes',
+        label: 'Nodes',
+        prefetch: [{ key: ['admin', 'mesh'], path: '/mesh/nodes' }],
+      },
     ],
   },
 ];

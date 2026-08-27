@@ -18,6 +18,7 @@ import { FriendService } from './services/friends.js';
 import { GameRequestService } from './services/gameRequests.js';
 import { InstallerService } from './services/installer.js';
 import { MediaStore } from './services/media.js';
+import { MeshService } from './services/mesh.js';
 import { MessagingService } from './services/messaging.js';
 import { ImageCache } from './services/metadata/images.js';
 import { DiscordService } from './services/discord.js';
@@ -56,6 +57,8 @@ export interface GamebladeContext {
   checksums: ChecksumService;
   /** Per-chunk hashes, which are what let a game be fetched from a node. */
   chunks: ChunkService;
+  /** The coordinator: who the nodes are, how to reach them, what they hold. */
+  mesh: MeshService;
   downloadTokens: DownloadTokenService;
   images: ImageCache;
   installer: InstallerService;
@@ -124,6 +127,7 @@ export function createContext(
   const scanner = new ScannerService(db, metadata, logger);
   const checksums = new ChecksumService(db, logger);
   const chunks = new ChunkService(db, logger);
+  const mesh = new MeshService(db, logger);
   const auth = new AuthService(db);
   const downloadTokens = new DownloadTokenService(db, config.sessionSecret);
   const installer = new InstallerService(db, config);
@@ -180,6 +184,7 @@ export function createContext(
     scanner,
     checksums,
     chunks,
+    mesh,
     downloadTokens,
     images,
     installer,

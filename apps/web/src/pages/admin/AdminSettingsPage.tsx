@@ -17,6 +17,8 @@ export function AdminSettingsPage() {
     igdbClientId: '',
     downloadSpeedLimitKbps: '0',
     monthlyQuotaMb: '0',
+    meshEnabled: false,
+    meshSeedingEnabled: false,
   });
   // Secrets are write-only: the server reports whether one is set but never
   // returns it, so a blank box means "leave what is stored alone".
@@ -56,6 +58,8 @@ export function AdminSettingsPage() {
       igdbClientId: current.igdbClientId || (settings.igdbClientId ?? ''),
       downloadSpeedLimitKbps: String(settings.downloadSpeedLimitKbps ?? 0),
       monthlyQuotaMb: String(settings.monthlyQuotaMb ?? 0),
+      meshEnabled: settings.meshEnabled ?? false,
+      meshSeedingEnabled: settings.meshSeedingEnabled ?? false,
     }));
   }, [settings]);
 
@@ -72,6 +76,8 @@ export function AdminSettingsPage() {
         steamApiKey: secrets.steamApiKey || undefined,
         downloadSpeedLimitKbps: Number(form.downloadSpeedLimitKbps) || 0,
         monthlyQuotaMb: Number(form.monthlyQuotaMb) || 0,
+        meshEnabled: form.meshEnabled,
+        meshSeedingEnabled: form.meshSeedingEnabled,
       }),
     onSuccess: async () => {
       setNotice('Settings saved.');
@@ -224,6 +230,40 @@ export function AdminSettingsPage() {
               onChange={(e) => setForm({ ...form, monthlyQuotaMb: e.target.value })}
             />
           </Field>
+
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={form.meshEnabled}
+              onChange={(e) => setForm({ ...form, meshEnabled: e.target.checked })}
+            />
+            <span>
+              Let clients download from mesh nodes
+              <span className="text-ink-400 block text-xs">
+                Clients try a direct connection to a node holding the game and fall back to this
+                server. Only games with chunk hashes are eligible — a client cannot check a piece
+                that came from elsewhere without them. Enrol nodes on the Nodes page.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={form.meshSeedingEnabled}
+              onChange={(e) => setForm({ ...form, meshSeedingEnabled: e.target.checked })}
+            />
+            <span>
+              Let players share what they have downloaded
+              <span className="text-ink-400 block text-xs">
+                A separate decision from the one above: it turns players into distributors of each
+                other&rsquo;s downloads rather than sharing machines you run. Off by default, and
+                each player still has to opt in on their own client.
+              </span>
+            </span>
+          </label>
         </section>
 
         <section className="gb-card space-y-4 p-5">

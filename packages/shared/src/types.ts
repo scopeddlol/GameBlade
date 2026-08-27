@@ -283,6 +283,10 @@ export interface ServerSettings {
   downloadSpeedLimitKbps?: number;
   /** Default monthly transfer allowance per account, in MB. 0 disables it. */
   monthlyQuotaMb?: number;
+  /** Whether clients may fetch game data from mesh nodes rather than the origin. */
+  meshEnabled?: boolean;
+  /** Whether clients may serve chunks they hold to other clients. */
+  meshSeedingEnabled?: boolean;
   /** The uploaded Windows installer, when one has been stored. */
   installer?: ClientInstallerInfo | null;
 }

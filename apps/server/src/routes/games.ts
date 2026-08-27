@@ -57,6 +57,7 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     images,
     clientButtons,
     chunks,
+    mesh,
   } = app.gameblade;
   const basePath = config.basePath;
 
@@ -151,11 +152,9 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
       token: issued.token,
       expiresAt: issued.expiresAt,
       ...(chunked ? { chunkBytes: MESH_CHUNK_BYTES } : {}),
-      // One source today: the origin, over the download routes that already
-      // exist. The field is here from the start so a client learns to pick a
-      // source before there is ever more than one to pick, and adding nodes
-      // later needs no client release.
-      sources: [{ kind: 'origin' as const, label: 'Origin', priority: 0 }],
+      // Always includes the origin; nodes appear once the mesh is on and one
+      // holds a copy matching this game's current fingerprint.
+      sources: mesh.sourcesFor(id, { chunked, excludeOwnerId: context.user.id }),
     };
     return body;
   });
