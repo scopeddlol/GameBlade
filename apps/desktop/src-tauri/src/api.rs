@@ -15,6 +15,18 @@ struct LoginResponse {
     user: UserInfo,
 }
 
+/// One content-addressed piece of a file, on the mesh chunk grid.
+///
+/// The offset is the index times the grid size; the server sends no offset and
+/// this deliberately stores none, so the two can never disagree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkRef {
+    pub index: u64,
+    pub sha256: String,
+    #[serde(rename = "sizeBytes")]
+    pub size_bytes: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestFile {
     pub id: String,
@@ -22,6 +34,30 @@ pub struct ManifestFile {
     #[serde(rename = "sizeBytes")]
     pub size_bytes: u64,
     pub sha256: Option<String>,
+    /// Per-chunk hashes, when the server has computed them.
+    ///
+    /// Absent from older servers and from games that have not been hashed yet,
+    /// which is why every use of this is behind an `Option`: their absence is
+    /// normal, not an error, and simply means falling back to verifying the
+    /// whole file at the end.
+    #[serde(default)]
+    pub chunks: Option<Vec<ChunkRef>>,
+}
+
+/// Somewhere a game's bytes can be fetched from.
+///
+/// Unknown `kind` values deserialize rather than failing the manifest, because
+/// a newer server will list source kinds this build has never heard of and the
+/// right response is to ignore them and use the origin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestSource {
+    pub kind: String,
+    #[serde(rename = "nodeId", default)]
+    pub node_id: Option<String>,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub priority: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +74,15 @@ pub struct DownloadManifest {
     /// downloader then falls back to refreshing reactively on a 403 alone.
     #[serde(rename = "expiresAt", default)]
     pub expires_at: Option<String>,
+    /// The grid `chunks` was hashed on.
+    ///
+    /// Checked rather than assumed: if a later release changes the grid, this
+    /// build sees a size it does not implement and ignores the chunk hashes
+    /// instead of verifying arriving bytes against boundaries nobody uses.
+    #[serde(rename = "chunkBytes", default)]
+    pub chunk_bytes: Option<u64>,
+    #[serde(default)]
+    pub sources: Option<Vec<ManifestSource>>,
 }
 
 /// What `POST /download/:gameId/token` hands back.

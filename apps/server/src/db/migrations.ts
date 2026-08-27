@@ -1005,4 +1005,38 @@ export const migrations: Migration[] = [
       ALTER TABLE conversations ADD COLUMN last_message_preview TEXT;
     `,
   },
+  {
+    id: '0024_mesh_chunks',
+    sql: /* sql */ `
+      -- Per-chunk hashes, so a file can be fetched from more than one place.
+      --
+      -- A whole-file SHA-256 only tells you the download was wrong once every
+      -- byte has arrived. To stitch one file out of several sources you have to
+      -- be able to reject a bad piece on arrival, which means addressing pieces
+      -- by content rather than by offset.
+      --
+      -- The grid is fixed (see MESH_CHUNK_BYTES) and the offset is implied by
+      -- the index, so this table stores no offsets: an offset column could
+      -- disagree with the index, and there would be no way to tell which was
+      -- right.
+      CREATE TABLE game_file_chunks (
+        file_id TEXT NOT NULL REFERENCES game_files(id) ON DELETE CASCADE,
+        chunk_index INTEGER NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        PRIMARY KEY (file_id, chunk_index)
+      ) WITHOUT ROWID;
+
+      -- Answering "who has this chunk" is the mesh's hot query, and it arrives
+      -- as a hash rather than as a file.
+      CREATE INDEX game_file_chunks_sha_idx ON game_file_chunks(sha256);
+
+      -- Chunk hashing is per-file and resumable, so the file has to remember
+      -- whether it is done. A null means never hashed; a size that disagrees
+      -- with the current MESH_CHUNK_BYTES means hashed on a different grid and
+      -- due to be redone.
+      ALTER TABLE game_files ADD COLUMN chunked_at TEXT;
+      ALTER TABLE game_files ADD COLUMN chunk_bytes INTEGER;
+    `,
+  },
 ];

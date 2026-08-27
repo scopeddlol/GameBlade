@@ -17,7 +17,7 @@
 //!   rather than a corrupt hybrid stitched from two versions.
 
 use super::{part_path_for, sanitise_relative_path, urlencode, DownloadState, DownloadStatus};
-use crate::api::{ApiClient, DownloadManifest, ManifestFile};
+use crate::api::{ApiClient, ChunkRef, DownloadManifest, ManifestFile};
 use crate::error::{AppError, AppResult};
 use chrono::Utc;
 use futures_util::StreamExt;
@@ -108,6 +108,28 @@ fn writable_len(buffer: usize, expected: u64, received: u64) -> usize {
 
 fn cancelled(flag: &AtomicBool) -> bool {
     flag.load(Ordering::SeqCst)
+}
+
+/// The per-chunk hashes usable for this file, if any.
+///
+/// Three things all have to line up before a hash may be trusted to accept or
+/// reject bytes: the server has to have sent hashes, it has to have cut them on
+/// the same grid this downloader fetches on, and there has to be one hash per
+/// chunk of the file. Any of those missing means verifying the whole file at
+/// the end instead — the behaviour before chunk hashes existed — rather than
+/// verifying pieces against something that does not describe them.
+fn chunk_hashes_for(file: &ManifestFile, chunk_bytes: Option<u64>) -> Option<Vec<ChunkRef>> {
+    if chunk_bytes? != CHUNK_BYTES {
+        return None;
+    }
+
+    let chunks = file.chunks.as_ref()?;
+    let expected = file.size_bytes.div_ceil(CHUNK_BYTES);
+    if chunks.len() as u64 != expected {
+        return None;
+    }
+
+    Some(chunks.clone())
 }
 
 /* ------------------------------------------------------------------- tokens */
@@ -379,6 +401,7 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
             &semaphore,
             job.connections,
             job.verify,
+            manifest.chunk_bytes,
         )
         .await
         {
@@ -465,6 +488,7 @@ async fn download_file(
     semaphore: &Arc<Semaphore>,
     connections: usize,
     verify: bool,
+    chunk_bytes: Option<u64>,
 ) -> FileOutcome {
     let relative = match sanitise_relative_path(&file.path) {
         Ok(relative) => relative,
@@ -488,6 +512,12 @@ async fn download_file(
             return FileOutcome::Done;
         }
     }
+
+    // Per-chunk hashes, but only when the server's grid is the one this build
+    // cuts transfers on. A mismatch is not an error — it is a newer server
+    // talking about boundaries this downloader does not use — and the honest
+    // answer is to ignore them and verify the whole file at the end as before.
+    let chunk_hashes = chunk_hashes_for(file, chunk_bytes);
 
     let mut restarts = 0u32;
 
@@ -534,6 +564,7 @@ async fn download_file(
             downloaded,
             semaphore,
             connections,
+            chunk_hashes.as_deref(),
         )
         .await;
 
@@ -620,6 +651,7 @@ async fn fetch_all_chunks(
     downloaded: &Arc<AtomicU64>,
     semaphore: &Arc<Semaphore>,
     connections: usize,
+    chunk_hashes: Option<&[ChunkRef]>,
 ) -> Result<(), Stop> {
     if file.size_bytes == 0 {
         return Ok(());
@@ -671,6 +703,14 @@ async fn fetch_all_chunks(
                 let start = index * CHUNK_BYTES;
                 let end = (start + CHUNK_BYTES).min(file.size_bytes) - 1;
 
+                // Indexed rather than searched: the grid the server hashed on
+                // is the grid this loop cuts on, so chunk N is entry N. If it
+                // is not there, the file simply has no hash for that piece.
+                let expected_hash = chunk_hashes
+                    .and_then(|hashes| hashes.get(*index as usize))
+                    .filter(|chunk| chunk.index == *index)
+                    .map(|chunk| chunk.sha256.clone());
+
                 tasks.push(tauri::async_runtime::spawn(download_chunk(
                     client.clone(),
                     tokens.clone(),
@@ -685,6 +725,7 @@ async fn fetch_all_chunks(
                     downloaded.clone(),
                     cancel.clone(),
                     abandon.clone(),
+                    expected_hash,
                     permit,
                 )));
             }
@@ -748,6 +789,7 @@ async fn download_chunk(
     downloaded: Arc<AtomicU64>,
     cancel: Arc<AtomicBool>,
     abandon: Arc<AtomicBool>,
+    expected_hash: Option<String>,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<(), Stop> {
     let expected = end - start + 1;
@@ -755,6 +797,16 @@ async fn download_chunk(
     // file; for anything narrower it means the range was ignored.
     let whole_file = start == 0 && end + 1 == total_size;
     let mut attempt = 0u32;
+
+    // Counted apart from `attempt` because it means something different.
+    //
+    // Transient failures retry forever on purpose — waiting out an outage is
+    // the right answer. Bytes that arrive complete and hash wrong are not
+    // waiting for anything: either the link is corrupting data or the source is
+    // serving something else, and neither heals by asking the same source
+    // again. A few retries cover a genuinely unlucky transfer; past that it is
+    // a real fault and saying so beats looping.
+    let mut mismatches = 0u32;
 
     // Bytes this attempt has already added to the shared progress counter.
     // Declared out here so a failed attempt can take them back: the same range
@@ -795,6 +847,8 @@ async fn download_chunk(
             Delivered,
             Transient,
             Changed,
+            /// Arrived whole, hashed wrong.
+            Corrupt,
         }
 
         let result: Result<Attempt, Stop> = async {
@@ -881,6 +935,11 @@ async fn download_chunk(
                 )));
             }
 
+            // Hashed as it streams rather than by re-reading the file after:
+            // the bytes are already in hand, so verification costs one pass
+            // over memory instead of a second pass over a slow disk.
+            let mut hasher = expected_hash.as_ref().map(|_| Sha256::new());
+
             let mut stream = response.bytes_stream();
             while let Some(chunk) = stream.next().await {
                 if cancelled(&cancel) || abandon.load(Ordering::Relaxed) {
@@ -899,6 +958,9 @@ async fn download_chunk(
                     break;
                 }
                 let slice = &chunk[..writable];
+                if let Some(hasher) = hasher.as_mut() {
+                    hasher.update(slice);
+                }
 
                 if target.write_all(slice).await.is_err() {
                     return Err(Stop::Fatal(AppError::Other(
@@ -916,6 +978,18 @@ async fn download_chunk(
                 // chunk simply is not done.
                 return Ok(Attempt::Transient);
             }
+
+            // Checked before the journal records the chunk, so bytes that hash
+            // wrong are never marked done. This is what makes fetching a piece
+            // from somewhere other than the origin safe: the source does not
+            // have to be trusted, only the hash does.
+            if let (Some(hasher), Some(want)) = (hasher, expected_hash.as_ref()) {
+                let actual = hex::encode(hasher.finalize());
+                if !actual.eq_ignore_ascii_case(want) {
+                    return Ok(Attempt::Corrupt);
+                }
+            }
+
             Ok(Attempt::Delivered)
         }
         .await;
@@ -934,6 +1008,17 @@ async fn download_chunk(
             // recorded them. Either way they must come back off the counter.
             Ok(Attempt::Transient) => {
                 uncredit(&downloaded, received);
+                attempt += 1;
+            }
+            Ok(Attempt::Corrupt) => {
+                uncredit(&downloaded, received);
+                mismatches += 1;
+                if mismatches > 3 {
+                    return Err(Stop::Fatal(AppError::Other(format!(
+                        "Chunk {index} failed its checksum {mismatches} times. \
+                         The copy being served does not match what the server recorded."
+                    ))));
+                }
                 attempt += 1;
             }
             Ok(Attempt::Changed) => {
@@ -1166,5 +1251,78 @@ mod tests {
             sanitise_relative_path("data/game file.dat").unwrap(),
             PathBuf::from("data/game file.dat")
         );
+    }
+
+    /* --------------------------------------------------- chunk hashes */
+
+    fn manifest_file(size_bytes: u64, chunks: Option<Vec<ChunkRef>>) -> ManifestFile {
+        ManifestFile {
+            id: "f1".to_string(),
+            path: "data.bin".to_string(),
+            size_bytes,
+            sha256: None,
+            chunks,
+        }
+    }
+
+    fn refs(count: u64) -> Vec<ChunkRef> {
+        (0..count)
+            .map(|index| ChunkRef {
+                index,
+                sha256: format!("{index:064x}"),
+                size_bytes: CHUNK_BYTES,
+            })
+            .collect()
+    }
+
+    /// A grid this build does not cut on must not be used to judge bytes.
+    ///
+    /// If a later server hashes on, say, 4 MiB and this downloader keeps
+    /// fetching 8 MiB ranges, then "chunk 1" means different bytes to each
+    /// side. Verifying anyway would reject perfectly good data — or, worse,
+    /// accept a piece whose hash happened to line up.
+    #[test]
+    fn a_different_chunk_grid_is_ignored_rather_than_trusted() {
+        let file = manifest_file(CHUNK_BYTES * 2, Some(refs(2)));
+
+        assert!(chunk_hashes_for(&file, Some(CHUNK_BYTES / 2)).is_none());
+        assert!(chunk_hashes_for(&file, Some(CHUNK_BYTES)).is_some());
+    }
+
+    /// An older server sends no grid at all, and that is not an error.
+    #[test]
+    fn a_server_that_sends_no_chunk_hashes_falls_back_quietly() {
+        let file = manifest_file(CHUNK_BYTES, None);
+
+        assert!(chunk_hashes_for(&file, None).is_none());
+        assert!(chunk_hashes_for(&file, Some(CHUNK_BYTES)).is_none());
+    }
+
+    /// A hash list that does not cover the file cannot be indexed by chunk.
+    ///
+    /// The worker looks its expected hash up by position. A short list would
+    /// silently leave the tail of a big file unverified while every earlier
+    /// chunk looked checked, which is the most misleading possible outcome.
+    #[test]
+    fn a_hash_list_that_does_not_cover_the_file_is_refused() {
+        let file = manifest_file(CHUNK_BYTES * 3, Some(refs(2)));
+
+        assert!(chunk_hashes_for(&file, Some(CHUNK_BYTES)).is_none());
+    }
+
+    /// The short final chunk still counts as a chunk.
+    #[test]
+    fn a_trailing_partial_chunk_is_covered() {
+        let file = manifest_file(CHUNK_BYTES * 2 + 1, Some(refs(3)));
+
+        assert_eq!(chunk_hashes_for(&file, Some(CHUNK_BYTES)).unwrap().len(), 3);
+    }
+
+    /// An empty file has no chunks, and an empty list is the right answer.
+    #[test]
+    fn an_empty_file_needs_no_chunk_hashes() {
+        let file = manifest_file(0, Some(Vec::new()));
+
+        assert_eq!(chunk_hashes_for(&file, Some(CHUNK_BYTES)).unwrap().len(), 0);
     }
 }

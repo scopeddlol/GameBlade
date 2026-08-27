@@ -15,6 +15,7 @@ import {
   type DownloadManifest,
   type LocalGameMatch,
   type GameFileEntry,
+  MESH_CHUNK_BYTES,
 } from '@gameblade/shared';
 import { eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -46,8 +47,17 @@ const ART_COLUMNS = {
 } as const satisfies Record<ArtKind, keyof typeof games.$inferInsert>;
 
 export async function gameRoutes(app: FastifyInstance): Promise<void> {
-  const { db, config, metadata, downloadTokens, catalog, achievements, images, clientButtons } =
-    app.gameblade;
+  const {
+    db,
+    config,
+    metadata,
+    downloadTokens,
+    catalog,
+    achievements,
+    images,
+    clientButtons,
+    chunks,
+  } = app.gameblade;
   const basePath = config.basePath;
 
   app.get('/games', async (request) => {
@@ -118,6 +128,13 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     // Installing implies wanting it in the library, so the two never drift.
     catalog.addToLibrary(context.user.id, id);
 
+    // Chunk hashes are only advertised when the whole game has them on the
+    // current grid. A partly chunked game would leave the downloader deciding
+    // per file whether a piece can be verified, and the answer to "can I trust
+    // bytes from a stranger" should not vary within one download.
+    const chunked = chunks.isGameChunked(id);
+    const chunksByFile = chunked ? chunks.chunksForGame(id) : new Map();
+
     const body: DownloadManifest = {
       gameId: game.id,
       title: game.title,
@@ -129,9 +146,16 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
         sizeBytes: file.sizeBytes,
         modifiedAt: file.modifiedAt,
         sha256: file.sha256,
+        ...(chunked ? { chunks: chunksByFile.get(file.id) ?? [] } : {}),
       })),
       token: issued.token,
       expiresAt: issued.expiresAt,
+      ...(chunked ? { chunkBytes: MESH_CHUNK_BYTES } : {}),
+      // One source today: the origin, over the download routes that already
+      // exist. The field is here from the start so a client learns to pick a
+      // source before there is ever more than one to pick, and adding nodes
+      // later needs no client release.
+      sources: [{ kind: 'origin' as const, label: 'Origin', priority: 0 }],
     };
     return body;
   });
@@ -646,6 +670,39 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
   app.get('/games/checksums/progress', async (request) => {
     requireAdmin(request);
     return app.gameblade.checksums.getProgress();
+  });
+
+  /**
+   * Compute per-chunk hashes, which is what makes a game fetchable from a mesh
+   * node rather than only from here.
+   *
+   * Separate from the checksum route above even though both read every byte,
+   * because they answer different questions: checksums tell an operator whether
+   * the archive is still intact, chunk hashes tell a client whether a piece
+   * that arrived from somewhere else is genuine. This pass writes the
+   * whole-file hash too, so running it makes the checksum pass redundant.
+   */
+  app.post('/games/:id/chunks', async (request, reply) => {
+    requireAdmin(request);
+    const { id } = request.params as { id: string };
+    const { force } = (request.body ?? {}) as { force?: boolean };
+
+    const game = db.select().from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    if (chunks.isRunning) {
+      return reply.code(409).send({
+        error: { code: 'chunking_in_progress', message: 'Chunk hashes are already being computed' },
+      });
+    }
+
+    void chunks.start(id, { force: force ?? false });
+    return reply.code(202).send({ started: true });
+  });
+
+  app.get('/games/chunks/progress', async (request) => {
+    requireAdmin(request);
+    return chunks.getProgress();
   });
 
   /** Exclude a game from future auto-matching without deleting it. */

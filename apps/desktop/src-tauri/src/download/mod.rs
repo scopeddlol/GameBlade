@@ -1062,9 +1062,12 @@ mod tests {
                 path: "data/game file<>.dat".to_string(),
                 size_bytes: 42,
                 sha256: None,
+                chunks: None,
             }],
             token: String::new(),
             expires_at: None,
+            chunk_bytes: None,
+            sources: None,
         }
     }
 

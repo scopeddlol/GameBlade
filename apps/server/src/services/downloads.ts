@@ -1,5 +1,18 @@
-import { createHmac, randomBytes } from 'node:crypto';
-import { DOWNLOAD_TOKEN_TTL_SECONDS } from '@gameblade/shared';
+import {
+  createHmac,
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  randomBytes,
+  sign as signBytes,
+  verify as verifyBytes,
+  type KeyObject,
+} from 'node:crypto';
+import {
+  DOWNLOAD_TOKEN_TTL_SECONDS,
+  MESH_GRANT_TTL_SECONDS,
+  type MeshGrantClaims,
+} from '@gameblade/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
@@ -15,23 +28,50 @@ export interface DownloadClaims {
 }
 
 const SECRET_KEY = 'downloadTokenSecret';
+const SIGNING_KEY = 'meshSigningKeyPkcs8';
 
 /**
- * Stateless, signed download tokens.
+ * Marks a token signed with the Ed25519 key rather than the HMAC secret.
+ *
+ * Tokens live for six hours, so an upgrade always finds some in flight. The
+ * prefix lets `verify` tell the two apart instead of guessing, which is what
+ * makes the switch invisible to a client mid-download.
+ */
+const V2_PREFIX = 'v2.';
+
+/**
+ * Stateless, signed download tokens — and the mesh grants that extend the same
+ * idea to nodes.
  *
  * The desktop client opens many parallel connections per game and resumes them
  * across restarts. Issuing a signed token instead of a database row means those
  * connections cost no writes and survive a server restart, while still expiring
  * and still being scoped to one user and one game.
+ *
+ * Signing is asymmetric, and that is the point rather than an upgrade for its
+ * own sake. Under HMAC, verifying a token requires the secret that mints one,
+ * so a node that could check a client's authority could also manufacture
+ * authority for itself and for anyone else. With Ed25519 a node holds only the
+ * public half: it can prove the coordinator said yes, and it can say nothing on
+ * the coordinator's behalf. Enrolling a node therefore stops being a decision
+ * about trust.
+ *
+ * The old HMAC secret is kept and still verified, because tokens issued before
+ * an upgrade have to keep working until they expire on their own.
  */
 export class DownloadTokenService {
   private secret: Buffer;
+  private privateKey: KeyObject;
+  private publicKey: KeyObject;
 
   constructor(
     private readonly db: Db,
     envSecret: string | null,
   ) {
     this.secret = envSecret ? Buffer.from(envSecret, 'utf8') : this.loadOrCreateSecret();
+    const keys = this.loadOrCreateSigningKey();
+    this.privateKey = keys.privateKey;
+    this.publicKey = keys.publicKey;
   }
 
   private loadOrCreateSecret(): Buffer {
@@ -42,16 +82,60 @@ export class DownloadTokenService {
 
     // Persist a generated secret so tokens stay valid across restarts.
     const generated = randomBytes(32);
-    const encoded = generated.toString('base64');
+    this.writeSetting(SECRET_KEY, generated.toString('base64'));
+    return generated;
+  }
+
+  /**
+   * The Ed25519 keypair this coordinator signs with.
+   *
+   * Stored as PKCS#8 rather than raw scalar bytes so it round-trips through
+   * `createPrivateKey` without this file having to know anything about the
+   * encoding, and so a rotation can be done by deleting one settings row.
+   */
+  private loadOrCreateSigningKey(): { privateKey: KeyObject; publicKey: KeyObject } {
+    const row = this.db.select().from(settings).where(eq(settings.key, SIGNING_KEY)).get();
+
+    if (row && typeof row.value === 'string' && row.value.length > 0) {
+      try {
+        const privateKey = createPrivateKey({
+          key: Buffer.from(row.value, 'base64'),
+          format: 'der',
+          type: 'pkcs8',
+        });
+        return { privateKey, publicKey: createPublicKey(privateKey) };
+      } catch {
+        // A key that will not load is worse than no key: every token it signed
+        // is unverifiable anyway, so generate a fresh one rather than refusing
+        // to boot.
+      }
+    }
+
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const der = privateKey.export({ format: 'der', type: 'pkcs8' });
+    this.writeSetting(SIGNING_KEY, der.toString('base64'));
+    return { privateKey, publicKey };
+  }
+
+  private writeSetting(key: string, value: string): void {
+    const updatedAt = new Date().toISOString();
     this.db
       .insert(settings)
-      .values({ key: SECRET_KEY, value: encoded as never, updatedAt: new Date().toISOString() })
-      .onConflictDoUpdate({
-        target: settings.key,
-        set: { value: encoded as never, updatedAt: new Date().toISOString() },
-      })
+      .values({ key, value: value as never, updatedAt })
+      .onConflictDoUpdate({ target: settings.key, set: { value: value as never, updatedAt } })
       .run();
-    return generated;
+  }
+
+  /**
+   * The public half, base64url, for anyone who has to check a signature.
+   *
+   * Handed to nodes at enrolment and published to clients so they can tell a
+   * grant the coordinator issued from one a node made up.
+   */
+  publicKeyBase64(): string {
+    // SPKI carries the algorithm identifier, so a verifier does not have to be
+    // told out of band that this is Ed25519.
+    return this.publicKey.export({ format: 'der', type: 'spki' }).toString('base64url');
   }
 
   issue(
@@ -63,27 +147,14 @@ export class DownloadTokenService {
   } {
     const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
     const payload: DownloadClaims = { ...claims, expiresAt };
-    const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-    const signature = this.sign(body);
     return {
-      token: `${body}.${signature}`,
+      token: this.encode(payload),
       expiresAt: new Date(expiresAt * 1000).toISOString(),
     };
   }
 
   verify(token: string): DownloadClaims {
-    const [body, signature] = token.split('.', 2);
-    if (!body || !signature) throw ApiError.forbidden('Malformed download token');
-    if (!safeEqual(signature, this.sign(body))) {
-      throw ApiError.forbidden('Invalid download token');
-    }
-
-    let claims: DownloadClaims;
-    try {
-      claims = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as DownloadClaims;
-    } catch {
-      throw ApiError.forbidden('Malformed download token');
-    }
+    const claims = this.decode<DownloadClaims>(token);
 
     if (claims.expiresAt * 1000 <= Date.now()) {
       // A code of its own, not plain `forbidden`: the desktop client refreshes
@@ -94,7 +165,90 @@ export class DownloadTokenService {
     return claims;
   }
 
-  private sign(body: string): string {
+  /* ------------------------------------------------------------- mesh grants */
+
+  /**
+   * Authorise one account to pull one game from one node, up to a byte ceiling.
+   *
+   * The ceiling is what keeps quota enforcement meaningful once bytes stop
+   * flowing through the server: the node counts down against it locally and
+   * refuses to serve past it, so an account that has spent its allowance cannot
+   * simply talk to a node directly instead.
+   */
+  issueGrant(
+    claims: Omit<MeshGrantClaims, 'expiresAt' | 'nonce'>,
+    ttlSeconds = MESH_GRANT_TTL_SECONDS,
+  ): { grant: string; expiresAt: string; nonce: string } {
+    const nonce = randomBytes(9).toString('base64url');
+    const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const payload: MeshGrantClaims = { ...claims, expiresAt, nonce };
+    return {
+      grant: this.encode(payload),
+      expiresAt: new Date(expiresAt * 1000).toISOString(),
+      nonce,
+    };
+  }
+
+  /**
+   * Check a grant the same way a node does.
+   *
+   * Used by the coordinator's own relay path, and by the tests that pin the
+   * wire format a node depends on.
+   */
+  verifyGrant(grant: string): MeshGrantClaims {
+    const claims = this.decode<MeshGrantClaims>(grant);
+    if (claims.expiresAt * 1000 <= Date.now()) {
+      throw new ApiError(403, 'grant_expired', 'This transfer grant has expired.');
+    }
+    return claims;
+  }
+
+  /* ---------------------------------------------------------------- encoding */
+
+  private encode(payload: unknown): string {
+    const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+    return `${V2_PREFIX}${body}.${this.signEd25519(body)}`;
+  }
+
+  private decode<T>(token: string): T {
+    const isV2 = token.startsWith(V2_PREFIX);
+    const [body, signature] = (isV2 ? token.slice(V2_PREFIX.length) : token).split('.', 2);
+    if (!body || !signature) throw ApiError.forbidden('Malformed download token');
+
+    const ok = isV2
+      ? this.verifyEd25519(body, signature)
+      : safeEqual(signature, this.signHmac(body));
+    if (!ok) throw ApiError.forbidden('Invalid download token');
+
+    try {
+      return JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as T;
+    } catch {
+      throw ApiError.forbidden('Malformed download token');
+    }
+  }
+
+  private signEd25519(body: string): string {
+    // Ed25519 does its own hashing, so the algorithm argument is null.
+    return signBytes(null, Buffer.from(body, 'utf8'), this.privateKey).toString('base64url');
+  }
+
+  private verifyEd25519(body: string, signature: string): boolean {
+    try {
+      return verifyBytes(
+        null,
+        Buffer.from(body, 'utf8'),
+        this.publicKey,
+        Buffer.from(signature, 'base64url'),
+      );
+    } catch {
+      // A signature that is not even well-formed base64url lands here; it is
+      // simply invalid, not an error worth propagating.
+      return false;
+    }
+  }
+
+  /** Legacy, verify-only: tokens minted before the switch to Ed25519. */
+  private signHmac(body: string): string {
     return createHmac('sha256', this.secret).update(body).digest('base64url');
   }
 }

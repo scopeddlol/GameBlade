@@ -1,4 +1,5 @@
 import type { LandingBlock } from './landing.js';
+import type { ChunkRef, MeshSource } from './mesh.js';
 import type { MessageInfo } from './messaging.js';
 import type { ThemePreset, ThemeTokens } from './theme.js';
 import type {
@@ -133,6 +134,15 @@ export interface GameFileEntry {
   sizeBytes: number;
   modifiedAt: string;
   sha256: string | null;
+  /**
+   * Per-chunk hashes, when they have been computed.
+   *
+   * Absent means this file has not been chunk-hashed yet and the client must
+   * treat the origin as its only trustworthy source: without these it can
+   * verify a whole file but cannot verify a piece, so it cannot safely stitch
+   * one together from several places.
+   */
+  chunks?: ChunkRef[];
 }
 
 /**
@@ -149,6 +159,22 @@ export interface DownloadManifest {
   /** Short-lived token accepted in place of a session on download routes. */
   token: string;
   expiresAt: string;
+  /**
+   * Chunk size the `chunks` hashes were computed over.
+   *
+   * Sent rather than assumed so that changing `MESH_CHUNK_BYTES` in a later
+   * release cannot make an older client verify new hashes over the wrong
+   * boundaries — it sees a size it does not implement and stays on the origin.
+   */
+  chunkBytes?: number;
+  /**
+   * Where this game's bytes may be fetched from, best first.
+   *
+   * Always contains the origin. A client that does not understand mesh sources
+   * ignores the field entirely and keeps using the download routes, which is
+   * what makes adding this safe to ship before any node exists.
+   */
+  sources?: MeshSource[];
 }
 
 export interface LibraryInfo {

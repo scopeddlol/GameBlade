@@ -12,6 +12,7 @@ import { CatalogService } from './services/catalog.js';
 import { ClientButtonService } from './services/clientButtons.js';
 import { CollectionService } from './services/collections.js';
 import { ChecksumService } from './services/checksums.js';
+import { ChunkService } from './services/chunks.js';
 import { DownloadTokenService } from './services/downloads.js';
 import { FriendService } from './services/friends.js';
 import { GameRequestService } from './services/gameRequests.js';
@@ -53,6 +54,8 @@ export interface GamebladeContext {
   metadata: MetadataService;
   scanner: ScannerService;
   checksums: ChecksumService;
+  /** Per-chunk hashes, which are what let a game be fetched from a node. */
+  chunks: ChunkService;
   downloadTokens: DownloadTokenService;
   images: ImageCache;
   installer: InstallerService;
@@ -120,6 +123,7 @@ export function createContext(
   const backups = new BackupService(config.dataDir, sqlite);
   const scanner = new ScannerService(db, metadata, logger);
   const checksums = new ChecksumService(db, logger);
+  const chunks = new ChunkService(db, logger);
   const auth = new AuthService(db);
   const downloadTokens = new DownloadTokenService(db, config.sessionSecret);
   const installer = new InstallerService(db, config);
@@ -175,6 +179,7 @@ export function createContext(
     metadata,
     scanner,
     checksums,
+    chunks,
     downloadTokens,
     images,
     installer,

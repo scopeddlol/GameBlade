@@ -239,10 +239,42 @@ export const gameFiles = sqliteTable(
      */
     integrity: text('integrity', { enum: ['ok', 'mismatch', 'missing'] }),
     verifiedAt: text('verified_at'),
+    /** When per-chunk hashes were last computed; null means never. */
+    chunkedAt: text('chunked_at'),
+    /**
+     * The grid those hashes were computed on.
+     *
+     * Recorded rather than assumed: if the constant ever changes, rows hashed
+     * on the old grid are identifiable and re-hashable instead of silently
+     * verifying arriving bytes against boundaries nobody uses any more.
+     */
+    chunkBytes: integer('chunk_bytes'),
   },
   (t) => [
     uniqueIndex('game_files_game_relpath_idx').on(t.gameId, t.relPath),
     index('game_files_game_idx').on(t.gameId),
+  ],
+);
+
+/**
+ * Content-addressed pieces of a file, on the fixed `MESH_CHUNK_BYTES` grid.
+ *
+ * There is deliberately no offset column: the index times the grid size is the
+ * offset, and a stored offset is one more thing that can contradict it.
+ */
+export const gameFileChunks = sqliteTable(
+  'game_file_chunks',
+  {
+    fileId: text('file_id')
+      .notNull()
+      .references(() => gameFiles.id, { onDelete: 'cascade' }),
+    chunkIndex: integer('chunk_index').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    sha256: text('sha256').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.fileId, t.chunkIndex] }),
+    index('game_file_chunks_sha_idx').on(t.sha256),
   ],
 );
 
