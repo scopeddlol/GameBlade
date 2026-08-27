@@ -1388,6 +1388,7 @@ dependencies = [
 name = "gameblade-desktop"
 version = "0.5.3"
 dependencies = [
+ "async-trait",
  "chrono",
  "dirs 5.0.1",
  "fs4",

@@ -8,6 +8,8 @@
 
 pub(crate) mod engine;
 pub(crate) mod mesh;
+pub(crate) mod seeder;
+pub(crate) mod seeding;
 
 use crate::api::{ApiClient, DownloadManifest};
 use crate::error::{AppError, AppResult};

@@ -60,6 +60,17 @@ pub struct Settings {
     /// setting on the server, so a single machine can stay quiet.
     pub share_activity: bool,
 
+    /// Share installed games with other players on this server.
+    ///
+    /// Off by default and deliberately not implied by anything else. The
+    /// operator's own switch decides whether the server will accept a peer at
+    /// all; this one decides whether this machine offers to be one. Both have
+    /// to be on, because they are different consents: one is an operator
+    /// sharing machines they run, the other is a player uploading to strangers
+    /// on their own connection.
+    #[serde(default)]
+    pub share_downloads: bool,
+
     /// Minimize to the tray instead of exiting when a game launches.
     ///
     /// Aliased so a settings.json saved before this field was renamed still
@@ -118,6 +129,8 @@ impl Default for Settings {
             auto_sync_on_start: true,
             prompt_on_save_conflict: true,
             share_activity: true,
+            // Never on unless a player says so.
+            share_downloads: false,
             minimize_on_launch: true,
             download_concurrency: 4,
             verify_downloads: true,

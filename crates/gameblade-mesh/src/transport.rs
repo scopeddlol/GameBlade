@@ -218,7 +218,9 @@ impl MeshEndpoint {
 
         let mut endpoint = if serve {
             let (chain, key) = node_certificate(&identity)?;
-            let mut tls = rustls::ServerConfig::builder()
+            let mut tls = rustls::ServerConfig::builder_with_provider(crypto_provider())
+                .with_protocol_versions(&[&rustls::version::TLS13])
+                .map_err(|err| MeshError::Protocol(format!("could not configure TLS: {err}")))?
                 .with_no_client_auth()
                 .with_single_cert(chain, key)
                 .map_err(|err| MeshError::Identity(format!("could not configure TLS: {err}")))?;
@@ -338,8 +340,23 @@ fn transport_config() -> TransportConfig {
     config
 }
 
+/// The crypto backend, named rather than detected.
+///
+/// rustls picks a provider from crate features, and panics if it cannot tell
+/// which was meant. The desktop client links rustls twice over — once here and
+/// once through reqwest for HTTPS — so which backend "wins" is a property of
+/// the whole binary rather than of this crate. Installing a process-wide
+/// default would be this crate reaching out and deciding for the host
+/// application; naming the provider on each config decides only for the
+/// connections this crate makes, and cannot panic.
+fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
+    Arc::new(rustls::crypto::aws_lc_rs::default_provider())
+}
+
 fn pinned_client_config(expected: &PublicKey) -> MeshResult<ClientConfig> {
-    let mut tls = rustls::ClientConfig::builder()
+    let mut tls = rustls::ClientConfig::builder_with_provider(crypto_provider())
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(|err| MeshError::Protocol(format!("could not configure TLS: {err}")))?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedNode {
             expected: identity_dns_name(expected),

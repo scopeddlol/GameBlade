@@ -11,6 +11,7 @@ mod settings;
 
 use api::{ApiClient, UserInfo};
 use credentials::StoredSession;
+use download::seeder::Seeder;
 use download::{DownloadManager, DownloadState};
 use error::{AppError, AppResult};
 use install::{InstallCandidate, InstallManager, InstalledGame};
@@ -56,6 +57,8 @@ struct AppState {
     /// The last answer to each GET, and the artwork, kept so the client is
     /// still a client with the server switched off.
     cache: Arc<offline::Cache>,
+    /// Running only while both the operator and this player have said yes.
+    seeder: Arc<RwLock<Option<Arc<Seeder>>>>,
 }
 
 impl AppState {
@@ -67,6 +70,105 @@ impl AppState {
 
     async fn install_dir(&self) -> PathBuf {
         self.settings.read().await.install_dir.clone()
+    }
+
+    /// Start or stop seeding to match what the player has chosen.
+    ///
+    /// Called after sign-in and after any settings change, so the switch takes
+    /// effect when it is flipped rather than at the next restart. The server's
+    /// own switch is checked inside `Seeder::start`, which is where a refusal
+    /// belongs: this side should not have to know why the answer was no.
+    async fn sync_seeding(&self) {
+        let wanted = self.settings.read().await.share_downloads;
+        let running = self.seeder.read().await.is_some();
+
+        if wanted == running {
+            return;
+        }
+
+        if !wanted {
+            self.stop_seeding().await;
+            return;
+        }
+
+        let Ok(client) = self.client().await else {
+            return;
+        };
+        let coordinator = match self.coordinator_key(&client).await {
+            Some(key) => key,
+            // No usable coordinator key means no node would accept a grant
+            // this server issued, so there is nothing to serve.
+            None => return,
+        };
+
+        let label = hostname_label();
+        if let Some(seeder) = Seeder::start(client, coordinator, true, label).await {
+            *self.seeder.write().await = Some(seeder);
+        }
+    }
+
+    /// Offer an installed game's files, if seeding is running.
+    ///
+    /// The manifest is the source of the hashes: they are exactly what the copy
+    /// was verified against as it arrived, so a file that has not been touched
+    /// since will still match them and one that has will not — which is the
+    /// distinction that makes serving from a player's disk safe.
+    async fn offer_for_seeding(&self, game_id: &str, install_root: &Path) {
+        let Some(seeder) = self.seeder.read().await.as_ref().map(Arc::clone) else {
+            return;
+        };
+        let Ok(client) = self.client().await else {
+            return;
+        };
+        let Ok(manifest) = client.manifest(game_id).await else {
+            return;
+        };
+
+        // Only on the grid this build uses. Anything else and the pieces this
+        // client would serve are not the pieces anyone is asking for.
+        if manifest.chunk_bytes != Some(gameblade_mesh::MESH_CHUNK_BYTES) {
+            return;
+        }
+
+        let files: Vec<download::seeding::SeedableFile> = manifest
+            .files
+            .iter()
+            .filter_map(|file| {
+                let chunks = file.chunks.as_ref()?;
+                Some(download::seeding::SeedableFile {
+                    file_id: file.id.clone(),
+                    rel_path: file.path.clone(),
+                    path: install_root.join(file.path.replace('/', std::path::MAIN_SEPARATOR_STR)),
+                    size_bytes: file.size_bytes,
+                    whole_sha256: file.sha256.clone(),
+                    chunk_hashes: chunks.iter().map(|chunk| chunk.sha256.clone()).collect(),
+                })
+            })
+            .collect();
+
+        // All or nothing: a partial offer would advertise a fingerprint the
+        // coordinator computes over every file and then drop anyway.
+        if files.len() == manifest.files.len() && !files.is_empty() {
+            seeder.index().write().await.offer(game_id, files);
+        }
+    }
+
+    async fn stop_seeding(&self) {
+        let seeder = self.seeder.write().await.take();
+        if let (Some(seeder), Ok(client)) = (seeder, self.client().await) {
+            let _ = seeder.stop(&client).await;
+        }
+    }
+
+    /// The coordinator's signing key, as published to clients.
+    async fn coordinator_key(&self, client: &ApiClient) -> Option<gameblade_mesh::PublicKey> {
+        // Any game will do — the key is per server, not per game — and resolve
+        // is the only endpoint that publishes it.
+        let resolution = client.resolve_mesh("unknown").await;
+        resolution
+            .coordinator_public_key
+            .as_deref()
+            .and_then(|key| gameblade_mesh::coordinator_key_from_spki(key).ok())
     }
 
     /// Records whether the server just answered, and says so once when it
@@ -91,6 +193,20 @@ impl AppState {
     fn is_online(&self) -> bool {
         self.online.load(Ordering::SeqCst)
     }
+}
+
+/// A name for this machine, for the operator's node list.
+///
+/// The hostname, or a plain fallback. Not the username: a peer appears in an
+/// administrator's list, and a machine name is what an operator needs to
+/// recognise while being far less about a person than an account name.
+fn hostname_label() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .filter(|name| !name.trim().is_empty())
+        .map(|name| name.trim().chars().take(48).collect())
+        .unwrap_or_else(|| "A player's PC".to_string())
 }
 
 /// What the UI is told about the current session.
@@ -154,12 +270,19 @@ async fn sign_in(
 
     // Anything the queue was holding for a signed-in session can go now.
     state.downloads.wake().await;
+
+    // No-op unless this player has opted in and the server accepts peers.
+    state.sync_seeding().await;
     Ok(user)
 }
 
 #[tauri::command]
 async fn sign_out(state: State<'_, AppState>) -> AppResult<()> {
     state.realtime.stop();
+    // Before the session goes: withdrawing needs a client, and a peer that
+    // outlived its account would be serving other people's downloads on behalf
+    // of nobody.
+    state.stop_seeding().await;
     credentials::clear()?;
     *state.session.write().await = None;
     // Everything the offline cache holds belongs to the account that just left:
@@ -523,6 +646,11 @@ async fn update_settings(state: State<'_, AppState>, patch: Settings) -> AppResu
             verify: sanitised.verify_downloads,
         });
 
+    // Seeding follows the switch immediately. A preference that only took
+    // effect at the next restart would be worse than not offering one, and for
+    // this preference in particular "I turned it off" has to mean now.
+    state.sync_seeding().await;
+
     Ok(sanitised)
 }
 
@@ -733,6 +861,15 @@ async fn finish_install(
     };
 
     state.installs.record(record.clone()).await?;
+
+    // Offer it, if this player has opted in. Done from the manifest rather than
+    // by re-hashing the install: the hashes are what the copy was verified
+    // against on the way in, and recomputing them would read every byte again
+    // to reach the same answer.
+    state
+        .offer_for_seeding(&record.game_id, &record.install_path)
+        .await;
+
     Ok(record)
 }
 
@@ -883,6 +1020,12 @@ async fn uninstall_game(state: State<'_, AppState>, game_id: String) -> AppResul
             "Quit the game before uninstalling it".to_string(),
         ));
     }
+    // Stop offering it before the files go, so nothing is advertised that is
+    // about to stop existing.
+    if let Some(seeder) = state.seeder.read().await.as_ref() {
+        seeder.index().write().await.withdraw(&game_id);
+    }
+
     state.installs.uninstall(&game_id).await
 }
 
@@ -1313,6 +1456,7 @@ pub fn run() {
                 // banner over a perfectly healthy first launch.
                 online: Arc::new(AtomicBool::new(true)),
                 cache,
+                seeder: Arc::new(RwLock::new(None)),
             });
             Ok(())
         })

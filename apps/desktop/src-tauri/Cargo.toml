@@ -52,6 +52,7 @@ thiserror = "2"
 # Installing archived games and packing cloud saves.
 zip = { version = "2", default-features = false, features = ["deflate", "bzip2", "zstd"] }
 walkdir = "2"
+async-trait = "0.1"
 globset = "0.4"
 
 # Resolving {appdata}, {documents} and friends when a save rule is applied.

@@ -131,6 +131,22 @@ pub struct MeshResolution {
     pub coordinator_public_key: Option<String>,
 }
 
+/// What the coordinator hands back when this machine offers to be a peer.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PeerRegistration {
+    #[serde(rename = "nodeId")]
+    pub node_id: String,
+    /// Returned once. Only its hash is stored server-side.
+    #[serde(rename = "nodeToken")]
+    pub node_token: String,
+    #[serde(rename = "heartbeatSeconds", default = "default_heartbeat")]
+    pub heartbeat_seconds: u64,
+}
+
+fn default_heartbeat() -> u64 {
+    30
+}
+
 /// What `POST /download/:gameId/token` hands back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssuedDownloadToken {
@@ -402,6 +418,76 @@ impl ApiClient {
             // nothing a caller could usefully do with the distinction.
             _ => MeshResolution::default(),
         }
+    }
+
+    /// Offer this machine as a peer node.
+    ///
+    /// Fails when the operator has seeding switched off, which is a refusal to
+    /// respect rather than an error to retry: the answer will not change until
+    /// they change it.
+    pub async fn register_peer(
+        &self,
+        public_key: &str,
+        label: &str,
+        endpoints: &[(String, u16)],
+    ) -> AppResult<PeerRegistration> {
+        let body = serde_json::json!({
+            "publicKey": public_key,
+            "label": label,
+            "endpoints": endpoints
+                .iter()
+                .map(|(address, port)| serde_json::json!({
+                    "kind": "local",
+                    "address": address,
+                    "port": port,
+                }))
+                .collect::<Vec<_>>(),
+        });
+
+        let request = self.authorised(self.http.post(self.endpoint("/mesh/peer")))?;
+        let response = check_status(request.json(&body).send().await?).await?;
+        Ok(response.json().await?)
+    }
+
+    /// Stay registered, and say what is currently on offer.
+    pub async fn peer_heartbeat(
+        &self,
+        node_id: &str,
+        node_token: &str,
+        games: &[(String, String)],
+    ) -> AppResult<()> {
+        let body = serde_json::json!({
+            "endpoints": [],
+            "games": games
+                .iter()
+                .map(|(game_id, content_hash)| serde_json::json!({
+                    "gameId": game_id,
+                    "contentHash": content_hash,
+                }))
+                .collect::<Vec<_>>(),
+        });
+
+        let response = self
+            .http
+            .post(self.endpoint("/mesh/heartbeat"))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {node_token}"),
+            )
+            .header("x-gameblade-node", node_id)
+            .json(&body)
+            .send()
+            .await?;
+
+        check_status(response).await?;
+        Ok(())
+    }
+
+    /// Stop being a peer — sign-out, or the switch going off.
+    pub async fn withdraw_peer(&self) -> AppResult<()> {
+        let request = self.authorised(self.http.delete(self.endpoint("/mesh/peer")))?;
+        check_status(request.send().await?).await?;
+        Ok(())
     }
 
     /// Reads a non-2xx response into its structured parts without turning it
