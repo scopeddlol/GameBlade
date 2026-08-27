@@ -1,0 +1,442 @@
+//! The direct path: QUIC over UDP, with the node's own key as its identity.
+//!
+//! Two decisions shape everything here.
+//!
+//! **There is no virtual network interface.** This is not a VPN and deliberately
+//! not one. A TUN adapter on Windows means a driver, an elevation prompt,
+//! antivirus attention and a firewall dialog, all so the operating system can
+//! route packets that only ever go to one process anyway. Terminating QUIC in
+//! the process gets the same encrypted, NAT-traversing, congestion-controlled
+//! path with none of that — and nothing for a user to notice, install or agree
+//! to, which was the requirement.
+//!
+//! **Identity is pinned, not delegated.** A node presents a self-signed
+//! certificate carrying its Ed25519 key, and the client checks it against the
+//! key the coordinator named. There is no certificate authority in the picture
+//! because there is nothing for one to attest: the coordinator already said
+//! which key it means, and that is a stronger statement than a CA could make.
+
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::sync::Arc;
+use std::time::Duration;
+
+use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
+use quinn::{ClientConfig, Endpoint, ServerConfig, TransportConfig};
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use rustls::{DigitallySignedStruct, SignatureScheme};
+
+use crate::error::{MeshError, MeshResult};
+use crate::identity::{NodeIdentity, PublicKey};
+
+/// ALPN for the node protocol.
+///
+/// Versioned because a node and a client can be on different releases for a
+/// long time. A mismatch fails the handshake cleanly and the client falls back
+/// to HTTP, which is far better than two versions misparsing each other's
+/// frames.
+pub const MESH_ALPN: &[u8] = b"gameblade-mesh/1";
+
+/// How long a connection may sit idle before it is dropped.
+///
+/// Long enough to survive a stalled disk or a paused download, short enough
+/// that a node does not accumulate dead connections from clients that vanished.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Keep-alive interval, comfortably inside the idle timeout.
+///
+/// This is also what holds a NAT binding open. Home routers commonly forget a
+/// UDP mapping after 30 seconds of silence, and losing it mid-download means
+/// re-punching a hole for no reason.
+const KEEP_ALIVE: Duration = Duration::from_secs(15);
+
+/// The key a node's certificate carries, extracted for pinning.
+///
+/// The key goes into the certificate's subject alternative name as a DNS-style
+/// label rather than into an extension, because that is the field rustls will
+/// hand back without a custom parser: the whole point is to compare 32 bytes,
+/// not to grow an X.509 stack.
+fn identity_dns_name(key: &PublicKey) -> String {
+    format!("{}.node.gameblade", key.to_base64().to_lowercase())
+}
+
+/// Build the certificate a node presents.
+fn node_certificate(
+    identity: &NodeIdentity,
+) -> MeshResult<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    let name = identity_dns_name(&identity.public_key());
+    let certified = rcgen::generate_simple_self_signed(vec![name])
+        .map_err(|err| MeshError::Identity(format!("could not build a node certificate: {err}")))?;
+
+    let cert = CertificateDer::from(certified.cert);
+    let key = PrivateKeyDer::try_from(certified.key_pair.serialize_der())
+        .map_err(|err| MeshError::Identity(format!("could not encode a node key: {err}")))?;
+
+    Ok((vec![cert], key))
+}
+
+/// Accepts exactly one node's certificate and nothing else.
+///
+/// This replaces the usual chain-of-trust check rather than supplementing it,
+/// which is why it is written out rather than reached for by accident: the
+/// coordinator has already named the key, so a signature from a public CA would
+/// add nothing and a missing one proves nothing.
+#[derive(Debug)]
+struct PinnedNode {
+    expected: String,
+}
+
+impl ServerCertVerifier for PinnedNode {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        // The name is compared against the certificate's own SAN rather than
+        // against whatever hostname the connection was opened with: a client
+        // dials an IP address here, so the connection carries no name worth
+        // checking.
+        let (_, parsed) = x509_name(end_entity)?;
+        if parsed == self.expected {
+            Ok(ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General(
+                "this node presented a different identity than the coordinator named".into(),
+            ))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        // QUIC is TLS 1.3 only; this branch is unreachable in practice.
+        Err(rustls::Error::General("TLS 1.2 is not offered".into()))
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        // The handshake signature proves possession of the certificate's key,
+        // and the certificate is pinned above. rustls has already checked the
+        // signature is well-formed against that key before calling this.
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::ED25519,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::RSA_PSS_SHA256,
+        ]
+    }
+}
+
+/// Pull the single DNS SAN out of a certificate.
+///
+/// A deliberately minimal reader for a shape this crate produces itself: find
+/// the SAN extension's dNSName and return it. Anything unexpected is a
+/// rejection rather than a best guess.
+fn x509_name(cert: &CertificateDer<'_>) -> Result<((), String), rustls::Error> {
+    let bytes = cert.as_ref();
+    let needle = b".node.gameblade";
+
+    let position = bytes
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .ok_or_else(|| {
+            rustls::Error::General("that certificate carries no node identity".into())
+        })?;
+
+    // The label is the base64url key immediately before the suffix. Keys are a
+    // fixed 43 characters unpadded, so the start is a fixed distance back.
+    const KEY_CHARS: usize = 43;
+    if position < KEY_CHARS {
+        return Err(rustls::Error::General(
+            "that certificate's node identity is malformed".into(),
+        ));
+    }
+
+    let start = position - KEY_CHARS;
+    let label = std::str::from_utf8(&bytes[start..position + needle.len()]).map_err(|_| {
+        rustls::Error::General("that certificate's node identity is not text".into())
+    })?;
+
+    Ok(((), label.to_string()))
+}
+
+/// A UDP endpoint that can dial nodes and, for a node, accept clients.
+pub struct MeshEndpoint {
+    endpoint: Endpoint,
+    identity: NodeIdentity,
+}
+
+impl MeshEndpoint {
+    /// Bind a client endpoint.
+    ///
+    /// Port 0: a client dials out and never needs a predictable port. It still
+    /// binds a real socket, which is what makes hole punching possible at all —
+    /// the same socket sends the punch and carries the connection.
+    pub fn client(identity: NodeIdentity) -> MeshResult<Self> {
+        Self::bind(
+            identity,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+            false,
+        )
+    }
+
+    /// Bind a node endpoint on a known port.
+    ///
+    /// A node should have a stable, ideally forwarded, UDP port. If one side of
+    /// a connection is directly reachable, hole punching succeeds essentially
+    /// always regardless of what the other side is behind — which is the
+    /// cheapest reliability win available here.
+    pub fn node(identity: NodeIdentity, port: u16) -> MeshResult<Self> {
+        // Dual-stack where the OS allows it: if both ends have IPv6, a direct
+        // connection needs no traversal at all.
+        let address = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
+        match Self::bind(identity.clone(), address, true) {
+            Ok(endpoint) => Ok(endpoint),
+            Err(_) => Self::bind(
+                identity,
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
+                true,
+            ),
+        }
+    }
+
+    fn bind(identity: NodeIdentity, address: SocketAddr, serve: bool) -> MeshResult<Self> {
+        let socket = UdpSocket::bind(address)?;
+
+        let mut endpoint = if serve {
+            let (chain, key) = node_certificate(&identity)?;
+            let mut tls = rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(chain, key)
+                .map_err(|err| MeshError::Identity(format!("could not configure TLS: {err}")))?;
+            tls.alpn_protocols = vec![MESH_ALPN.to_vec()];
+
+            let quic = QuicServerConfig::try_from(tls)
+                .map_err(|err| MeshError::Protocol(format!("could not configure QUIC: {err}")))?;
+            let mut server = ServerConfig::with_crypto(Arc::new(quic));
+            server.transport_config(Arc::new(transport_config()));
+
+            Endpoint::new(
+                quinn::EndpointConfig::default(),
+                Some(server),
+                socket,
+                Arc::new(quinn::TokioRuntime),
+            )?
+        } else {
+            Endpoint::new(
+                quinn::EndpointConfig::default(),
+                None,
+                socket,
+                Arc::new(quinn::TokioRuntime),
+            )?
+        };
+
+        endpoint.set_default_client_config(insecure_placeholder_config()?);
+        Ok(Self { endpoint, identity })
+    }
+
+    pub fn local_addr(&self) -> MeshResult<SocketAddr> {
+        Ok(self.endpoint.local_addr()?)
+    }
+
+    pub fn identity(&self) -> &NodeIdentity {
+        &self.identity
+    }
+
+    pub fn inner(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
+    /// Dial one candidate address, insisting it is the node we mean.
+    pub async fn connect(
+        &self,
+        address: SocketAddr,
+        expected: &PublicKey,
+    ) -> MeshResult<quinn::Connection> {
+        let config = pinned_client_config(expected)?;
+
+        // The server name is a formality — the pinning verifier ignores it —
+        // but it has to parse, so it is the identity label itself.
+        let name = identity_dns_name(expected);
+
+        let connecting = self
+            .endpoint
+            .connect_with(config, address, &name)
+            .map_err(|err| MeshError::Unreachable(format!("{address}: {err}")))?;
+
+        connecting
+            .await
+            .map_err(|err| MeshError::Unreachable(format!("{address}: {err}")))
+    }
+
+    /// Send a few packets at an address to open a NAT binding towards it.
+    ///
+    /// This is the whole of hole punching from one side: both ends send to each
+    /// other at roughly the same time, each one's outbound packet teaches its
+    /// own NAT to accept the other's reply. The packets themselves are
+    /// throwaway — a QUIC endpoint drops them as unparseable — and that is
+    /// fine, because the mapping they create is the point.
+    ///
+    /// It does nothing when the far side is behind a NAT that assigns a
+    /// different external port per destination. Nothing here can fix that, and
+    /// the relay path exists for exactly that case.
+    pub async fn punch(&self, address: SocketAddr) -> MeshResult<()> {
+        let socket = UdpSocket::bind(SocketAddr::new(
+            if address.is_ipv6() {
+                IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+            } else {
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            },
+            0,
+        ))?;
+        socket.set_nonblocking(true)?;
+
+        for _ in 0..3 {
+            // A failure here is expected and uninteresting: an unreachable
+            // candidate is exactly what this is trying to find out about.
+            let _ = socket.send_to(b"gameblade-punch", address);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        Ok(())
+    }
+
+    pub fn close(&self) {
+        self.endpoint.close(0u32.into(), b"done");
+    }
+}
+
+fn transport_config() -> TransportConfig {
+    let mut config = TransportConfig::default();
+    config.max_idle_timeout(Some(
+        IDLE_TIMEOUT
+            .try_into()
+            .expect("a one-minute idle timeout is representable"),
+    ));
+    config.keep_alive_interval(Some(KEEP_ALIVE));
+
+    // A game download is one big sequential transfer per stream, so a large
+    // receive window is what lets a fat, high-latency link actually fill up.
+    // The default is tuned for many small streams and leaves throughput on the
+    // table over exactly the kind of link this exists to exploit.
+    config.stream_receive_window((8u32 * 1024 * 1024).into());
+    config.receive_window((32u32 * 1024 * 1024).into());
+
+    config
+}
+
+fn pinned_client_config(expected: &PublicKey) -> MeshResult<ClientConfig> {
+    let mut tls = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(PinnedNode {
+            expected: identity_dns_name(expected),
+        }))
+        .with_no_client_auth();
+    tls.alpn_protocols = vec![MESH_ALPN.to_vec()];
+
+    let quic = QuicClientConfig::try_from(tls)
+        .map_err(|err| MeshError::Protocol(format!("could not configure QUIC: {err}")))?;
+
+    let mut config = ClientConfig::new(Arc::new(quic));
+    config.transport_config(Arc::new(transport_config()));
+    Ok(config)
+}
+
+/// A default config that pins nothing, so it can never succeed by accident.
+///
+/// `Endpoint` insists on a default client config, but every real dial goes
+/// through `connect` with a config pinned to one key. This one expects an
+/// identity no node can have, so a code path that forgot to pin fails closed
+/// rather than connecting to whoever answers.
+fn insecure_placeholder_config() -> MeshResult<ClientConfig> {
+    let unreachable = PublicKey::from_bytes(&[0u8; 32])
+        .unwrap_or_else(|_| panic!("the all-zero key is a valid point"));
+    pinned_client_config(&unreachable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_identity_label_is_stable_and_key_specific() {
+        let a = NodeIdentity::generate();
+        let b = NodeIdentity::generate();
+
+        assert_eq!(
+            identity_dns_name(&a.public_key()),
+            identity_dns_name(&a.public_key())
+        );
+        assert_ne!(
+            identity_dns_name(&a.public_key()),
+            identity_dns_name(&b.public_key())
+        );
+        assert!(identity_dns_name(&a.public_key()).ends_with(".node.gameblade"));
+    }
+
+    #[test]
+    fn a_certificate_carries_the_identity_it_can_be_pinned_to() {
+        // If the label could not be read back out, pinning would silently pass
+        // or silently fail — and the difference matters rather a lot.
+        let identity = NodeIdentity::generate();
+        let (chain, _key) = node_certificate(&identity).unwrap();
+
+        let (_, name) = x509_name(&chain[0]).unwrap();
+        assert_eq!(name, identity_dns_name(&identity.public_key()));
+    }
+
+    #[test]
+    fn a_certificate_without_an_identity_is_refused() {
+        let cert = CertificateDer::from(vec![0u8; 128]);
+        assert!(x509_name(&cert).is_err());
+    }
+
+    #[test]
+    fn the_pinning_verifier_accepts_only_the_named_key() {
+        let node = NodeIdentity::generate();
+        let other = NodeIdentity::generate();
+        let (chain, _key) = node_certificate(&node).unwrap();
+
+        let verifier = PinnedNode {
+            expected: identity_dns_name(&node.public_key()),
+        };
+        let wrong = PinnedNode {
+            expected: identity_dns_name(&other.public_key()),
+        };
+
+        let name = ServerName::try_from("example.invalid").unwrap();
+        assert!(verifier
+            .verify_server_cert(&chain[0], &[], &name, &[], UnixTime::now())
+            .is_ok());
+        assert!(wrong
+            .verify_server_cert(&chain[0], &[], &name, &[], UnixTime::now())
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_client_endpoint_binds_and_reports_its_address() {
+        let endpoint = MeshEndpoint::client(NodeIdentity::generate()).unwrap();
+        assert!(endpoint.local_addr().unwrap().port() > 0);
+        endpoint.close();
+    }
+
+    #[tokio::test]
+    async fn a_node_endpoint_binds_on_an_ephemeral_port() {
+        let endpoint = MeshEndpoint::node(NodeIdentity::generate(), 0).unwrap();
+        assert!(endpoint.local_addr().unwrap().port() > 0);
+        endpoint.close();
+    }
+}

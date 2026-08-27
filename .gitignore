@@ -29,3 +29,6 @@ apps/desktop/src-tauri/gen/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Rust build output for the mesh crate
+crates/gameblade-mesh/target/
