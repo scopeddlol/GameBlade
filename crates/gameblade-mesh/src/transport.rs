@@ -43,6 +43,21 @@ pub const MESH_ALPN: &[u8] = b"gameblade-mesh/1";
 /// that a node does not accumulate dead connections from clients that vanished.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How many punch packets to send at a candidate.
+///
+/// Three, spaced out. One can be lost, and the far side may not have started
+/// punching yet when the first arrives — the two sides are told to punch at the
+/// same time but do not share a clock.
+const PUNCH_PACKETS: usize = 3;
+const PUNCH_SPACING: Duration = Duration::from_millis(50);
+
+/// Deliberately not valid QUIC.
+///
+/// A punch packet exists to be dropped. Its whole job is done by the NAT it
+/// traverses on the way out; the receiving endpoint discards it as unparseable,
+/// which is the intended outcome rather than a tolerated one.
+const PUNCH_PAYLOAD: &[u8] = b"gameblade-punch";
+
 /// Keep-alive interval, comfortably inside the idle timeout.
 ///
 /// This is also what holds a NAT binding open. Home routers commonly forget a
@@ -177,6 +192,13 @@ fn x509_name(cert: &CertificateDer<'_>) -> Result<((), String), rustls::Error> {
 pub struct MeshEndpoint {
     endpoint: Endpoint,
     identity: NodeIdentity,
+    /// A second handle to the very socket QUIC is using.
+    ///
+    /// Hole punching only works if the punch leaves from the same socket the
+    /// connection will arrive on: the point of the punch is the NAT mapping it
+    /// creates, and a mapping is per source port. A punch sent from any other
+    /// socket opens a hole for a port nothing will ever use.
+    punch: UdpSocket,
 }
 
 impl MeshEndpoint {
@@ -216,6 +238,12 @@ impl MeshEndpoint {
     fn bind(identity: NodeIdentity, address: SocketAddr, serve: bool) -> MeshResult<Self> {
         let socket = UdpSocket::bind(address)?;
 
+        // Cloned before quinn takes ownership. Both handles refer to the same
+        // kernel socket and therefore the same port, which is the only reason
+        // punching from this one helps the connection made on the other.
+        let punch = socket.try_clone()?;
+        punch.set_nonblocking(true)?;
+
         let mut endpoint = if serve {
             let (chain, key) = node_certificate(&identity)?;
             let mut tls = rustls::ServerConfig::builder_with_provider(crypto_provider())
@@ -247,7 +275,11 @@ impl MeshEndpoint {
         };
 
         endpoint.set_default_client_config(insecure_placeholder_config()?);
-        Ok(Self { endpoint, identity })
+        Ok(Self {
+            endpoint,
+            identity,
+            punch,
+        })
     }
 
     pub fn local_addr(&self) -> MeshResult<SocketAddr> {
@@ -296,24 +328,27 @@ impl MeshEndpoint {
     /// different external port per destination. Nothing here can fix that, and
     /// the relay path exists for exactly that case.
     pub async fn punch(&self, address: SocketAddr) -> MeshResult<()> {
-        let socket = UdpSocket::bind(SocketAddr::new(
-            if address.is_ipv6() {
-                IpAddr::V6(Ipv6Addr::UNSPECIFIED)
-            } else {
-                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
-            },
-            0,
-        ))?;
-        socket.set_nonblocking(true)?;
-
-        for _ in 0..3 {
+        for _ in 0..PUNCH_PACKETS {
+            // Sent on the shared handle, so the mapping this opens is the one
+            // the QUIC handshake will come back through.
+            //
             // A failure here is expected and uninteresting: an unreachable
-            // candidate is exactly what this is trying to find out about.
-            let _ = socket.send_to(b"gameblade-punch", address);
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            // candidate is exactly what this is trying to find out about, and
+            // the dial that follows reports it far better than this could.
+            let _ = self.punch.send_to(PUNCH_PAYLOAD, address);
+            tokio::time::sleep(PUNCH_SPACING).await;
         }
 
         Ok(())
+    }
+
+    /// The port this endpoint's NAT mapping is for.
+    ///
+    /// Local, so it is only the whole answer on a machine with a public
+    /// address. Behind NAT it is the internal half, and the external half has
+    /// to be learned by being told what someone else observed.
+    pub fn punch_port(&self) -> MeshResult<u16> {
+        Ok(self.punch.local_addr()?.port())
     }
 
     pub fn close(&self) {
@@ -447,6 +482,37 @@ mod tests {
     async fn a_client_endpoint_binds_and_reports_its_address() {
         let endpoint = MeshEndpoint::client(NodeIdentity::generate()).unwrap();
         assert!(endpoint.local_addr().unwrap().port() > 0);
+        endpoint.close();
+    }
+
+    /// The bug this pins, which made hole punching a no-op.
+    ///
+    /// A punch opens a NAT mapping for the source port it was sent from. Sent
+    /// from a throwaway socket it opens a mapping for a port nothing will use,
+    /// and the QUIC handshake that follows on the real port still finds no hole
+    /// — so every direct connection between two NATed machines failed, which is
+    /// precisely the case punching exists for.
+    #[tokio::test]
+    async fn a_punch_leaves_from_the_same_port_the_connection_arrives_on() {
+        let endpoint = MeshEndpoint::client(NodeIdentity::generate()).unwrap();
+
+        assert_eq!(
+            endpoint.punch_port().unwrap(),
+            endpoint.local_addr().unwrap().port()
+        );
+        endpoint.close();
+    }
+
+    #[tokio::test]
+    async fn punching_an_unroutable_address_is_not_an_error() {
+        // Punching is speculative by nature: most candidates are wrong, and the
+        // dial that follows is what reports whether any of them worked.
+        let endpoint = MeshEndpoint::client(NodeIdentity::generate()).unwrap();
+
+        assert!(endpoint
+            .punch("198.51.100.7:47820".parse().unwrap())
+            .await
+            .is_ok());
         endpoint.close();
     }
 
