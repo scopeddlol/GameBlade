@@ -11,6 +11,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Whether the client is worth building this time.
+  #
+  # The Windows job below bills at twice the Linux rate and takes a while, so it
+  # is gated on whether anything it compiles actually changed. This job costs
+  # seconds on the cheap runner to answer that, which is a good trade against
+  # building a Tauri app to prove a change to the admin panel did not break it.
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Enough history to diff against the base of the pull request.
+          fetch-depth: 0
+
+      - id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Anything the desktop client compiles: its own source, the transport
+          # crate it links, and the types both ends share.
+          watched='^(apps/desktop/|crates/gameblade-mesh/|packages/shared/)'
+
+          if [ "${{ github.event_name }}" = 'pull_request' ]; then
+            base="origin/${{ github.base_ref }}"
+            git fetch --no-tags --depth=0 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            changed=$(git diff --name-only "$base"...HEAD)
+          else
+            # Not a pull request, so there is no base to compare against and no
+            # safe way to guess one. Say yes and let the job's own condition
+            # decide; on a push it is switched off anyway.
+            changed=''
+          fi
+
+          if printf '%s\n' "$changed" | grep -qE "$watched"; then
+            echo 'desktop=true' >> "$GITHUB_OUTPUT"
+            echo 'client code changed; the desktop build will run'
+          else
+            echo 'desktop=false' >> "$GITHUB_OUTPUT"
+            echo 'no client code changed; skipping the desktop build'
+          fi
+
   verify:
     name: Typecheck, test and build
     runs-on: ubuntu-latest
@@ -45,6 +90,43 @@ jobs:
         run: |
           pnpm --filter @gameblade/server build
           pnpm --filter @gameblade/web build
+
+  # The transport crate, on the cheap runner.
+  #
+  # Nothing else in CI covers it. The desktop job compiles it as a dependency
+  # but lints and tests only its own package, and the Linux jobs above are
+  # JavaScript. Which left a crate carrying the chunk protocol, the grant
+  # checking and the relay entirely unverified by anything automatic — including
+  # the tests that stand a real node and a real client up over localhost QUIC,
+  # which are the ones most likely to catch a change that compiles and does not
+  # work.
+  mesh:
+    name: Test the mesh crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: crates/gameblade-mesh
+
+      - name: Format, lint and test
+        working-directory: crates/gameblade-mesh
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      # The binaries are what a node and a relay actually run, and a feature
+      # only dev-dependencies provide has silently broken this before while
+      # every test still passed.
+      - name: Build the binaries
+        working-directory: crates/gameblade-mesh
+        run: cargo build --release --bins
 
   docker:
     name: Build image
@@ -98,18 +180,18 @@ jobs:
   desktop:
     name: Build desktop client
     runs-on: windows-latest
-    # Manual only, and now for a different reason than before.
+    needs: changes
+    # Built when the client's own code changed, and on demand.
     #
-    # It used to be that no Windows runner existed to pick this up. A hosted one
-    # does, so the job would run — but Windows minutes bill at twice the rate of
-    # Linux, and a Tauri build is long even with LTO off below. Left on every
-    # pull request it would be comfortably the most expensive thing in this
-    # repository, spent proving something the release build proves again.
-    #
-    # Turning it back on for pull requests is a one-line change to
-    # `github.event_name != 'push'`. Worth doing if the client starts breaking
-    # in ways the Linux jobs cannot see; not worth it by default.
-    if: github.event_name == 'workflow_dispatch'
+    # Not on every pull request: Windows minutes bill at twice the Linux rate
+    # and a Tauri build is long even with LTO off below, so building one to
+    # prove a change to the admin panel did not break it is money for nothing.
+    # Not never, either — the client now links a Rust transport crate that the
+    # Linux jobs never compile for Windows, and "it built on Linux" stopped
+    # being evidence that it builds at all.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.desktop == 'true'
     env:
       # CI proves the client compiles and its tests pass; the installer it
       # produces is a by-product nobody installs. Full LTO through a single

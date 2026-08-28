@@ -36,7 +36,10 @@ async fn start_relay(coordinator: &NodeIdentity, max_sessions: usize) -> u16 {
     let socket = UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
     let port = socket.local_addr().unwrap().port();
 
-    let relay = Arc::new(Mutex::new(Relay::new(coordinator.public_key(), max_sessions)));
+    let relay = Arc::new(Mutex::new(Relay::new(
+        coordinator.public_key(),
+        max_sessions,
+    )));
 
     tokio::spawn(async move {
         let mut buffer = vec![0u8; MAX_DATAGRAM];
@@ -91,8 +94,14 @@ async fn bytes_handed_to_one_end_come_out_of_the_other() {
     // Give the relay a moment to pair before sending traffic.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    client.send_to(b"a chunk of a game", relay_addr).await.unwrap();
-    assert_eq!(recv(&node).await.as_deref(), Some(&b"a chunk of a game"[..]));
+    client
+        .send_to(b"a chunk of a game", relay_addr)
+        .await
+        .unwrap();
+    assert_eq!(
+        recv(&node).await.as_deref(),
+        Some(&b"a chunk of a game"[..])
+    );
 
     node.send_to(b"and the reply", relay_addr).await.unwrap();
     assert_eq!(recv(&client).await.as_deref(), Some(&b"and the reply"[..]));
