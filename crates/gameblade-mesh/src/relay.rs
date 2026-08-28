@@ -287,7 +287,8 @@ impl Relay {
         // retry recovers instead of stranding the session half-open.
         session.set(ticket.side, from);
         session.last_seen = Instant::now();
-        self.known.insert(from, (ticket.session_id.clone(), ticket.side));
+        self.known
+            .insert(from, (ticket.session_id.clone(), ticket.side));
 
         if self.sessions[&ticket.session_id].paired() {
             Action::Paired
