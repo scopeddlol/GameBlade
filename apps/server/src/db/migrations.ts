@@ -1005,4 +1005,165 @@ export const migrations: Migration[] = [
       ALTER TABLE conversations ADD COLUMN last_message_preview TEXT;
     `,
   },
+  {
+    id: '0024_mesh_chunks',
+    sql: /* sql */ `
+      -- Per-chunk hashes, so a file can be fetched from more than one place.
+      --
+      -- A whole-file SHA-256 only tells you the download was wrong once every
+      -- byte has arrived. To stitch one file out of several sources you have to
+      -- be able to reject a bad piece on arrival, which means addressing pieces
+      -- by content rather than by offset.
+      --
+      -- The grid is fixed (see MESH_CHUNK_BYTES) and the offset is implied by
+      -- the index, so this table stores no offsets: an offset column could
+      -- disagree with the index, and there would be no way to tell which was
+      -- right.
+      CREATE TABLE game_file_chunks (
+        file_id TEXT NOT NULL REFERENCES game_files(id) ON DELETE CASCADE,
+        chunk_index INTEGER NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        PRIMARY KEY (file_id, chunk_index)
+      ) WITHOUT ROWID;
+
+      -- Answering "who has this chunk" is the mesh's hot query, and it arrives
+      -- as a hash rather than as a file.
+      CREATE INDEX game_file_chunks_sha_idx ON game_file_chunks(sha256);
+
+      -- Chunk hashing is per-file and resumable, so the file has to remember
+      -- whether it is done. A null means never hashed; a size that disagrees
+      -- with the current MESH_CHUNK_BYTES means hashed on a different grid and
+      -- due to be redone.
+      ALTER TABLE game_files ADD COLUMN chunked_at TEXT;
+      ALTER TABLE game_files ADD COLUMN chunk_bytes INTEGER;
+    `,
+  },
+  {
+    id: '0025_mesh_nodes',
+    sql: /* sql */ `
+      -- The coordinator's whole state: who the nodes are, how to reach them,
+      -- and what they hold.
+      --
+      -- All of it is small on purpose. The VPS running this has 75 GB and a
+      -- thin pipe, so it stores keys, addresses and counters — never game
+      -- bytes. Relaying costs bandwidth when a direct path cannot be made, but
+      -- it never costs disk.
+      CREATE TABLE mesh_nodes (
+        id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'mirror',
+        status TEXT NOT NULL DEFAULT 'pending',
+        -- Base64url Ed25519 public key. This is the node's identity: the
+        -- coordinator knows a node by its key, not by its address, because the
+        -- address changes every time a residential lease renews.
+        public_key TEXT NOT NULL,
+        -- The node's API credential, hashed. Issued fresh on every
+        -- registration and returned in plaintext exactly once.
+        --
+        -- It cannot be derived from anything else the node holds: the public
+        -- key is handed to clients so they can check who they are talking to,
+        -- so a token derived from it would be a credential every client could
+        -- compute for every node.
+        token_hash TEXT NOT NULL,
+        -- Set when a client's session belongs to a node it is seeding from, so
+        -- a peer node dies with the account that offered it.
+        owner_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+        agent_version TEXT,
+        last_seen_at TEXT,
+        bytes_served INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE UNIQUE INDEX mesh_nodes_public_key_idx ON mesh_nodes(public_key);
+      CREATE INDEX mesh_nodes_status_idx ON mesh_nodes(status);
+      CREATE INDEX mesh_nodes_owner_idx ON mesh_nodes(owner_id);
+
+      -- Every address a node believes it might be reachable on.
+      --
+      -- Replaced wholesale on each heartbeat rather than accumulated: a stale
+      -- candidate is not harmless, it is a connection attempt that has to time
+      -- out before a working one is tried.
+      CREATE TABLE mesh_node_endpoints (
+        node_id TEXT NOT NULL REFERENCES mesh_nodes(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        address TEXT NOT NULL,
+        port INTEGER NOT NULL,
+        PRIMARY KEY (node_id, address, port)
+      ) WITHOUT ROWID;
+
+      -- Which games a node claims a complete, verified copy of.
+      --
+      -- A claim is per game rather than per chunk. Per-chunk would be more
+      -- precise and is what a real CDN does, but it is also a row per 8 MiB —
+      -- millions of them for one archive — on the machine with the least disk.
+      -- Whole games keep the index small enough to stay in memory, and the
+      -- chunk hashes already make a wrong claim harmless: bytes that do not
+      -- verify are rejected whatever the index said.
+      CREATE TABLE mesh_node_games (
+        node_id TEXT NOT NULL REFERENCES mesh_nodes(id) ON DELETE CASCADE,
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        -- The manifest the node verified against, so a game that changed on
+        -- the origin stops being served from stale mirrors.
+        content_hash TEXT NOT NULL,
+        announced_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        PRIMARY KEY (node_id, game_id)
+      ) WITHOUT ROWID;
+      CREATE INDEX mesh_node_games_game_idx ON mesh_node_games(game_id);
+
+      -- One-time codes that turn a machine into a node.
+      --
+      -- Hashed, like every other credential here: the plaintext is shown once
+      -- when an operator generates it and never stored.
+      CREATE TABLE mesh_enrollments (
+        token_hash TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'mirror',
+        created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        expires_at TEXT NOT NULL,
+        used_at TEXT,
+        node_id TEXT REFERENCES mesh_nodes(id) ON DELETE SET NULL
+      );
+
+      -- What a node reported serving, against the grant that authorised it.
+      --
+      -- This is how a byte allowance survives transfers the server never sees.
+      -- The row is keyed by the grant's nonce so a node replaying a report
+      -- cannot inflate its own numbers or double-charge an account.
+      CREATE TABLE mesh_transfers (
+        nonce TEXT PRIMARY KEY,
+        node_id TEXT NOT NULL REFERENCES mesh_nodes(id) ON DELETE CASCADE,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        game_id TEXT REFERENCES games(id) ON DELETE SET NULL,
+        bytes_served INTEGER NOT NULL DEFAULT 0,
+        issued_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        reported_at TEXT
+      );
+      CREATE INDEX mesh_transfers_user_idx ON mesh_transfers(user_id, issued_at);
+      CREATE INDEX mesh_transfers_node_idx ON mesh_transfers(node_id);
+    `,
+  },
+  {
+    id: '0026_node_catalog_reports',
+    sql: /* sql */ `
+      -- Which library a node's catalog reports belong to.
+      --
+      -- This column is what makes moving the coordinator off the machine
+      -- holding the games a move rather than a migration. Games are matched
+      -- within a library by their relative path, so a node reporting into the
+      -- *existing* library updates the rows that are already there — keeping
+      -- every game id, and with it every achievement, save rule, artwork
+      -- match, favourite and playtime record hanging off that id.
+      --
+      -- Pointing a node at a new library instead would re-add the entire
+      -- catalog as strangers and orphan all of it, which is precisely the
+      -- outcome this exists to prevent. So it is assigned deliberately by an
+      -- administrator and reports are refused until it is.
+      ALTER TABLE mesh_nodes ADD COLUMN library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL;
+
+      -- When this node last reported its catalog, and what came of it.
+      ALTER TABLE mesh_nodes ADD COLUMN catalog_reported_at TEXT;
+      ALTER TABLE mesh_nodes ADD COLUMN catalog_status TEXT;
+    `,
+  },
 ];

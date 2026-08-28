@@ -239,10 +239,42 @@ export const gameFiles = sqliteTable(
      */
     integrity: text('integrity', { enum: ['ok', 'mismatch', 'missing'] }),
     verifiedAt: text('verified_at'),
+    /** When per-chunk hashes were last computed; null means never. */
+    chunkedAt: text('chunked_at'),
+    /**
+     * The grid those hashes were computed on.
+     *
+     * Recorded rather than assumed: if the constant ever changes, rows hashed
+     * on the old grid are identifiable and re-hashable instead of silently
+     * verifying arriving bytes against boundaries nobody uses any more.
+     */
+    chunkBytes: integer('chunk_bytes'),
   },
   (t) => [
     uniqueIndex('game_files_game_relpath_idx').on(t.gameId, t.relPath),
     index('game_files_game_idx').on(t.gameId),
+  ],
+);
+
+/**
+ * Content-addressed pieces of a file, on the fixed `MESH_CHUNK_BYTES` grid.
+ *
+ * There is deliberately no offset column: the index times the grid size is the
+ * offset, and a stored offset is one more thing that can contradict it.
+ */
+export const gameFileChunks = sqliteTable(
+  'game_file_chunks',
+  {
+    fileId: text('file_id')
+      .notNull()
+      .references(() => gameFiles.id, { onDelete: 'cascade' }),
+    chunkIndex: integer('chunk_index').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    sha256: text('sha256').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.fileId, t.chunkIndex] }),
+    index('game_file_chunks_sha_idx').on(t.sha256),
   ],
 );
 
@@ -303,6 +335,142 @@ export const downloadEvents = sqliteTable(
     index('download_events_user_idx').on(t.userId),
     index('download_events_game_idx').on(t.gameId),
     index('download_events_session_idx').on(t.sessionId),
+  ],
+);
+
+/* ---------------------------------------------------------------------- mesh */
+
+/**
+ * A machine that can serve game bytes directly to a client.
+ *
+ * A node is known by its public key rather than by its address: the address of
+ * a machine on a residential connection changes whenever the lease renews, and
+ * an identity that changed with it would be no identity at all.
+ */
+export const meshNodes = sqliteTable(
+  'mesh_nodes',
+  {
+    id: text('id').primaryKey(),
+    label: text('label').notNull(),
+    role: text('role', { enum: ['origin', 'mirror', 'peer'] })
+      .notNull()
+      .default('mirror'),
+    status: text('status', { enum: ['pending', 'online', 'stale', 'blocked'] })
+      .notNull()
+      .default('pending'),
+    /** Base64url Ed25519 public key; the node's identity on the wire. */
+    publicKey: text('public_key').notNull(),
+    /**
+     * The node's API credential, hashed.
+     *
+     * Not derived from the public key: that is published to clients so they can
+     * check who they are talking to, and a credential computable from it would
+     * be no credential at all.
+     */
+    tokenHash: text('token_hash').notNull(),
+    /** Set for peer nodes, so somebody's seeding dies with their account. */
+    ownerId: text('owner_id').references(() => users.id, { onDelete: 'cascade' }),
+    agentVersion: text('agent_version'),
+    lastSeenAt: text('last_seen_at'),
+    bytesServed: integer('bytes_served').notNull().default(0),
+    /**
+     * Which library this node's catalog reports land in.
+     *
+     * Games are matched within a library by relative path, so reporting into
+     * the existing library updates the rows already there and preserves every
+     * game id — and everything attached to one. Assigned by an administrator
+     * rather than guessed, because guessing wrong re-adds the whole catalog as
+     * new games and orphans the metadata on the old ones.
+     */
+    libraryId: text('library_id').references(() => libraries.id, { onDelete: 'set null' }),
+    catalogReportedAt: text('catalog_reported_at'),
+    catalogStatus: text('catalog_status'),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex('mesh_nodes_public_key_idx').on(t.publicKey),
+    index('mesh_nodes_status_idx').on(t.status),
+    index('mesh_nodes_owner_idx').on(t.ownerId),
+  ],
+);
+
+/** Every address a node believes it might be reachable on. */
+export const meshNodeEndpoints = sqliteTable(
+  'mesh_node_endpoints',
+  {
+    nodeId: text('node_id')
+      .notNull()
+      .references(() => meshNodes.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['local', 'observed', 'configured'] }).notNull(),
+    address: text('address').notNull(),
+    port: integer('port').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.nodeId, t.address, t.port] })],
+);
+
+/**
+ * Which games a node claims a complete copy of.
+ *
+ * Deliberately per game rather than per chunk: per-chunk would be a row per
+ * 8 MiB on the machine with the least disk, and the chunk hashes already make
+ * an over-claim harmless — bytes that do not verify are rejected regardless of
+ * what the index promised.
+ */
+export const meshNodeGames = sqliteTable(
+  'mesh_node_games',
+  {
+    nodeId: text('node_id')
+      .notNull()
+      .references(() => meshNodes.id, { onDelete: 'cascade' }),
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    /** The manifest this copy was verified against. */
+    contentHash: text('content_hash').notNull(),
+    announcedAt: text('announced_at').notNull().default(now),
+  },
+  (t) => [
+    primaryKey({ columns: [t.nodeId, t.gameId] }),
+    index('mesh_node_games_game_idx').on(t.gameId),
+  ],
+);
+
+/** One-time codes that turn a machine into a node. Hashed, never stored raw. */
+export const meshEnrollments = sqliteTable('mesh_enrollments', {
+  tokenHash: text('token_hash').primaryKey(),
+  label: text('label').notNull(),
+  role: text('role', { enum: ['origin', 'mirror', 'peer'] })
+    .notNull()
+    .default('mirror'),
+  createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: text('created_at').notNull().default(now),
+  expiresAt: text('expires_at').notNull(),
+  usedAt: text('used_at'),
+  nodeId: text('node_id').references(() => meshNodes.id, { onDelete: 'set null' }),
+});
+
+/**
+ * What a node reported serving, against the grant that authorised it.
+ *
+ * Keyed by the grant's nonce so a replayed report cannot double-charge an
+ * account or inflate a node's numbers.
+ */
+export const meshTransfers = sqliteTable(
+  'mesh_transfers',
+  {
+    nonce: text('nonce').primaryKey(),
+    nodeId: text('node_id')
+      .notNull()
+      .references(() => meshNodes.id, { onDelete: 'cascade' }),
+    userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+    gameId: text('game_id').references(() => games.id, { onDelete: 'set null' }),
+    bytesServed: integer('bytes_served').notNull().default(0),
+    issuedAt: text('issued_at').notNull().default(now),
+    reportedAt: text('reported_at'),
+  },
+  (t) => [
+    index('mesh_transfers_user_idx').on(t.userId, t.issuedAt),
+    index('mesh_transfers_node_idx').on(t.nodeId),
   ],
 );
 

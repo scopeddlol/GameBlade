@@ -23,6 +23,7 @@ import { AdminClientPage } from './pages/admin/AdminClientPage.js';
 import { AdminFeaturedPage } from './pages/admin/AdminFeaturedPage.js';
 import { AdminInvitesPage } from './pages/admin/AdminInvitesPage.js';
 import { AdminLibrariesPage } from './pages/admin/AdminLibrariesPage.js';
+import { AdminNodesPage } from './pages/admin/AdminNodesPage.js';
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage.js';
 import { AdminRequestsPage } from './pages/admin/AdminRequestsPage.js';
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage.js';
@@ -150,6 +151,7 @@ export function App() {
             <Route index element={<AdminSettingsPage />} />
             <Route path="discord" element={<AdminDiscordPage />} />
             <Route path="api" element={<AdminApiPage />} />
+            <Route path="nodes" element={<AdminNodesPage />} />
           </Route>
         </Route>
 

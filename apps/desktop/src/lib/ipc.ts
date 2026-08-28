@@ -85,6 +85,13 @@ export interface ClientSettings {
   autoSyncOnStart: boolean;
   promptOnSaveConflict: boolean;
   shareActivity: boolean;
+  /**
+   * Serve installed games to other players on this server.
+   *
+   * Only has an effect where the operator has also turned sharing on; with it
+   * off on their side this does nothing at all.
+   */
+  shareDownloads: boolean;
   minimizeOnLaunch: boolean;
   downloadConcurrency: number;
   verifyDownloads: boolean;

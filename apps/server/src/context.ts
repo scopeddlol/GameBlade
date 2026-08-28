@@ -12,11 +12,14 @@ import { CatalogService } from './services/catalog.js';
 import { ClientButtonService } from './services/clientButtons.js';
 import { CollectionService } from './services/collections.js';
 import { ChecksumService } from './services/checksums.js';
+import { CatalogIngestService } from './services/catalogIngest.js';
+import { ChunkService } from './services/chunks.js';
 import { DownloadTokenService } from './services/downloads.js';
 import { FriendService } from './services/friends.js';
 import { GameRequestService } from './services/gameRequests.js';
 import { InstallerService } from './services/installer.js';
 import { MediaStore } from './services/media.js';
+import { MeshService } from './services/mesh.js';
 import { MessagingService } from './services/messaging.js';
 import { ImageCache } from './services/metadata/images.js';
 import { DiscordService } from './services/discord.js';
@@ -53,6 +56,12 @@ export interface GamebladeContext {
   metadata: MetadataService;
   scanner: ScannerService;
   checksums: ChecksumService;
+  /** Per-chunk hashes, which are what let a game be fetched from a node. */
+  chunks: ChunkService;
+  /** The coordinator: who the nodes are, how to reach them, what they hold. */
+  mesh: MeshService;
+  /** Folds a catalog a node scanned into this database, preserving game ids. */
+  catalogIngest: CatalogIngestService;
   downloadTokens: DownloadTokenService;
   images: ImageCache;
   installer: InstallerService;
@@ -120,6 +129,9 @@ export function createContext(
   const backups = new BackupService(config.dataDir, sqlite);
   const scanner = new ScannerService(db, metadata, logger);
   const checksums = new ChecksumService(db, logger);
+  const chunks = new ChunkService(db, logger);
+  const mesh = new MeshService(db, logger);
+  const catalogIngest = new CatalogIngestService(db, logger);
   const auth = new AuthService(db);
   const downloadTokens = new DownloadTokenService(db, config.sessionSecret);
   const installer = new InstallerService(db, config);
@@ -175,6 +187,9 @@ export function createContext(
     metadata,
     scanner,
     checksums,
+    chunks,
+    mesh,
+    catalogIngest,
     downloadTokens,
     images,
     installer,

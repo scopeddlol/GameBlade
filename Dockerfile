@@ -43,6 +43,23 @@ RUN pnpm --filter @gameblade/shared build \
 RUN pnpm --filter @gameblade/server deploy --prod --legacy /app/deploy
 
 # ---------------------------------------------------------------------------
+# Mesh agent: the QUIC side of a node, built once and carried into the runtime.
+#
+# In the same image as the server rather than an image of its own, because a
+# coordinator and its nodes have to agree about the catalog they exchange and
+# separate artifacts are how they quietly stop agreeing. It is a few megabytes
+# and only a node ever runs it.
+# ---------------------------------------------------------------------------
+FROM rust:1-alpine AS mesh
+RUN apk add --no-cache musl-dev cmake make g++ perl
+WORKDIR /mesh
+COPY crates/gameblade-mesh ./gameblade-mesh
+RUN cd gameblade-mesh \
+    && cargo build --release --bins \
+    && mkdir -p /out \
+    && cp target/release/gameblade-node target/release/mesh-doctor /out/
+
+# ---------------------------------------------------------------------------
 # Runtime stage
 # ---------------------------------------------------------------------------
 FROM node:22-alpine AS runtime
@@ -65,6 +82,8 @@ COPY --from=builder --chown=node:node /app/deploy/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/deploy/dist ./dist
 COPY --from=builder --chown=node:node /app/deploy/package.json ./package.json
 COPY --from=builder --chown=node:node /app/apps/web/dist ./public
+COPY --from=mesh --chown=node:node /out/gameblade-node /usr/local/bin/gameblade-node
+COPY --from=mesh --chown=node:node /out/mesh-doctor /usr/local/bin/mesh-doctor
 
 # Never run the server as root: it has read access to the whole game library.
 USER node

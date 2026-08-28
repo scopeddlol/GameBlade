@@ -230,6 +230,13 @@ export function SettingsTab() {
               />
 
               <Toggle
+                label="Share my downloads with other players"
+                hint="Sends pieces of games you have installed to other people on this server, using your upload bandwidth. Off unless you turn it on, and only works if the server allows it. Files are checked before they are sent, so an edited or modded install simply stops being shared."
+                checked={draft.shareDownloads}
+                onChange={(shareDownloads) => update({ shareDownloads })}
+              />
+
+              <Toggle
                 label="Minimize when a game starts"
                 checked={draft.minimizeOnLaunch}
                 onChange={(minimizeOnLaunch) => update({ minimizeOnLaunch })}

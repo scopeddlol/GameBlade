@@ -19,6 +19,22 @@ export interface RuntimeSettings {
   downloadSpeedLimitKbps: number;
   /** Default monthly transfer allowance per account, in MB. 0 disables it. */
   monthlyQuotaMb: number;
+  /**
+   * Whether clients may fetch game data from mesh nodes rather than from here.
+   *
+   * Off by default. With it off the coordinator still accepts registrations and
+   * heartbeats, so a node can be enrolled and left to sync before any client is
+   * ever pointed at it — turning it on is then a switch, not a migration.
+   */
+  meshEnabled: boolean;
+  /**
+   * Whether clients may serve chunks they hold to other clients.
+   *
+   * Separate from `meshEnabled` and off by default, because it is a different
+   * decision: the first shares an operator's own machines, the second turns
+   * players into distributors of each other's downloads.
+   */
+  meshSeedingEnabled: boolean;
   /** Named colour theme applied to the web app and the desktop client. */
   themePreset: string;
   /** Optional hex accent replacing the preset's own. */
@@ -173,6 +189,8 @@ export class SettingsService {
       steamApiKey: asString('steamApiKey', this.config.steamApiKey),
       downloadSpeedLimitKbps: asNumber('downloadSpeedLimitKbps', 0),
       monthlyQuotaMb: asNumber('monthlyQuotaMb', 0),
+      meshEnabled: asBoolean('meshEnabled', false),
+      meshSeedingEnabled: asBoolean('meshSeedingEnabled', false),
       themePreset: asString('themePreset', 'midnight') ?? 'midnight',
       themeAccent: asString('themeAccent', null),
       backupKeep: asNumber('backupKeep', 7),

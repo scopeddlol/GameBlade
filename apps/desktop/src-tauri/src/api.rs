@@ -15,6 +15,18 @@ struct LoginResponse {
     user: UserInfo,
 }
 
+/// One content-addressed piece of a file, on the mesh chunk grid.
+///
+/// The offset is the index times the grid size; the server sends no offset and
+/// this deliberately stores none, so the two can never disagree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkRef {
+    pub index: u64,
+    pub sha256: String,
+    #[serde(rename = "sizeBytes")]
+    pub size_bytes: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestFile {
     pub id: String,
@@ -22,6 +34,30 @@ pub struct ManifestFile {
     #[serde(rename = "sizeBytes")]
     pub size_bytes: u64,
     pub sha256: Option<String>,
+    /// Per-chunk hashes, when the server has computed them.
+    ///
+    /// Absent from older servers and from games that have not been hashed yet,
+    /// which is why every use of this is behind an `Option`: their absence is
+    /// normal, not an error, and simply means falling back to verifying the
+    /// whole file at the end.
+    #[serde(default)]
+    pub chunks: Option<Vec<ChunkRef>>,
+}
+
+/// Somewhere a game's bytes can be fetched from.
+///
+/// Unknown `kind` values deserialize rather than failing the manifest, because
+/// a newer server will list source kinds this build has never heard of and the
+/// right response is to ignore them and use the origin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestSource {
+    pub kind: String,
+    #[serde(rename = "nodeId", default)]
+    pub node_id: Option<String>,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub priority: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +74,77 @@ pub struct DownloadManifest {
     /// downloader then falls back to refreshing reactively on a 403 alone.
     #[serde(rename = "expiresAt", default)]
     pub expires_at: Option<String>,
+    /// The grid `chunks` was hashed on.
+    ///
+    /// Checked rather than assumed: if a later release changes the grid, this
+    /// build sees a size it does not implement and ignores the chunk hashes
+    /// instead of verifying arriving bytes against boundaries nobody uses.
+    #[serde(rename = "chunkBytes", default)]
+    pub chunk_bytes: Option<u64>,
+    #[serde(default)]
+    pub sources: Option<Vec<ManifestSource>>,
+}
+
+/// One node the coordinator is offering, with the grant to use it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MeshNode {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(rename = "publicKey")]
+    pub public_key: String,
+    #[serde(default)]
+    pub endpoints: Vec<MeshEndpoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshEndpoint {
+    #[serde(default)]
+    pub kind: String,
+    pub address: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshGrant {
+    #[serde(rename = "nodeId")]
+    pub node_id: String,
+    pub grant: String,
+    #[serde(rename = "expiresAt", default)]
+    pub expires_at: Option<String>,
+}
+
+/// What `POST /mesh/resolve/:gameId` hands back.
+///
+/// Defaults to empty on purpose: an older server, a disabled mesh and a
+/// network hiccup all mean "download from the origin", and the caller should
+/// not have to tell them apart.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MeshResolution {
+    #[serde(default)]
+    pub nodes: Vec<MeshNode>,
+    #[serde(default)]
+    pub grants: Vec<MeshGrant>,
+    #[serde(rename = "coordinatorPublicKey", default)]
+    pub coordinator_public_key: Option<String>,
+}
+
+/// What the coordinator hands back when this machine offers to be a peer.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PeerRegistration {
+    #[serde(rename = "nodeId")]
+    pub node_id: String,
+    /// Returned once. Only its hash is stored server-side.
+    #[serde(rename = "nodeToken")]
+    pub node_token: String,
+    #[serde(rename = "heartbeatSeconds", default = "default_heartbeat")]
+    pub heartbeat_seconds: u64,
+}
+
+fn default_heartbeat() -> u64 {
+    30
 }
 
 /// What `POST /download/:gameId/token` hands back.
@@ -285,6 +392,117 @@ impl ApiClient {
         )?;
         let response = check_status(request.send().await?).await?;
         Ok(response.json().await?)
+    }
+
+    /// Ask the coordinator where a game can be fetched from, and for
+    /// permission to fetch it.
+    ///
+    /// One call rather than two: knowing about a node is useless without a
+    /// grant, and a grant is meaningless for a node you were not told about.
+    /// A server that has never heard of the mesh 404s here, which is an empty
+    /// answer rather than an error — the origin was always going to be the
+    /// fallback anyway.
+    pub async fn resolve_mesh(&self, game_id: &str, candidates: &[(String, u16)]) -> MeshResolution {
+        let Ok(request) = self.authorised(
+            self.http
+                .post(self.endpoint(&format!("/mesh/resolve/{game_id}"))),
+        ) else {
+            return MeshResolution::default();
+        };
+
+        // The client's own external address, so nodes can punch toward it. The
+        // address this request arrives from is a different NAT mapping on a
+        // different port, and punching at that would open a hole nothing uses.
+        let body = serde_json::json!({
+            "endpoints": candidates
+                .iter()
+                .map(|(address, port)| serde_json::json!({
+                    "kind": "observed",
+                    "address": address,
+                    "port": port,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        let request = request.json(&body);
+
+        match request.send().await {
+            Ok(response) if response.status().is_success() => {
+                response.json().await.unwrap_or_default()
+            }
+            // Every failure here means the same thing: use the origin. There is
+            // nothing a caller could usefully do with the distinction.
+            _ => MeshResolution::default(),
+        }
+    }
+
+    /// Offer this machine as a peer node.
+    ///
+    /// Fails when the operator has seeding switched off, which is a refusal to
+    /// respect rather than an error to retry: the answer will not change until
+    /// they change it.
+    pub async fn register_peer(
+        &self,
+        public_key: &str,
+        label: &str,
+        endpoints: &[(String, u16)],
+    ) -> AppResult<PeerRegistration> {
+        let body = serde_json::json!({
+            "publicKey": public_key,
+            "label": label,
+            "endpoints": endpoints
+                .iter()
+                .map(|(address, port)| serde_json::json!({
+                    "kind": "local",
+                    "address": address,
+                    "port": port,
+                }))
+                .collect::<Vec<_>>(),
+        });
+
+        let request = self.authorised(self.http.post(self.endpoint("/mesh/peer")))?;
+        let response = check_status(request.json(&body).send().await?).await?;
+        Ok(response.json().await?)
+    }
+
+    /// Stay registered, and say what is currently on offer.
+    pub async fn peer_heartbeat(
+        &self,
+        node_id: &str,
+        node_token: &str,
+        games: &[(String, String)],
+    ) -> AppResult<()> {
+        let body = serde_json::json!({
+            "endpoints": [],
+            "games": games
+                .iter()
+                .map(|(game_id, content_hash)| serde_json::json!({
+                    "gameId": game_id,
+                    "contentHash": content_hash,
+                }))
+                .collect::<Vec<_>>(),
+        });
+
+        let response = self
+            .http
+            .post(self.endpoint("/mesh/heartbeat"))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {node_token}"),
+            )
+            .header("x-gameblade-node", node_id)
+            .json(&body)
+            .send()
+            .await?;
+
+        check_status(response).await?;
+        Ok(())
+    }
+
+    /// Stop being a peer — sign-out, or the switch going off.
+    pub async fn withdraw_peer(&self) -> AppResult<()> {
+        let request = self.authorised(self.http.delete(self.endpoint("/mesh/peer")))?;
+        check_status(request.send().await?).await?;
+        Ok(())
     }
 
     /// Reads a non-2xx response into its structured parts without turning it

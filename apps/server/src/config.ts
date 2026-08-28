@@ -42,6 +42,33 @@ const envSchema = z.object({
   DATA_DIR: z.string().default('/data'),
   LIBRARY_PATHS: z.string().default(''),
 
+  /**
+   * What this instance is.
+   *
+   * One image, three roles, rather than an image per role. The versions of a
+   * coordinator and its nodes have to agree about the catalog they exchange,
+   * and separate images are how they quietly stop agreeing — somebody updates
+   * one and not the other. Shipping one artifact makes matching versions the
+   * default rather than a thing to remember.
+   *
+   * `standalone` is everything in one process reading games off local disk —
+   * exactly what GameBlade has always been, and the default, so an existing
+   * deployment that upgrades behaves identically.
+   *
+   * `coordinator` holds the database, the panel and the API but no game files.
+   * It does not scan; its catalog is reported to it by nodes.
+   *
+   * `node` is the opposite half: it holds the game files, scans them and
+   * reports what it found upward. It has no database, no panel and no API of
+   * its own.
+   */
+  ROLE: z.enum(['standalone', 'coordinator', 'node']).default('standalone'),
+
+  /** Where a node reports its catalog. Required when ROLE is `node`. */
+  COORDINATOR_URL: z.string().url().optional(),
+  /** One-time code from Admin → Settings → Nodes. Only needed once. */
+  ENROLMENT_TOKEN: z.string().optional(),
+
   BASE_PATH: z.string().optional(),
   TRUST_PROXY: z.string().optional(),
   SECURE_COOKIES: z.union([booleanish, z.literal('auto')]).default('auto'),
@@ -96,6 +123,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     port: e.PORT,
     logLevel: e.LOG_LEVEL,
 
+    role: e.ROLE,
+    /** Whether this instance reads game files from its own disk. */
+    servesLocalFiles: e.ROLE !== 'coordinator',
+    /** Whether this instance owns a database, a panel and an API. */
+    servesApi: e.ROLE !== 'node',
+    /** Whether this instance scans local disk and reports what it found up. */
+    reportsCatalogUpstream: e.ROLE === 'node',
+    /** Where a node sends its catalog. Only meaningful in the `node` role. */
+    coordinatorUrl: e.COORDINATOR_URL?.replace(/\/+$/, '') ?? null,
+    /** Spent on first enrolment; absent afterwards is normal. */
+    enrolmentToken: e.ENROLMENT_TOKEN ?? null,
+    nodeStatePath: path.join(dataDir, 'node-state.json'),
     dataDir,
     databasePath: path.join(dataDir, 'gameblade.db'),
     imageCacheDir: path.join(dataDir, 'images'),

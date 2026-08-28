@@ -2,6 +2,7 @@ import { ACHIEVEMENT_COMPARATORS, ACHIEVEMENT_FORMATS } from './achievementRules
 import { BUG_SEVERITY, BUG_STATUS } from './constants.js';
 import { z } from 'zod';
 import type { DiscordActivityType } from './constants.js';
+import { MESH_ENDPOINT_KINDS } from './mesh.js';
 import { THEME_PRESETS } from './theme.js';
 import {
   ACHIEVEMENT_SOURCE,
@@ -163,8 +164,136 @@ export const providerSettingsSchema = z.object({
   downloadSpeedLimitKbps: z.number().int().min(0).max(10_000_000).optional(),
   /** Default monthly transfer allowance per account, in MB. 0 disables it. */
   monthlyQuotaMb: z.number().int().min(0).max(100_000_000).optional(),
+  /** Whether clients may fetch game data from mesh nodes rather than the origin. */
+  meshEnabled: z.boolean().optional(),
+  /** Whether clients may serve chunks they hold to other clients. */
+  meshSeedingEnabled: z.boolean().optional(),
 });
 export type ProviderSettingsInput = z.infer<typeof providerSettingsSchema>;
+
+/* ---------------------------------------------------------------------- mesh */
+
+/**
+ * An address a node believes it might be reachable on.
+ *
+ * Validated tightly because these come from an agent and are fed to a
+ * connection attempt: a hostname here would mean the coordinator resolving
+ * names on a node's say-so, so only literals are accepted.
+ */
+export const meshEndpointSchema = z.object({
+  kind: z.enum(MESH_ENDPOINT_KINDS),
+  address: z.string().trim().min(2).max(45),
+  port: z.number().int().min(1).max(65_535),
+});
+
+export const meshRegisterSchema = z.object({
+  enrolmentToken: z.string().trim().min(8).max(200),
+  publicKey: z.string().trim().min(32).max(200),
+  agentVersion: z.string().trim().max(64).optional(),
+  endpoints: z.array(meshEndpointSchema).max(16).default([]),
+});
+export type MeshRegisterInput = z.infer<typeof meshRegisterSchema>;
+
+export const meshHeartbeatSchema = z.object({
+  endpoints: z.array(meshEndpointSchema).max(16).default([]),
+  /**
+   * What this node currently holds. Capped because a heartbeat is a small,
+   * frequent message and a node with a large library should send its catalog
+   * in one and then stop repeating it in full.
+   */
+  games: z
+    .array(
+      z.object({
+        gameId: z.string().trim().min(1).max(64),
+        contentHash: z.string().trim().length(64),
+      }),
+    )
+    .max(5_000)
+    .optional(),
+});
+export type MeshHeartbeatInput = z.infer<typeof meshHeartbeatSchema>;
+
+/**
+ * The candidate addresses a client offers when asking where a game is.
+ *
+ * Its reflexive address is the one that matters: a node has to punch toward the
+ * external address of the client's *UDP* socket, and the coordinator can only
+ * see where its TCP request came from — a different mapping, on a different
+ * port.
+ */
+export const meshResolveSchema = z.object({
+  endpoints: z.array(meshEndpointSchema).max(8).default([]),
+});
+export type MeshResolveInput = z.infer<typeof meshResolveSchema>;
+
+/**
+ * A catalog a node scanned and is reporting up.
+ *
+ * The shape a scan produces, not the shape the database stores: no ids, because
+ * the coordinator owns those and matches on `relPath` so that existing games
+ * keep the ids they already have.
+ */
+export const reportedFileSchema = z.object({
+  relPath: z.string().min(1).max(4096),
+  sizeBytes: z.number().int().min(0),
+  modifiedAt: z.string().min(1).max(64),
+  /** Whole-file hash, when the node computed one. */
+  sha256: z.string().length(64).nullable().optional(),
+  /** Per-chunk hashes, so the coordinator never has to read the file itself. */
+  chunks: z
+    .array(
+      z.object({
+        index: z.number().int().min(0),
+        sha256: z.string().length(64),
+        sizeBytes: z.number().int().min(0),
+      }),
+    )
+    .max(200_000)
+    .optional(),
+});
+export type ReportedFile = z.infer<typeof reportedFileSchema>;
+
+export const reportedGameSchema = z.object({
+  relPath: z.string().min(1).max(4096),
+  kind: z.enum(['folder', 'archive']),
+  sizeBytes: z.number().int().min(0),
+  contentMtime: z.string().min(1).max(64),
+  files: z.array(reportedFileSchema).max(50_000),
+});
+export type ReportedGame = z.infer<typeof reportedGameSchema>;
+
+export const reportedCatalogSchema = z.object({
+  /**
+   * Whether this is the node's whole library.
+   *
+   * Only a complete report may mark games missing — a partial one says nothing
+   * about what it did not mention, and treating silence as absence would flag
+   * a whole catalog because a node sent it in pieces.
+   */
+  complete: z.boolean().default(true),
+  games: z.array(reportedGameSchema).max(20_000),
+});
+export type ReportedCatalogInput = z.infer<typeof reportedCatalogSchema>;
+
+export const meshReportSchema = z.object({
+  nonce: z.string().trim().min(4).max(64),
+  bytesServed: z.number().int().min(0),
+});
+export type MeshReportInput = z.infer<typeof meshReportSchema>;
+
+export const meshEnrolmentSchema = z.object({
+  label: z.string().trim().min(1).max(64),
+  role: z.enum(['origin', 'mirror']),
+});
+export type MeshEnrolmentInput = z.infer<typeof meshEnrolmentSchema>;
+
+export const meshPeerRegisterSchema = z.object({
+  publicKey: z.string().trim().min(32).max(200),
+  label: z.string().trim().min(1).max(64),
+  endpoints: z.array(meshEndpointSchema).max(16).default([]),
+  agentVersion: z.string().trim().max(64).optional(),
+});
+export type MeshPeerRegisterInput = z.infer<typeof meshPeerRegisterSchema>;
 
 /* ------------------------------------------------------------------ profiles */
 

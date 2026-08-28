@@ -7,6 +7,9 @@
 //! every pending install with it.
 
 pub(crate) mod engine;
+pub(crate) mod mesh;
+pub(crate) mod seeder;
+pub(crate) mod seeding;
 
 use crate::api::{ApiClient, DownloadManifest};
 use crate::error::{AppError, AppResult};
@@ -1062,9 +1065,12 @@ mod tests {
                 path: "data/game file<>.dat".to_string(),
                 size_bytes: 42,
                 sha256: None,
+                chunks: None,
             }],
             token: String::new(),
             expires_at: None,
+            chunk_bytes: None,
+            sources: None,
         }
     }
 
