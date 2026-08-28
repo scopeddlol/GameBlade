@@ -373,6 +373,18 @@ export const meshNodes = sqliteTable(
     agentVersion: text('agent_version'),
     lastSeenAt: text('last_seen_at'),
     bytesServed: integer('bytes_served').notNull().default(0),
+    /**
+     * Which library this node's catalog reports land in.
+     *
+     * Games are matched within a library by relative path, so reporting into
+     * the existing library updates the rows already there and preserves every
+     * game id — and everything attached to one. Assigned by an administrator
+     * rather than guessed, because guessing wrong re-adds the whole catalog as
+     * new games and orphans the metadata on the old ones.
+     */
+    libraryId: text('library_id').references(() => libraries.id, { onDelete: 'set null' }),
+    catalogReportedAt: text('catalog_reported_at'),
+    catalogStatus: text('catalog_status'),
     createdAt: text('created_at').notNull().default(now),
   },
   (t) => [

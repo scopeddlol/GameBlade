@@ -7,6 +7,7 @@ import {
   meshPeerRegisterSchema,
   meshRegisterSchema,
   meshReportSchema,
+  reportedCatalogSchema,
 } from '@gameblade/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -35,7 +36,7 @@ function observedAddress(request: FastifyRequest): string | undefined {
 }
 
 export async function meshRoutes(app: FastifyInstance): Promise<void> {
-  const { db, mesh, settings, downloadTokens, chunks, bandwidth } = app.gameblade;
+  const { db, mesh, settings, downloadTokens, chunks, bandwidth, catalogIngest } = app.gameblade;
 
   /**
    * Authenticate a node by its id and its enrolment-issued node token.
@@ -168,6 +169,25 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
         chunks: byFile.get(file.id) ?? [],
       })),
     };
+  });
+
+  /**
+   * A node reporting the library it scanned.
+   *
+   * This is the direction that makes a coordinator possible at all: when the
+   * games are on somebody else's disk, the catalog has to come to the database
+   * rather than the database going to look for it.
+   */
+  app.post('/mesh/catalog', {
+    // A full library report is large and infrequent; the abuse limiter reads
+    // it as something to throttle.
+    config: { rateLimit: false },
+    handler: async (request) => {
+      const { nodeId } = requireNode(request);
+      const body = reportedCatalogSchema.parse(request.body);
+
+      return catalogIngest.ingest(nodeId, body.games, { complete: body.complete });
+    },
   });
 
   /**
@@ -341,6 +361,25 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
     requireAdmin(request);
     const { tokenHash } = request.params as { tokenHash: string };
     mesh.revokeEnrolment(tokenHash);
+    return { ok: true };
+  });
+
+  /**
+   * Say which library a node's catalog reports belong to.
+   *
+   * Deliberately an explicit administrative act. Reports are matched into a
+   * library by relative path, so pointing a node at the library its games are
+   * already in updates those rows and every game keeps its id. Pointing it at a
+   * new one would re-add the whole catalog as strangers and orphan every
+   * achievement and save rule attached to the originals — so this is never
+   * inferred, and reports are refused until it is set.
+   */
+  app.post('/mesh/nodes/:nodeId/library', async (request) => {
+    requireAdmin(request);
+    const { nodeId } = request.params as { nodeId: string };
+    const { libraryId } = (request.body ?? {}) as { libraryId?: string | null };
+
+    mesh.assignLibrary(nodeId, libraryId ?? null);
     return { ok: true };
   });
 

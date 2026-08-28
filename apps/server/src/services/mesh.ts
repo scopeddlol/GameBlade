@@ -13,6 +13,7 @@ import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import {
   gameFiles,
+  libraries,
   meshEnrollments,
   meshNodeEndpoints,
   meshNodeGames,
@@ -635,6 +636,28 @@ export class MeshService {
       gameCount: counts.get(node.id) ?? 0,
       observedRttMs: null,
     }));
+  }
+
+  /**
+   * Point a node's catalog reports at a library.
+   *
+   * `null` unassigns, which stops the node's reports being accepted rather than
+   * silently sending them somewhere else.
+   */
+  assignLibrary(nodeId: string, libraryId: string | null): void {
+    const node = this.db.select().from(meshNodes).where(eq(meshNodes.id, nodeId)).get();
+    if (!node) throw ApiError.notFound('Unknown node');
+
+    if (libraryId) {
+      const library = this.db
+        .select({ id: libraries.id })
+        .from(libraries)
+        .where(eq(libraries.id, libraryId))
+        .get();
+      if (!library) throw ApiError.notFound('Unknown library');
+    }
+
+    this.db.update(meshNodes).set({ libraryId }).where(eq(meshNodes.id, nodeId)).run();
   }
 
   setNodeStatus(nodeId: string, status: 'online' | 'blocked'): void {

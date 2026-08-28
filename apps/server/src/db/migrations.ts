@@ -1143,4 +1143,27 @@ export const migrations: Migration[] = [
       CREATE INDEX mesh_transfers_node_idx ON mesh_transfers(node_id);
     `,
   },
+  {
+    id: '0026_node_catalog_reports',
+    sql: /* sql */ `
+      -- Which library a node's catalog reports belong to.
+      --
+      -- This column is what makes moving the coordinator off the machine
+      -- holding the games a move rather than a migration. Games are matched
+      -- within a library by their relative path, so a node reporting into the
+      -- *existing* library updates the rows that are already there — keeping
+      -- every game id, and with it every achievement, save rule, artwork
+      -- match, favourite and playtime record hanging off that id.
+      --
+      -- Pointing a node at a new library instead would re-add the entire
+      -- catalog as strangers and orphan all of it, which is precisely the
+      -- outcome this exists to prevent. So it is assigned deliberately by an
+      -- administrator and reports are refused until it is.
+      ALTER TABLE mesh_nodes ADD COLUMN library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL;
+
+      -- When this node last reported its catalog, and what came of it.
+      ALTER TABLE mesh_nodes ADD COLUMN catalog_reported_at TEXT;
+      ALTER TABLE mesh_nodes ADD COLUMN catalog_status TEXT;
+    `,
+  },
 ];

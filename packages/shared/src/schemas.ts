@@ -226,6 +226,55 @@ export const meshResolveSchema = z.object({
 });
 export type MeshResolveInput = z.infer<typeof meshResolveSchema>;
 
+/**
+ * A catalog a node scanned and is reporting up.
+ *
+ * The shape a scan produces, not the shape the database stores: no ids, because
+ * the coordinator owns those and matches on `relPath` so that existing games
+ * keep the ids they already have.
+ */
+export const reportedFileSchema = z.object({
+  relPath: z.string().min(1).max(4096),
+  sizeBytes: z.number().int().min(0),
+  modifiedAt: z.string().min(1).max(64),
+  /** Whole-file hash, when the node computed one. */
+  sha256: z.string().length(64).nullable().optional(),
+  /** Per-chunk hashes, so the coordinator never has to read the file itself. */
+  chunks: z
+    .array(
+      z.object({
+        index: z.number().int().min(0),
+        sha256: z.string().length(64),
+        sizeBytes: z.number().int().min(0),
+      }),
+    )
+    .max(200_000)
+    .optional(),
+});
+export type ReportedFile = z.infer<typeof reportedFileSchema>;
+
+export const reportedGameSchema = z.object({
+  relPath: z.string().min(1).max(4096),
+  kind: z.enum(['folder', 'archive']),
+  sizeBytes: z.number().int().min(0),
+  contentMtime: z.string().min(1).max(64),
+  files: z.array(reportedFileSchema).max(50_000),
+});
+export type ReportedGame = z.infer<typeof reportedGameSchema>;
+
+export const reportedCatalogSchema = z.object({
+  /**
+   * Whether this is the node's whole library.
+   *
+   * Only a complete report may mark games missing — a partial one says nothing
+   * about what it did not mention, and treating silence as absence would flag
+   * a whole catalog because a node sent it in pieces.
+   */
+  complete: z.boolean().default(true),
+  games: z.array(reportedGameSchema).max(20_000),
+});
+export type ReportedCatalogInput = z.infer<typeof reportedCatalogSchema>;
+
 export const meshReportSchema = z.object({
   nonce: z.string().trim().min(4).max(64),
   bytesServed: z.number().int().min(0),
