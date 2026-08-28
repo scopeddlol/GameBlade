@@ -64,6 +64,11 @@ const envSchema = z.object({
    */
   ROLE: z.enum(['standalone', 'coordinator', 'node']).default('standalone'),
 
+  /** Where a node reports its catalog. Required when ROLE is `node`. */
+  COORDINATOR_URL: z.string().url().optional(),
+  /** One-time code from Admin → Settings → Nodes. Only needed once. */
+  ENROLMENT_TOKEN: z.string().optional(),
+
   BASE_PATH: z.string().optional(),
   TRUST_PROXY: z.string().optional(),
   SECURE_COOKIES: z.union([booleanish, z.literal('auto')]).default('auto'),
@@ -125,6 +130,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     servesApi: e.ROLE !== 'node',
     /** Whether this instance scans local disk and reports what it found up. */
     reportsCatalogUpstream: e.ROLE === 'node',
+    /** Where a node sends its catalog. Only meaningful in the `node` role. */
+    coordinatorUrl: e.COORDINATOR_URL?.replace(/\/+$/, '') ?? null,
+    /** Spent on first enrolment; absent afterwards is normal. */
+    enrolmentToken: e.ENROLMENT_TOKEN ?? null,
+    nodeStatePath: path.join(dataDir, 'node-state.json'),
     dataDir,
     databasePath: path.join(dataDir, 'gameblade.db'),
     imageCacheDir: path.join(dataDir, 'images'),

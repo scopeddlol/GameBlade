@@ -131,6 +131,29 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
     let stun: Vec<&str> = DEFAULT_STUN_SERVERS.to_vec();
     let endpoint = MeshEndpoint::node_with_discovery(identity.clone(), port, &stun)?;
 
+    // Already enrolled: use what is there rather than registering again.
+    //
+    // Registering rotates the node's credential, and in the usual deployment
+    // this process is not the only one holding it — the scanner alongside it
+    // registered first and wrote this file. Re-registering on every restart
+    // would invalidate the token that process is still using and stop its
+    // catalog reports, which is a confusing way to break something that looks
+    // unrelated.
+    if let (Some(node_id), Some(node_token), Some(coordinator)) = (
+        state.node_id.clone(),
+        state.node_token.clone(),
+        state.coordinator(),
+    ) {
+        return Ok(assemble(
+            identity,
+            node_id,
+            node_token,
+            coordinator,
+            endpoint,
+            Duration::from_secs(30),
+        ));
+    }
+
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(40))
         .build()
@@ -190,27 +213,42 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
         .coordinator()
         .ok_or_else(|| MeshError::Identity("the coordinator published an unusable key".into()))?;
 
+    Ok(assemble(
+        identity,
+        registration.node_id,
+        registration.node_token,
+        coordinator,
+        endpoint,
+        // Clamped: a coordinator asking for a heartbeat every second would put
+        // every node into a hot loop, and one asking for an hour would leave
+        // them all listed long after they died.
+        Duration::from_secs(registration.heartbeat_seconds.clamp(10, 120)),
+    ))
+}
+
+/// Build the agent around credentials, however they were obtained.
+fn assemble(
+    identity: gameblade_mesh::NodeIdentity,
+    node_id: String,
+    node_token: String,
+    coordinator: gameblade_mesh::PublicKey,
+    endpoint: MeshEndpoint,
+    heartbeat: Duration,
+) -> Agent {
     let index = Arc::new(RwLock::new(LibraryIndex::new()));
     let store = Arc::new(LibraryChunks::new(Arc::clone(&index)));
-    let server = Arc::new(NodeServer::new(
-        registration.node_id.clone(),
-        store,
-        coordinator,
-    ));
+    let server = Arc::new(NodeServer::new(node_id.clone(), store, coordinator));
 
-    Ok(Agent {
+    Agent {
         identity,
-        node_id: registration.node_id,
-        node_token: registration.node_token,
+        node_id,
+        node_token,
         coordinator_key: coordinator,
         endpoint,
         index,
         server,
-        // Clamped: a coordinator asking for a heartbeat every second would put
-        // every node into a hot loop, and one asking for an hour would leave
-        // them all listed long after they died.
-        heartbeat: Duration::from_secs(registration.heartbeat_seconds.clamp(10, 120)),
-    })
+        heartbeat,
+    }
 }
 
 async fn run(agent: Agent, server_url: String, library_root: PathBuf) {

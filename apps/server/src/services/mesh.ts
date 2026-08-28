@@ -635,6 +635,8 @@ export class MeshService {
       bytesServed: node.bytesServed,
       gameCount: counts.get(node.id) ?? 0,
       observedRttMs: null,
+      libraryId: node.libraryId,
+      catalogStatus: node.catalogStatus,
     }));
   }
 

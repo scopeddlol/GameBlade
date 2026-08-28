@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { maintain } from './db/index.js';
 import { libraries } from './db/schema.js';
 import { newId } from './lib/ids.js';
+import { CatalogReporter } from './services/catalogReporter.js';
 import { MESH_HEARTBEAT_TIMEOUT_SECONDS } from '@gameblade/shared';
 
 /**
@@ -103,6 +104,7 @@ const ORPHAN_MEDIA_GRACE_HOURS = 6;
 export function startSchedules(app: FastifyInstance): () => void {
   const {
     config,
+    db,
     scanner,
     mesh,
     auth,
@@ -117,6 +119,48 @@ export function startSchedules(app: FastifyInstance): () => void {
     sqlite,
   } = app.gameblade;
   const timers: NodeJS.Timeout[] = [];
+
+  /**
+   * A node's whole job, once its files are scanned: tell the coordinator.
+   *
+   * Runs on its own timer rather than hanging off the end of a scan, so a
+   * coordinator that was unreachable when the scan finished is retried without
+   * needing another scan to trigger it — and so a node that restarts reports
+   * what it already knows straight away instead of waiting for the next walk.
+   */
+  if (config.reportsCatalogUpstream) {
+    if (!config.coordinatorUrl) {
+      app.log.error('ROLE is "node" but COORDINATOR_URL is not set; nothing will be reported');
+    } else {
+      const reporter = new CatalogReporter(
+        db,
+        {
+          coordinatorUrl: config.coordinatorUrl,
+          enrolmentToken: config.enrolmentToken,
+          statePath: config.nodeStatePath,
+        },
+        app.log,
+      );
+
+      const publish = async () => {
+        try {
+          if (await reporter.ensureRegistered()) await reporter.report();
+        } catch (error) {
+          app.log.warn({ err: error }, 'catalog report failed');
+        }
+      };
+
+      // Soon after boot, then steadily. The first attempt is delayed enough for
+      // the mesh agent beside this process to have written its key.
+      const first = setTimeout(() => void publish(), 8_000);
+      first.unref();
+      timers.push(first);
+
+      const repeat = setInterval(() => void publish(), 5 * 60_000);
+      repeat.unref();
+      timers.push(repeat);
+    }
+  }
 
   if (config.scanOnStart) {
     // Delay slightly so the server starts answering requests immediately.

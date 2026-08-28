@@ -16,8 +16,13 @@ interface EnrolmentInfo {
 }
 
 interface NodesResponse {
-  nodes: MeshNodeInfo[];
+  nodes: (MeshNodeInfo & { libraryId?: string | null; catalogStatus?: string | null })[];
   enrolments: EnrolmentInfo[];
+}
+
+interface LibraryOption {
+  id: string;
+  name: string;
 }
 
 /** What the operator sees next to each node's name. */
@@ -61,6 +66,17 @@ export function AdminNodesPage() {
 
   const removeMutation = useMutation({
     mutationFn: (nodeId: string) => api.delete(`/mesh/nodes/${nodeId}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'mesh'] }),
+  });
+
+  const librariesQuery = useQuery({
+    queryKey: ['admin', 'libraries'],
+    queryFn: () => api.get<LibraryOption[]>('/admin/libraries'),
+  });
+
+  const libraryMutation = useMutation({
+    mutationFn: (input: { nodeId: string; libraryId: string | null }) =>
+      api.post(`/mesh/nodes/${input.nodeId}/library`, { libraryId: input.libraryId }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'mesh'] }),
   });
 
@@ -178,6 +194,39 @@ export function AdminNodesPage() {
                     Remove
                   </button>
                 </div>
+              </div>
+
+              <div className="mt-3">
+                <label className="text-ink-400 block text-xs" htmlFor={`lib-${node.id}`}>
+                  Reports its catalog into
+                </label>
+                <select
+                  id={`lib-${node.id}`}
+                  className="gb-input mt-1 w-auto text-sm"
+                  value={node.libraryId ?? ''}
+                  onChange={(e) =>
+                    libraryMutation.mutate({
+                      nodeId: node.id,
+                      libraryId: e.target.value || null,
+                    })
+                  }
+                >
+                  <option value="">Not assigned — reports refused</option>
+                  {(librariesQuery.data ?? []).map((library) => (
+                    <option key={library.id} value={library.id}>
+                      {library.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-ink-500 mt-1 text-[11px]">
+                  Pick the library these games are <em>already</em> in. Games are matched by folder
+                  path, so reporting into the existing library updates those entries and every game
+                  keeps its achievements, save rules and artwork. Pointing a node at a different
+                  library would add the whole catalog again as new games.
+                </p>
+                {node.catalogStatus ? (
+                  <p className="text-ink-500 mt-1 text-[11px]">Last report: {node.catalogStatus}</p>
+                ) : null}
               </div>
 
               <dl className="text-ink-400 mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-4">

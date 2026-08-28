@@ -884,6 +884,101 @@ cp .env.example .env</code></pre>
           </p>
         </section>
 
+        <section id="roles">
+          <h2>Three roles, one image</h2>
+          <p>
+            GameBlade ships as one image that can be any of three things. Which one it is comes
+            from <code>ROLE</code>, and the default has not changed &mdash; an existing install
+            that upgrades keeps behaving exactly as it did.
+          </p>
+
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr><th>Role</th><th>Holds</th><th>Runs where</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>standalone</code></td>
+                  <td>Everything: database, panel, and the games on local disk</td>
+                  <td>One machine. The default, and what GameBlade has always been.</td>
+                </tr>
+                <tr>
+                  <td><code>coordinator</code></td>
+                  <td>Database, admin panel, landing page, API. No game files.</td>
+                  <td>A VPS. Small, because coordination is kilobytes.</td>
+                </tr>
+                <tr>
+                  <td><code>node</code></td>
+                  <td>The game files. Scans them and reports upward.</td>
+                  <td>Wherever the library lives.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="note">
+            <p>
+              <strong>One image rather than one per role.</strong> A coordinator and its nodes
+              have to agree about the catalog they exchange, and separate images are how they
+              quietly stop agreeing &mdash; you update one and forget the other. Shipping a single
+              artifact makes matching versions the default instead of something to remember.
+            </p>
+          </div>
+
+          <h3>Moving an existing install to a coordinator</h3>
+          <p>
+            This is a copy, not a migration. The database is not converted or restructured; it is
+            the same file, opened by the same code, on a different machine.
+          </p>
+          <ol>
+            <li>
+              <strong>Back up first.</strong> <strong>Admin &rarr; Insights &rarr; Health</strong>
+              writes an archive of everything that cannot be recreated. Copy it somewhere that is
+              not the machine you are moving off.
+            </li>
+            <li>
+              <strong>Copy <code>data/</code> to the new host.</strong> Copy, never move &mdash;
+              the original stays where it is and stays whole.
+            </li>
+            <li>
+              <strong>Start the coordinator</strong> with <code>ROLE=coordinator</code> and check
+              it while the old instance is still the live one: sign in, browse the catalog, open a
+              save, read a message.
+            </li>
+            <li>
+              <strong>Enrol the node</strong> that holds the games, and
+              <strong>assign it the library its games are already in</strong> on
+              <strong>Admin &rarr; Settings &rarr; Nodes</strong>.
+            </li>
+            <li>
+              <strong>Point the proxy at the coordinator</strong> only once all of that looks
+              right. If anything is wrong, point it back &mdash; the old instance is untouched.
+            </li>
+          </ol>
+
+          <div class="warn">
+            <p>
+              <strong>Assign the right library.</strong> A node's catalog is matched into a library
+              by relative path, so reporting into the library those games are already in updates
+              those entries and every game keeps its id &mdash; and with it every achievement,
+              save rule, artwork match, favourite and playtime record. Pointing a node at a
+              <em>different</em> library would add the whole catalog again as new games and leave
+              all of that attached to entries nothing references. Reports are refused until a
+              library is assigned, precisely so this cannot happen by accident.
+            </p>
+          </div>
+
+          <h3>What a coordinator cannot do</h3>
+          <p>
+            It has no game files, so the plain HTTP download route has nothing to serve. Clients
+            fetch from nodes over the mesh. Until a relay exists, a client that cannot establish a
+            direct path to any node cannot download &mdash; there is no origin to fall back to.
+            Run <code>mesh-doctor</code> on the node first; if it says the connection is punchable,
+            most clients will reach it.
+          </p>
+        </section>
+
         <section id="mesh">
           <h2>The mesh: downloading without the tunnel</h2>
           <p>
