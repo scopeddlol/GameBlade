@@ -495,6 +495,10 @@ fn transport_config() -> TransportConfig {
 
 /// The crypto backend, named rather than detected.
 ///
+/// ring, because rcgen and reqwest pull it in regardless: asking for a second
+/// backend here meant building two C and assembly crypto libraries to do one
+/// job.
+///
 /// rustls picks a provider from crate features, and panics if it cannot tell
 /// which was meant. The desktop client links rustls twice over — once here and
 /// once through reqwest for HTTPS — so which backend "wins" is a property of
@@ -503,7 +507,7 @@ fn transport_config() -> TransportConfig {
 /// application; naming the provider on each config decides only for the
 /// connections this crate makes, and cannot panic.
 fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
-    Arc::new(rustls::crypto::aws_lc_rs::default_provider())
+    Arc::new(rustls::crypto::ring::default_provider())
 }
 
 fn pinned_client_config(expected: &PublicKey) -> MeshResult<ClientConfig> {

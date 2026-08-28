@@ -51,14 +51,24 @@ RUN pnpm --filter @gameblade/server deploy --prod --legacy /app/deploy
 # and only a node ever runs it.
 # ---------------------------------------------------------------------------
 FROM rust:1-alpine AS mesh
-RUN apk add --no-cache musl-dev cmake make g++ perl
-WORKDIR /mesh
-COPY crates/gameblade-mesh ./gameblade-mesh
-RUN cd gameblade-mesh \
-    && cargo build --release --bins \
+RUN apk add --no-cache musl-dev
+WORKDIR /mesh/gameblade-mesh
+COPY crates/gameblade-mesh .
+
+# Cached like the pnpm store above, and for the same reason: without this every
+# build re-downloads the registry and recompiles every dependency, which on a
+# self-hosted runner is both slow and a steady drain on its disk.
+#
+# The binaries are copied out of the cache mount because a cache mount is not
+# part of the resulting layer — anything left inside it is gone by the next
+# stage.
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=mesh-target,target=/mesh/gameblade-mesh/target \
+    cargo build --release --bins \
     && mkdir -p /out \
     && cp target/release/gameblade-node target/release/gameblade-relay \
-         target/release/mesh-doctor /out/
+          target/release/mesh-doctor /out/
 
 # ---------------------------------------------------------------------------
 # Runtime stage

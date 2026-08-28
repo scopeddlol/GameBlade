@@ -2372,10 +2372,11 @@ packages/shared Types, zod schemas and constants used by all three</code></pre>
 
           <h3 id="windows-build">Building a Windows release by hand</h3>
           <p>
-            The Windows client is built on a real machine rather than by CI. Both Actions workflows
-            still know how — the jobs are there and work — but neither starts on its own, because a
-            job queued for a self-hosted runner that is offline sits pending until it times out hours
-            later rather than failing.
+            The Windows client is built on demand rather than on every push. Both Actions workflows
+            can build it &mdash; run <strong>Publish</strong> manually and tick
+            <code>build_client</code> &mdash; but neither does so on its own, because Windows
+            minutes bill at twice the Linux rate and a full client build is long enough that doing
+            it on every push would dominate the budget for something most pushes do not ship.
           </p>
           <p>
             <code>scripts/build-windows.ps1</code> does the same job on any Windows machine with

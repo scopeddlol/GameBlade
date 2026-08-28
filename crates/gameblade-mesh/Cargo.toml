@@ -11,11 +11,15 @@ rust-version = "1.77.2"
 # pulling in a GUI toolkit to serve files. Keeping it separate also means it
 # compiles and tests in seconds on any platform, which the Tauri crate does not.
 [dependencies]
+# ring rather than aws-lc-rs, and the choice is about the build rather than the
+# cryptography. rcgen and reqwest both pull ring regardless, so asking rustls and
+# quinn for aws-lc-rs meant compiling two C and assembly crypto libraries to do
+# one job — the larger of which dominated the build.
 quinn = { version = "0.11", default-features = false, features = [
     "runtime-tokio",
-    "rustls-aws-lc-rs",
+    "rustls-ring",
 ] }
-rustls = { version = "0.23", default-features = false, features = ["std", "aws-lc-rs"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 rcgen = "0.13"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"

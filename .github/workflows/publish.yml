@@ -39,7 +39,7 @@ env:
 jobs:
   image:
     name: Push image to GHCR
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -86,22 +86,29 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # min rather than max. max exports every intermediate layer of every
+          # stage — including the Rust compiler's output — and the cache a
+          # repository gets is finite, so a build that fills it evicts the very
+          # layers the next one wanted. min keeps the final layers, which is
+          # what a rebuild actually reuses.
+          cache-to: type=gha,mode=min
 
   desktop:
     name: Build Windows installers
-    # Opt-in, because there is currently no Windows runner to pick this up. It
-    # used to build on every main push and every tag, on the reasoning that the
-    # server image and the client that talks to it are one release — which is
-    # still true, but a job queued for a label nothing answers to does not fail.
-    # It sits pending until it times out hours later and takes the release job
-    # waiting on it down with it.
+    # Opt-in, and now by choice rather than necessity. It used to build on every
+    # main push and every tag, on the reasoning that the server image and the
+    # client that talks to it are one release — which is still true. What
+    # changed is the cost: Windows minutes bill at twice the Linux rate and a
+    # Tauri release build with full LTO is long, so building one on every push
+    # would dominate the budget for something most pushes do not ship.
+    #
+    # Tick `build_client` when cutting a release that needs a new client.
     #
     # Until a runner is back the client is built with scripts/build-windows.ps1
     # on a real machine and attached to the release by hand; the release job
     # below publishes without installers rather than refusing to.
     if: inputs.build_client
-    runs-on: [self-hosted, windows, x64]
+    runs-on: windows-latest
     permissions:
       contents: write
     steps:
@@ -115,12 +122,11 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      # Replaces dtolnay/rust-toolchain@stable, which is a composite action
-      # whose every step runs under `shell: bash`. A self-hosted Windows runner
-      # has no bash on PATH unless Git's bin directory was added to it, and a
-      # Windows service does not pick up a machine PATH change without a reboot
-      # — so the toolchain is set up in PowerShell instead and the job stops
-      # depending on the machine having been prepared a particular way.
+      # Set up in PowerShell rather than through dtolnay/rust-toolchain@stable,
+      # which is a composite action whose every step runs under `shell: bash`.
+      # A hosted runner does have bash, so the action would work here — this is
+      # kept because it assumes nothing about the machine, which is what made it
+      # necessary the last time these jobs ran somewhere else.
       - name: Rust toolchain
         run: |
           $ErrorActionPreference = 'Stop'
@@ -194,7 +200,7 @@ jobs:
       (startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' && inputs.version != ''))
     needs: [image, desktop]
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:

@@ -13,7 +13,7 @@ concurrency:
 jobs:
   verify:
     name: Typecheck, test and build
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +48,7 @@ jobs:
 
   docker:
     name: Build image
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -62,7 +62,12 @@ jobs:
           load: true
           tags: gameblade:ci
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # min rather than max. max exports every intermediate layer of every
+          # stage — including the Rust compiler's output — and the cache a
+          # repository gets is finite, so a build that fills it evicts the very
+          # layers the next one wanted. min keeps the final layers, which is
+          # what a rebuild actually reuses.
+          cache-to: type=gha,mode=min
 
       - name: Smoke test the image
         run: |
@@ -92,16 +97,18 @@ jobs:
 
   desktop:
     name: Build desktop client
-    runs-on: [self-hosted, windows, x64]
-    # Manual only, because there is currently no Windows runner to pick it up.
-    # A job queued for a label nothing answers to does not fail — it sits in the
-    # queue looking pending until it times out hours later, and blocks the
-    # merge in the meantime.
+    runs-on: windows-latest
+    # Manual only, and now for a different reason than before.
     #
-    # Until a runner is back, the client is built with scripts/build-windows.ps1
-    # on a real machine; see "Building a Windows release by hand" in the README.
-    # Restoring the old behaviour is a one-line change back to
-    # `github.event_name != 'push'`, which built on every pull request.
+    # It used to be that no Windows runner existed to pick this up. A hosted one
+    # does, so the job would run — but Windows minutes bill at twice the rate of
+    # Linux, and a Tauri build is long even with LTO off below. Left on every
+    # pull request it would be comfortably the most expensive thing in this
+    # repository, spent proving something the release build proves again.
+    #
+    # Turning it back on for pull requests is a one-line change to
+    # `github.event_name != 'push'`. Worth doing if the client starts breaking
+    # in ways the Linux jobs cannot see; not worth it by default.
     if: github.event_name == 'workflow_dispatch'
     env:
       # CI proves the client compiles and its tests pass; the installer it
@@ -123,12 +130,11 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      # Replaces dtolnay/rust-toolchain@stable, which is a composite action
-      # whose every step runs under `shell: bash`. A self-hosted Windows runner
-      # has no bash on PATH unless Git's bin directory was added to it, and a
-      # Windows service does not pick up a machine PATH change without a reboot
-      # — so the toolchain is set up in PowerShell instead and the job stops
-      # depending on the machine having been prepared a particular way.
+      # Set up in PowerShell rather than through dtolnay/rust-toolchain@stable,
+      # which is a composite action whose every step runs under `shell: bash`.
+      # A hosted runner does have bash, so the action would work here — this is
+      # kept because it assumes nothing about the machine, which is what made it
+      # necessary the last time these jobs ran somewhere else.
       - name: Rust toolchain
         run: |
           $ErrorActionPreference = 'Stop'
