@@ -154,6 +154,122 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.0 - August 28, 2026
+
+The release GameBlade stops being one machine. A coordinator holds the database
+and the panel, nodes hold the game files, and clients fetch bytes straight from
+a node instead of dragging every download through the proxy in between.
+
+Nothing here switches itself on. `standalone` is still the default role, so an
+existing install that upgrades behaves exactly as it did.
+
+### Downloads no longer have to cross the proxy
+
+Every byte used to travel through whatever sits on the public internet, because
+that was the only thing clients could reach. A client now talks directly to the
+machine holding the files.
+
+- **Files are addressed by content.** Each is cut on a fixed 8 MiB grid — the
+  same grid the downloader already cut transfers on — and every piece carries
+  its own SHA-256. A whole-file hash only reports a bad download once every byte
+  has arrived, which is no basis for deciding whether to keep a piece that came
+  from somewhere new. Pieces are now checked as they stream, so a bad one costs
+  one chunk rather than the whole game.
+- **The transport is QUIC, and deliberately not a VPN.** A VPN would mean a
+  virtual network adapter, which on Windows means a driver, an elevation prompt,
+  antivirus attention and a firewall dialog — all so the operating system can
+  route packets that only ever reach one process. Terminating QUIC inside the
+  app gets the same encrypted, NAT-traversing, congestion-controlled path with
+  nothing for anyone to install, approve or notice.
+- **A node is its key, not its address.** It presents a self-signed certificate
+  carrying its Ed25519 key and the client pins it against what the coordinator
+  named, so "did I reach the right machine" is answered locally. Addresses
+  change every time a home connection renews its lease; identities must not.
+- **Several sources at once, ranked by what they deliver.** The download queue
+  already handed each idle connection the next unfinished chunk, so this adds
+  one decision to it rather than a second download path. Sources are scored on
+  measured throughput, not assumption; a node that fails three times in a row is
+  set aside, and one serving bytes that do not match their hash is dropped at
+  once.
+
+### Three roles, one image
+
+- **`standalone`** — everything in one process, reading games off local disk.
+  The default, and unchanged.
+- **`coordinator`** — database, admin panel, landing page and API, with no game
+  files. Small enough for a modest VPS, because coordination is kilobytes.
+- **`node`** — the game files. Scans them and reports what it found upward.
+
+One image rather than one per role, because a coordinator and its nodes have to
+agree about the catalog they exchange and separate artifacts are how they
+quietly stop agreeing.
+
+### Moving a coordinator is a copy, not a migration
+
+The database is not converted or restructured. A node's catalog is matched into
+a library by relative path, exactly as the local scanner matches it, so **an
+existing game keeps its id** — and with it every achievement, save rule, artwork
+match, favourite, collection entry and playtime record. Only file-derived fields
+are ever written; a scan has no opinion about a title somebody corrected or the
+artwork they chose, so it writes neither.
+
+Which library a node reports into is an explicit administrative assignment, and
+reports are refused until it is made. Pointing a node at the wrong library would
+re-add an entire catalog as strangers and orphan the metadata on the originals,
+which is the worst thing this code could do, so it will not do it quietly.
+
+### The relay
+
+A coordinator holds no game files, so there is no plain HTTP download to fall
+back on when a client cannot reach a node directly. The relay is that fallback:
+both ends dial out to it, and it pastes the two connections together.
+
+It is the least clever component here on purpose. It never terminates TLS, never
+parses a chunk request, never learns which game is moving through it, and holds
+nothing but a table of which two sockets belong together. The QUIC session runs
+end to end, so what passes through is ciphertext it could not read if it wanted
+to — and every guarantee made elsewhere survives untouched.
+
+Only reached after a direct attempt fails, counted against the same allowance as
+any other bytes, and capped so the exception path cannot quietly become the main
+road.
+
+### Sharing, if you choose it
+
+Players can serve pieces of games they have installed to other players. Gated
+twice and off at both: an operator turns it on for the server, each player turns
+it on for themselves, and neither implies the other. Every piece is re-checked
+against the manifest before it is sent, so an edited or modded install simply
+stops being a source.
+
+### Finding out first
+
+`mesh-doctor`, and a dependency-free `scripts/nat-check.py` that needs no
+toolchain, answer the question the whole design depends on before anything is
+deployed: can a client actually reach this machine directly? It measures the
+NAT's mapping behaviour rather than guessing from how many layers there are —
+double NAT is routinely punchable and single NAT routinely is not.
+
+### Fixed on the way
+
+- **Hole punching was a no-op.** Punches left from a throwaway socket while QUIC
+  used another. NAT mappings are per source port, so between two machines behind
+  NAT — the entire case punching exists for — the direct path could never
+  establish.
+- **About one node in thirty-two was undialable at random.** Identity labels
+  were base64url, whose alphabet includes `-`, and a DNS label may not begin
+  with one.
+- **A node credential was derivable from its public key**, which is handed to
+  every client that resolves a game.
+- **IPv6 candidates were silently discarded** — unbracketed addresses do not
+  parse. Those are the ones most likely to work.
+- **rustls panicked on provider detection**, since the desktop binary links it
+  twice. It would have fired the first time a player touched the mesh.
+- **The image build compiled two crypto libraries to do one job**, which is most
+  of why it filled a build host's disk.
+
+---
+
 ## Version 0.5.3 - August 26, 2026
 
 The release the scanner gets fixed, the client stops needing the server to be
