@@ -153,8 +153,8 @@ describe('Node management surface', () => {
     const stored = JSON.parse(await readFile(path.join(dataDir, 'node-config.json'), 'utf8')) as {
       connections: Array<{ id: string; enrolmentToken?: string }>;
     };
-    expect(stored.connections.find((connection) => connection.id === enrolled.id)).not.toHaveProperty(
-      'enrolmentToken',
-    );
+    expect(
+      stored.connections.find((connection) => connection.id === enrolled.id),
+    ).not.toHaveProperty('enrolmentToken');
   });
 });
