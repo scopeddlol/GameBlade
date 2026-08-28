@@ -44,6 +44,7 @@ pub mod grant;
 pub mod identity;
 pub mod node;
 pub mod protocol;
+pub mod relay;
 pub mod selection;
 pub mod stun;
 pub mod transport;
@@ -54,6 +55,7 @@ pub use error::{MeshError, MeshResult, SourceHealth};
 pub use grant::{verify_grant, GrantClaims, GrantLedger};
 pub use identity::{coordinator_key_from_spki, NodeIdentity, PublicKey};
 pub use node::{ChunkStore, NodeServer};
+pub use relay::{Relay, RelayTicket};
 pub use selection::{SourcePool, SourceStats};
 pub use transport::{MeshEndpoint, MESH_ALPN};
 
@@ -68,3 +70,6 @@ pub const MESH_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Default UDP port a node listens on.
 pub const MESH_DEFAULT_PORT: u16 = 47_820;
+
+/// Default UDP port the relay listens on.
+pub const MESH_RELAY_DEFAULT_PORT: u16 = 47_821;

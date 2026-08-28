@@ -208,6 +208,21 @@ export interface MeshPunchRequest {
   userId: string;
   /** When the coordinator queued it, so a node can drop a stale one. */
   queuedAt: string;
+  /**
+   * Present when the client gave up on a direct path and wants the relay.
+   *
+   * The node dials the relay and presents this instead of punching. It arrives
+   * on the same channel as a punch because it answers the same question — a
+   * client is trying to reach you, here is how — and a second channel would be
+   * a second thing to keep alive for no gain.
+   */
+  relay?: {
+    /** Where the relay is, as clients and nodes both reach it. */
+    address: string;
+    port: number;
+    /** This node's half of the pairing. */
+    ticket: string;
+  };
 }
 
 /**
@@ -226,6 +241,57 @@ export const MESH_PUNCH_TTL_SECONDS = 10;
  * so the request completes normally rather than being cut off.
  */
 export const MESH_RENDEZVOUS_POLL_SECONDS = 25;
+
+/* ------------------------------------------------------------------- relay */
+
+/**
+ * Permission to use the relay for one transfer, signed by the coordinator.
+ *
+ * The relay verifies this with the coordinator's public key alone and pairs on
+ * the session id, so it needs no database, no lookup and no conversation with
+ * anything — which is what lets it be a small process that does nothing but
+ * move bytes.
+ */
+export interface MeshRelayTicket {
+  /** Both sides of one transfer present the same id; that is how they pair. */
+  sessionId: string;
+  nodeId: string;
+  userId: string;
+  /** Which end of the pipe this ticket is for. */
+  side: 'client' | 'node';
+  /** Unix seconds. */
+  expiresAt: number;
+}
+
+/**
+ * How long a relay ticket is good for.
+ *
+ * Short: it only has to survive the moment between being issued and both ends
+ * arriving. The QUIC session it carries lives as long as it likes afterwards —
+ * the ticket admits you to the pipe, it does not hold it open.
+ */
+export const MESH_RELAY_TICKET_TTL_SECONDS = 60;
+
+/**
+ * How long a paired relay session survives with no traffic.
+ *
+ * Long enough to outlast a stalled disk or a paused download, short enough that
+ * a client which vanished stops occupying a slot.
+ */
+export const MESH_RELAY_IDLE_SECONDS = 90;
+
+/** Default UDP port the relay listens on. */
+export const MESH_RELAY_DEFAULT_PORT = 47_821;
+
+/**
+ * The first packet each side sends the relay, before any QUIC.
+ *
+ * A fixed prefix so it cannot be mistaken for the QUIC that follows: the relay
+ * treats the first packet from an unknown address as a hello and everything
+ * from a known one as traffic to forward, so the two never have to be told
+ * apart by guesswork.
+ */
+export const MESH_RELAY_HELLO_MAGIC = 'GBRELAY1';
 
 /* ---------------------------------------------------------------- protocol */
 

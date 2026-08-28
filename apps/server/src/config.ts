@@ -66,6 +66,15 @@ const envSchema = z.object({
 
   /** Where a node reports its catalog. Required when ROLE is `node`. */
   COORDINATOR_URL: z.string().url().optional(),
+
+  /**
+   * The relay's public address, as `host:port`.
+   *
+   * Unset means there is no relay, and a client that cannot reach a node
+   * directly simply cannot download from it — which is the honest answer, and
+   * better than handing out an address nothing is listening on.
+   */
+  RELAY_ENDPOINT: z.string().optional(),
   /** One-time code from Admin → Settings → Nodes. Only needed once. */
   ENROLMENT_TOKEN: z.string().optional(),
 
@@ -99,6 +108,25 @@ const envSchema = z.object({
 });
 
 export type Config = ReturnType<typeof loadConfig>;
+
+/**
+ * Split `host:port` into parts, or nothing if it is not one.
+ *
+ * Refuses rather than half-accepting: an endpoint with no port would be handed
+ * to clients as somewhere to connect, and they would all fail at it.
+ */
+function parseEndpoint(value: string | undefined): { address: string; port: number } | null {
+  if (!value) return null;
+
+  const separator = value.lastIndexOf(':');
+  if (separator <= 0) return null;
+
+  const address = value.slice(0, separator).replace(/^\[|\]$/g, '');
+  const port = Number(value.slice(separator + 1));
+  if (!address || !Number.isInteger(port) || port < 1 || port > 65_535) return null;
+
+  return { address, port };
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const parsed = envSchema.safeParse(env);
@@ -135,6 +163,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     /** Spent on first enrolment; absent afterwards is normal. */
     enrolmentToken: e.ENROLMENT_TOKEN ?? null,
     nodeStatePath: path.join(dataDir, 'node-state.json'),
+    relayEndpoint: parseEndpoint(e.RELAY_ENDPOINT),
     dataDir,
     databasePath: path.join(dataDir, 'gameblade.db'),
     imageCacheDir: path.join(dataDir, 'images'),

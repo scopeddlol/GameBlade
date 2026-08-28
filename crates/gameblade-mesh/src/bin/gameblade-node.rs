@@ -329,10 +329,22 @@ async fn run(agent: Agent, server_url: String, library_root: PathBuf) {
                         continue;
                     };
                     let endpoint = Arc::clone(&endpoint);
+
                     // Concurrently: several clients can be arriving at once and
-                    // each punch takes 150 ms of deliberate spacing.
+                    // each of these takes a moment of deliberate spacing.
                     tokio::spawn(async move {
-                        let _ = endpoint.punch(target).await;
+                        match punch.relay {
+                            // The client could not reach us directly and has
+                            // gone to the relay. Announce ourselves there so it
+                            // can pair the two of us; QUIC then runs over the
+                            // top exactly as it would have directly.
+                            Some(relay) => {
+                                let _ = endpoint.announce_to_relay(target, &relay.ticket).await;
+                            }
+                            None => {
+                                let _ = endpoint.punch(target).await;
+                            }
+                        }
                     });
                 }
             }

@@ -969,13 +969,44 @@ cp .env.example .env</code></pre>
             </p>
           </div>
 
-          <h3>What a coordinator cannot do</h3>
+          <h3>The relay</h3>
           <p>
-            It has no game files, so the plain HTTP download route has nothing to serve. Clients
-            fetch from nodes over the mesh. Until a relay exists, a client that cannot establish a
-            direct path to any node cannot download &mdash; there is no origin to fall back to.
-            Run <code>mesh-doctor</code> on the node first; if it says the connection is punchable,
-            most clients will reach it.
+            A coordinator holds no game files, so there is no plain HTTP download to fall back to
+            when a client cannot reach a node directly. The relay is that fallback. Both ends dial
+            <em>out</em> to it &mdash; which always works, because it has a public address &mdash;
+            and it pastes the two connections together.
+          </p>
+          <p>
+            It is the least clever component here on purpose. It never terminates TLS, never parses
+            a chunk request, never learns which game is moving through it, and holds nothing but a
+            table of which two sockets belong together. The QUIC session runs end to end between the
+            client and the node, so what passes through is ciphertext it could not read if it
+            wanted to &mdash; and every guarantee made elsewhere survives untouched: the client
+            still pins the node's identity, the node still checks the grant, the client still
+            verifies every chunk against its hash.
+          </p>
+          <p>
+            It needs the coordinator's public key and nothing else. No database, no credentials, no
+            API. Tickets are verified locally, which is what lets it be a small process next to the
+            coordinator rather than part of it.
+          </p>
+
+          <div class="note">
+            <p>
+              <strong>It is not faster.</strong> It is strictly slower than a direct connection
+              &mdash; an extra hop, over this host's pipe. It exists so those downloads happen at
+              all. Only clients that failed to connect directly ever use it, relayed bytes count
+              against the same allowance as any others, and
+              <code>GAMEBLADE_RELAY_MAX</code> caps how many can be in flight so the exception path
+              cannot quietly become the main road.
+            </p>
+          </div>
+
+          <p>
+            Leaving <code>RELAY_ENDPOINT</code> unset means there is no relay, and a client that
+            cannot reach a node directly cannot download from it. Run <code>mesh-doctor</code> on
+            the node first: if it reports the connection punchable, most clients will reach it
+            without the relay ever being asked.
           </p>
         </section>
 
