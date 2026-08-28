@@ -4,7 +4,9 @@
 
 GameBlade is a self-hosted platform for preserving free-to-play and DRM-free games. It consists of:
 
-- **Server**: A Docker server that holds the game archive, serves the API, stores saves and profiles
+- **AIO**: The original self-contained Docker deployment with local game files
+- **Coordinator**: The VPS control plane, admin/landing UI, Discord bot and mesh rendezvous
+- **Node**: A storage service with its own management UI, scanner and QUIC delivery agents
 - **Desktop Client**: A Windows desktop application built with Tauri + React that provides the player experience
 
 ### Technology Stack
@@ -24,6 +26,57 @@ apps/
 packages/
   shared/           # Shared packages
 ```
+
+---
+
+## Version 0.6.1 - August 28, 2026
+
+0.6.1 repairs the networking split introduced in 0.6.0 and turns the intended
+deployment modes into three independently published products.
+
+### Three real Docker images
+
+- `gameblade-aio` preserves the pre-0.6 single-container deployment and its
+  local HTTP download fallback, with optional peer delivery still available.
+- `gameblade-coordinator` runs the control plane, admin and landing UI, Discord
+  bot, mesh rendezvous and optional encrypted UDP relay. It never advertises
+  itself as a file origin when it has no local library.
+- `gameblade-node` runs the storage-side scanner, catalog reporter, chunk
+  hasher, QUIC agents and a dedicated management UI. Coordinator-only routes
+  and background jobs are not exposed by this image.
+
+### Nodes work as storage appliances
+
+- One Node can manage multiple read-only libraries and scan one library or all
+  enabled libraries from its web UI.
+- One Node can connect to multiple Coordinators. Each Coordinator/library
+  pairing has isolated enrollment credentials, state and a stable UDP port.
+- Enrollment has a single owner: the Rust serving agent spends the one-time
+  token and the catalog reporter waits for that identity, removing the race
+  that could rotate credentials underneath one of the processes.
+- A sync scans, creates verification chunk hashes and publishes the catalog in
+  that order, so a freshly enrolled Node is actually eligible to serve files.
+- An Origin on a fresh Coordinator creates its logical library on first
+  report; mirrors and migrated libraries remain explicit to avoid duplicates.
+
+### Coordinator networking and Caddy
+
+- The Coordinator image bundles and supervises Caddy. The supplied Compose
+  stack maps host ports 80/443 to its unprivileged container ports and supports
+  automatic HTTPS by setting `CADDY_ADDRESS` to a public DNS name.
+- The optional encrypted fallback relay is now supervised by Coordinator/AIO
+  instead of being shipped as an unused binary.
+- Download manifests state whether an HTTP origin really exists. Split clients
+  select Nodes only; AIO retains its local origin fallback.
+
+### Shared design and release safety
+
+- The Node console uses the same GameBlade shell, controls, typography, color
+  tokens and authentication/setup flow as the Coordinator and AIO panels.
+- CI builds and smoke-tests all three Docker targets, and the release workflow
+  publishes matching versioned repositories for each image.
+- Root typecheck and test commands build shared declarations first, avoiding
+  false failures caused by stale workspace output.
 
 ---
 

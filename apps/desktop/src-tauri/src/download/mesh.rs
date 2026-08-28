@@ -51,7 +51,12 @@ impl MeshContext {
     /// HTTP: the mesh is off, the server is older, the game has no chunk
     /// hashes, no node holds it, or nothing would connect. None of these are
     /// errors and none of them are worth telling anyone about.
-    pub async fn prepare(client: &ApiClient, game_id: &str, chunked: bool) -> Option<Arc<Self>> {
+    pub async fn prepare(
+        client: &ApiClient,
+        game_id: &str,
+        chunked: bool,
+        origin_available: bool,
+    ) -> Option<Arc<Self>> {
         // Without chunk hashes a client cannot verify a piece, so it must not
         // accept one from anywhere but the origin.
         if !chunked {
@@ -102,7 +107,11 @@ impl MeshContext {
         // has opened its NAT.
         tokio::time::sleep(PUNCH_LEAD).await;
 
-        let mut pool = SourcePool::new("Origin");
+        let mut pool = if origin_available {
+            SourcePool::new("Origin")
+        } else {
+            SourcePool::nodes_only()
+        };
         let mut sessions = Vec::new();
 
         // Connected up front rather than lazily. A handshake costs a round trip
@@ -461,7 +470,7 @@ mod tests {
         // one from anywhere but the origin.
         let client = ApiClient::new("http://localhost:9", None).unwrap();
 
-        assert!(MeshContext::prepare(&client, "gam_1", false)
+        assert!(MeshContext::prepare(&client, "gam_1", false, true)
             .await
             .is_none());
     }
@@ -472,6 +481,8 @@ mod tests {
         // not as a failed download.
         let client = ApiClient::new("http://localhost:9", None).unwrap();
 
-        assert!(MeshContext::prepare(&client, "gam_1", true).await.is_none());
+        assert!(MeshContext::prepare(&client, "gam_1", true, true)
+            .await
+            .is_none());
     }
 }

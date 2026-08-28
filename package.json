@@ -1,6 +1,6 @@
 {
   "name": "gameblade",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "Self-hosted game preservation platform: a Docker server with an admin panel, and a Windows desktop client with cloud saves, achievements and friends.",
   "license": "AGPL-3.0-only",
@@ -14,12 +14,14 @@
     "dev:web": "pnpm --filter @gameblade/web dev",
     "dev:desktop": "pnpm --filter @gameblade/desktop dev",
     "build": "pnpm --filter @gameblade/shared build && pnpm --filter @gameblade/server build && pnpm --filter @gameblade/web build",
+    "pretypecheck": "pnpm --filter @gameblade/shared build",
     "typecheck": "pnpm -r typecheck",
+    "pretest": "pnpm --filter @gameblade/shared build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md,yml,yaml,css}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,yml,yaml,css}\"",
-    "docker:build": "docker build -t gameblade:local .",
+    "docker:build": "docker build --target aio -t gameblade-aio:local . && docker build --target coordinator -t gameblade-coordinator:local . && docker build --target node -t gameblade-node:local .",
     "docker:up": "docker compose up -d"
   },
   "devDependencies": {

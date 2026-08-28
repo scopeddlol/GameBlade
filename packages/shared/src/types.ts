@@ -167,12 +167,13 @@ export interface DownloadManifest {
    * boundaries — it sees a size it does not implement and stays on the origin.
    */
   chunkBytes?: number;
+  /** False on a Coordinator, whose catalog exists locally but game bytes do not. */
+  originAvailable?: boolean;
   /**
    * Where this game's bytes may be fetched from, best first.
    *
-   * Always contains the origin. A client that does not understand mesh sources
-   * ignores the field entirely and keeps using the download routes, which is
-   * what makes adding this safe to ship before any node exists.
+   * AIO always contains the origin. Coordinator deployments contain nodes only;
+   * `originAvailable` tells clients not to probe an HTTP path that cannot exist.
    */
   sources?: MeshSource[];
 }

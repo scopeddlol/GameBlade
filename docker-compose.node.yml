@@ -1,50 +1,29 @@
-# A node: the game files, and nothing else.
-#
-# Runs wherever the library lives. Scans it, reports what it found to the
-# coordinator, and serves game data straight to clients over QUIC so those bytes
-# never cross the coordinator's connection.
-#
-# Two processes, one node. The server scans and reports; the mesh agent serves.
-# They share a state file so they agree about which node they are.
-#
-# First run only: put the code from Admin → Settings → Nodes in ENROLMENT_TOKEN.
-# It is spent immediately and can be removed afterwards — what identifies this
-# node from then on is the key in ./data/node-state.json, which is the one file
-# here worth keeping.
+# GameBlade Node: one image and one lifecycle for scanning, enrollment, its
+# management UI, and QUIC delivery. Open http://<node-host>:8081 on first run.
 
 services:
-  scanner:
-    image: ghcr.io/scopeddlol/gameblade:latest
+  node:
+    image: ghcr.io/scopeddlol/gameblade-node:latest
     container_name: gameblade-node
     restart: unless-stopped
     environment:
       ROLE: node
       DATA_DIR: /data
       LIBRARY_PATHS: /library
-      COORDINATOR_URL: https://games.example.com
-      # ENROLMENT_TOKEN: paste-once-then-remove
-      SCAN_ON_START: 'true'
-      SCAN_INTERVAL_MINUTES: '360'
+      # Both can be entered in the Node web UI instead. Environment values are
+      # convenient for unattended deployments and seed the same runtime.
+      COORDINATOR_URL: ${COORDINATOR_URL:-}
+      ENROLMENT_TOKEN: ${ENROLMENT_TOKEN:-}
+      SCAN_ON_START: ${SCAN_ON_START:-true}
+      SCAN_INTERVAL_MINUTES: ${SCAN_INTERVAL_MINUTES:-360}
+      MESH_PORT: 47820
     volumes:
-      - ./data:/data
-      # Read-only: a node serves this library and must never write to it.
-      - /path/to/games:/library:ro
-
-  mesh:
-    image: ghcr.io/scopeddlol/gameblade:latest
-    container_name: gameblade-mesh
-    restart: unless-stopped
-    entrypoint: ['/sbin/tini', '--']
-    command: ['gameblade-node']
-    environment:
-      GAMEBLADE_SERVER: https://games.example.com
-      GAMEBLADE_LIBRARY: /library
-      GAMEBLADE_STATE: /data/node-state.json
-      GAMEBLADE_PORT: '47820'
-    volumes:
-      - ./data:/data
-      - /path/to/games:/library:ro
-    # UDP, and outbound-initiated: no port forward is needed. Publishing it is
-    # only useful if this host happens to be directly reachable.
+      - ./node-data:/data
+      - ${LIBRARY_PATH:-/mnt/games}:/library:ro
     ports:
-      - '47820:47820/udp'
+      - '${NODE_UI_PORT:-8081}:8080'
+      # Each Coordinator/library pairing gets a stable consecutive port. This
+      # default range supports 20 connections; publish more if you need them.
+      - '47820-47839:47820-47839/udp'
+    security_opt:
+      - 'no-new-privileges:true'

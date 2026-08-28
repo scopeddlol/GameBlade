@@ -10,17 +10,26 @@
 # file is the same file, opened by the same code.
 
 services:
-  gameblade:
-    image: ghcr.io/scopeddlol/gameblade:latest
+  coordinator:
+    image: ghcr.io/scopeddlol/gameblade-coordinator:latest
     container_name: gameblade-coordinator
     restart: unless-stopped
     environment:
       # No local library, no scanning. The catalog arrives from nodes.
       ROLE: coordinator
       DATA_DIR: /data
+      # Public UDP address clients and nodes can reach. Setting it starts the
+      # bundled encrypted fallback relay; leave empty for direct paths only.
+      RELAY_ENDPOINT: ${RELAY_ENDPOINT:-}
+      RELAY_PORT: 47821
+      # Use a real DNS name for automatic HTTPS, or :8080 for HTTP-only LAN
+      # testing. Host 80/443 map to Caddy's unprivileged container ports.
+      CADDY_ADDRESS: ${CADDY_ADDRESS:-:8080}
       # Behind a reverse proxy that terminates TLS.
       TRUST_PROXY: 'true'
     volumes:
       - ./data:/data
     ports:
-      - '8080:8080'
+      - '${HTTP_PORT:-80}:8080'
+      - '${HTTPS_PORT:-443}:8443'
+      - '47821:47821/udp'

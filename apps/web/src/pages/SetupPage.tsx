@@ -43,7 +43,7 @@ export function SetupPage() {
       const session = await api.post<SessionInfo>('/auth/setup', { username, password });
       setCsrfToken(session.csrfToken);
       await refresh();
-      navigate('/admin', { replace: true });
+      navigate(status?.role === 'node' ? '/' : '/admin', { replace: true });
     } catch (caught) {
       setError(caught instanceof ApiRequestError ? caught.message : 'Could not reach the server.');
     } finally {

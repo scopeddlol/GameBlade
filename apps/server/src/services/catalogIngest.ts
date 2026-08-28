@@ -67,7 +67,35 @@ export class CatalogIngestService {
     const node = this.db.select().from(meshNodes).where(eq(meshNodes.id, nodeId)).get();
     if (!node) throw ApiError.notFound('Unknown node');
 
-    if (!node.libraryId) {
+    let libraryId = node.libraryId;
+    const hasLocalLibrary = this.db
+      .select({ path: libraries.path })
+      .from(libraries)
+      .all()
+      .some((library) => !library.path.startsWith('node://'));
+
+    if (!libraryId && node.role === 'origin' && !hasLocalLibrary) {
+      // A fresh split deployment has no local path from which the Coordinator
+      // could create a library. The first origin therefore owns a logical one;
+      // mirrors still require an explicit assignment so they cannot duplicate
+      // an existing catalog by accident.
+      libraryId = newId('lib');
+      this.db.transaction((tx) => {
+        tx.insert(libraries)
+          .values({
+            id: libraryId as string,
+            name: node.label,
+            path: `node://${node.id}`,
+            enabled: true,
+            createdAt: new Date().toISOString(),
+          })
+          .run();
+        tx.update(meshNodes).set({ libraryId }).where(eq(meshNodes.id, nodeId)).run();
+      });
+      this.logger.info({ nodeId, libraryId }, 'created logical library for origin node');
+    }
+
+    if (!libraryId) {
       throw new ApiError(
         409,
         'library_not_assigned',
@@ -75,7 +103,7 @@ export class CatalogIngestService {
       );
     }
 
-    const library = this.db.select().from(libraries).where(eq(libraries.id, node.libraryId)).get();
+    const library = this.db.select().from(libraries).where(eq(libraries.id, libraryId)).get();
     if (!library) throw ApiError.notFound('The library assigned to this node no longer exists');
 
     const existing = new Map(

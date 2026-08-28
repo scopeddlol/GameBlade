@@ -93,6 +93,16 @@ impl SourcePool {
         }
     }
 
+    /// Build a pool for a split Coordinator, where HTTP has metadata but no
+    /// game bytes and therefore must never be selected as a source.
+    pub fn nodes_only() -> Self {
+        Self {
+            sources: Vec::new(),
+            cursor: 0,
+            order: HashMap::new(),
+        }
+    }
+
     /// Add a node, in the coordinator's preference order.
     pub fn add_node(&mut self, id: &str, label: &str, priority: usize) {
         self.order.insert(id.to_string(), priority);

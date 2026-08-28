@@ -34,12 +34,21 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   image:
-    name: Push image to GHCR
+    name: Push ${{ matrix.target }} image to GHCR
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aio
+            image: gameblade-aio
+          - target: coordinator
+            image: gameblade-coordinator
+          - target: node
+            image: gameblade-node
     permissions:
       contents: read
       packages: write
@@ -62,7 +71,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
@@ -76,6 +85,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: ${{ matrix.target }}
           # amd64 by default. There is no arm64 runner here, so that half is
           # built under QEMU — and better-sqlite3 has no musl prebuild, so an
           # emulated build compiles SQLite from source and takes ~15 minutes
@@ -242,7 +252,7 @@ jobs:
           # github.repository preserves the repo's casing. metadata-action
           # lowercases before pushing, so the notes must do the same to match
           # what actually exists in the registry.
-          echo "image=${REGISTRY}/${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+          echo "image_root=${REGISTRY}/${REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
           # target_commitish only means anything while the tag is still being
           # created. Handing it a *different* commit for a tag that already
@@ -276,7 +286,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
         env:
           REGISTRY: ${{ env.REGISTRY }}
-          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
 
       - name: Publish
         uses: softprops/action-gh-release@v2
@@ -303,10 +313,12 @@ jobs:
           body: |
             ## Install
 
-            **Server** — pull the image and follow the quick start in the README:
+            **Docker images** — choose the deployment shape from the README:
 
             ```
-            docker pull ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.image_tag }}
+            docker pull ${{ steps.tag.outputs.image_root }}/gameblade-aio:${{ steps.tag.outputs.image_tag }}
+            docker pull ${{ steps.tag.outputs.image_root }}/gameblade-coordinator:${{ steps.tag.outputs.image_tag }}
+            docker pull ${{ steps.tag.outputs.image_root }}/gameblade-node:${{ steps.tag.outputs.image_tag }}
             ```
 
             Architectures in this build: `${{ inputs.platforms || 'linux/amd64' }}`.

@@ -1,119 +1,106 @@
 # GameBlade
 
-A self-hosted platform for preserving free-to-play and DRM-free games: a Docker
-server that holds the archive, and a Windows desktop client that makes playing
-from it feel like a modern game launcher.
+GameBlade is a self-hosted platform for preserving free-to-play and DRM-free games. v0.6.1 ships three purpose-built Docker images plus the Windows desktop client.
 
-**📖 [Full documentation → `Docs.html`](Docs.html)** — open it in a browser. One
-file, no build step, and everything below is covered there in depth.
+**[Full documentation → `Docs.html`](Docs.html)**
 
----
+## Choose a deployment
 
-## What it is
+| Image                                      | Purpose                                                                                                                                          |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ghcr.io/scopeddlol/gameblade-aio`         | The pre-v0.6 all-in-one experience: catalog, files, admin UI, landing page, Discord bot, and optional P2P in one container.                      |
+| `ghcr.io/scopeddlol/gameblade-coordinator` | VPS control plane: admin UI, landing page, accounts, Discord bot, mesh coordination, optional relay, and bundled Caddy. It stores no game files. |
+| `ghcr.io/scopeddlol/gameblade-node`        | Storage appliance: multiple libraries, multiple Coordinator connections, automatic chunk hashing, QUIC delivery, and its own management UI.      |
 
-- **Server, not a web app.** The server hosts the files, a public landing page
-  and an admin panel. Everything a player does — browsing, installing, playing,
-  achievements, friends, messages — happens in the desktop client.
-- **Cloud saves.** Save files sync automatically, with version history and an
-  explicit conflict prompt when two machines disagree.
-- **Achievements.** Sets are imported from public sources and tracked per
-  account, so a DRM-free copy still earns something.
-- **Friends, activity and messages.** Live presence, a shared feed, screenshots
-  and clips, and direct messages and group chats.
-- **Read-only by design.** Your library is mounted `:ro`. GameBlade indexes and
-  serves it; it never writes to it.
-- **Invite-only.** Self-registration is off by default. Accounts come from
-  invite codes an administrator generates.
-- **Small.** One Alpine container, SQLite, no external database or cache.
+Use matching version tags for Coordinator, Nodes, and desktop clients. CI also publishes `latest` from `main`.
 
-| Piece                        | Who uses it   | What it does                                                           |
-| ---------------------------- | ------------- | ---------------------------------------------------------------------- |
-| **Server** (Docker)          | You           | Reads the library from disk, serves the API, stores saves and profiles |
-| **Landing page** (`/`)       | Everyone      | Explains the archive and links the Windows client download             |
-| **Admin panel** (`/admin`)   | Administrator | Invites, users, catalog, metadata, featured games, settings            |
-| **Desktop client** (Windows) | Players       | The whole player experience                                            |
-
----
-
-## Quick start
+## AIO quick start
 
 ```bash
 git clone https://github.com/scopeddlol/GameBlade.git
 cd GameBlade
 cp .env.example .env
-```
-
-Edit `.env` and set at least `LIBRARY_PATH` to the folder holding your games.
-Then:
-
-```bash
+# Set LIBRARY_PATH in .env, then:
 docker compose up -d
 ```
 
-Open `http://<host>:8080` and create the first administrator account. That
-first-run screen is only available while the database has no users.
+Open `http://<host>:8080` and create the first administrator. Existing GameBlade deployments can move to the AIO image without changing their data directory.
 
-Once the library has scanned, upload a client build from **Admin → Settings**
-and invite people from **Admin → Players → Invites**.
+## Split Coordinator + Node
 
-> **If it fails to start with a database error**, the `data` folder is almost
-> certainly owned by root while the container runs as uid 1000:
-> `sudo chown -R 1000:1000 ./data`
+### 1. Coordinator on the VPS
 
-Anything at the top level of a library root is one game — a directory or an
-archive. Nested folders are that game's files, not separate games.
+Copy `docker-compose.coordinator.yml`, then set:
 
----
+```dotenv
+CADDY_ADDRESS=games.example.com
+RELAY_ENDPOINT=games.example.com:47821
+```
 
-## Where to get it
+Point the domain's A/AAAA record at the VPS and allow TCP 80/443 plus UDP 47821. Start it:
 
-| Artifact           | Where                                                                                       |
-| ------------------ | ------------------------------------------------------------------------------------------- |
-| **Server image**   | `ghcr.io/scopeddlol/gameblade` — `latest`, plus a tag per release (amd64 and arm64)         |
-| **Windows client** | The `.exe` on the [latest release](https://github.com/scopeddlol/GameBlade/releases/latest) |
+```bash
+docker compose -f docker-compose.coordinator.yml up -d
+```
 
----
+Caddy is bundled in the Coordinator image. It obtains and renews HTTPS certificates automatically and proxies to the private GameBlade process. For HTTP-only LAN testing, use `CADDY_ADDRESS=:8080` and open port 80 (or the host port mapped to container 8080).
+
+Create the first admin, then go to **Admin → Settings → Nodes** and generate an **Origin** enrollment token.
+
+### 2. Node where the files live
+
+Copy `docker-compose.node.yml`, set `LIBRARY_PATH`, and start it:
+
+```bash
+docker compose -f docker-compose.node.yml up -d
+```
+
+Open `http://<node-host>:8081`, create the Node administrator, then:
+
+1. Add every mounted library path, such as `/library/main` or `/library/archive-2`.
+2. Add a Coordinator connection, select the library, and paste its one-time enrollment token.
+3. Scan one library or choose **Scan all**.
+
+A Node may connect different libraries to different Coordinators—or the same library to several Coordinators. Every Coordinator/library pairing has isolated credentials and a separate serving identity. Add extra read-only volume mounts to the Node compose file before adding their container paths in the UI.
+
+## Networking
+
+- Clients try direct QUIC to Nodes first.
+- UDP 47820 is the first Node agent port; additional connections use consecutive ports. The example Compose file publishes 47820–47839 for up to 20 pairings. Outbound NAT discovery usually needs no port forward, but forwarding the matching range improves direct reachability.
+- The Coordinator's optional UDP 47821 relay is an encrypted fallback for NATs that cannot establish a direct path.
+- A Coordinator never advertises itself as an HTTP file source. AIO always retains its local HTTP fallback.
+- Client-side peer seeding remains optional and is controlled in Admin settings.
+
+## Data and upgrades
+
+- AIO and Coordinator use `/data/gameblade.db`; existing databases migrate in place.
+- Node state lives under `/data`, including one identity per Coordinator/library connection. Back it up so Nodes do not need to enroll again.
+- Game libraries should always be mounted read-only.
+- Before moving an AIO install to split mode, back up `data/`. Copy it to the Coordinator; do not move or delete the original until the Node catalog and downloads are verified.
 
 ## Development
 
-Requires Node 22 and pnpm 10.
+Requires Node 22, pnpm 10, Rust, and Docker for image verification.
 
 ```bash
 pnpm install
-pnpm --filter @gameblade/shared build
+pnpm build
+pnpm typecheck
+pnpm test
 
-pnpm dev          # API on :8080, web on :5173
-pnpm dev:desktop  # needs the Rust toolchain
-
-pnpm -r typecheck && pnpm -r test && pnpm format
-cd apps/desktop/src-tauri && cargo test && cargo clippy --all-targets -- -D warnings
+cd crates/gameblade-mesh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
+Build all three images locally with `pnpm docker:build`, or one target directly:
+
+```bash
+docker build --target aio -t gameblade-aio:local .
+docker build --target coordinator -t gameblade-coordinator:local .
+docker build --target node -t gameblade-node:local .
 ```
-apps/server     Fastify API, scanner, metadata, social, saves, achievements, messaging
-apps/web        Public landing page and the admin panel (React 19 + Tailwind)
-apps/desktop    Tauri v2 client: the tabbed UI plus Rust install/launch/sync
-packages/shared Types, zod schemas and constants used by all three
-```
-
-The Windows client is built by hand with `scripts/build-windows.ps1` rather than
-by CI — see **[Building a Windows release](Docs.html#windows-build)**.
-
----
-
-## Documentation
-
-| Where                          | What                                                                                                                       |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| **[`Docs.html`](Docs.html)**   | The manual: configuration, the admin panel, scanning, saves, achievements, Discord, the desktop client, messages, security |
-| [`docs/API.md`](docs/API.md)   | The `/api/v1` external API reference                                                                                       |
-| [`changelog.md`](changelog.md) | What changed, and why                                                                                                      |
-
-`Docs.html` is one self-contained file with no build step: open it in a browser
-to read it, open it in an editor to change it. Its contents list builds itself
-from the headings, so adding a section is writing a `<section>` and nothing else.
-
----
 
 ## License
 

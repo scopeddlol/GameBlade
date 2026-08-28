@@ -431,8 +431,12 @@ export class MeshService {
    * optimisation the client may ignore — which is exactly what an older client
    * does, and why adding nodes needs no client release.
    */
-  sourcesFor(gameId: string, options: { chunked: boolean; excludeOwnerId?: string }): MeshSource[] {
-    const sources: MeshSource[] = [{ kind: 'origin', label: 'Origin', priority: 100 }];
+  sourcesFor(
+    gameId: string,
+    options: { chunked: boolean; excludeOwnerId?: string; originAvailable?: boolean },
+  ): MeshSource[] {
+    const sources: MeshSource[] =
+      options.originAvailable === false ? [] : [{ kind: 'origin', label: 'Origin', priority: 100 }];
 
     // Without chunk hashes a client cannot verify a piece, so it cannot safely
     // take one from anywhere but the origin. Offering nodes anyway would be

@@ -7,6 +7,7 @@ export interface ServerStatus {
   serverName: string;
   needsSetup: boolean;
   allowSelfRegistration: boolean;
+  role: 'aio' | 'coordinator' | 'node';
 }
 
 interface SessionContextValue {

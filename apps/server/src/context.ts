@@ -39,6 +39,9 @@ import type Database from 'better-sqlite3';
 import { BackupService } from './services/backups.js';
 import { HealthService } from './services/health.js';
 import { BugService } from './services/bugs.js';
+import { NodeRuntime } from './services/nodeRuntime.js';
+import { RelayRuntime } from './services/relayRuntime.js';
+import { CaddyRuntime } from './services/caddyRuntime.js';
 
 export interface GamebladeContext {
   config: Config;
@@ -98,6 +101,9 @@ export interface GamebladeContext {
   achievements: AchievementService;
   saves: SaveService;
   catalog: CatalogService;
+  nodeRuntime: NodeRuntime;
+  relayRuntime: RelayRuntime;
+  caddyRuntime: CaddyRuntime;
 
   /** Cookie path, so a sub-path deployment does not leak cookies to siblings. */
   cookiePath: string;
@@ -175,6 +181,9 @@ export function createContext(
     activity,
     gameRequests,
   );
+  const nodeRuntime = new NodeRuntime(config, db, scanner, chunks, logger);
+  const relayRuntime = new RelayRuntime(config, () => downloadTokens.publicKeyBase64(), logger);
+  const caddyRuntime = new CaddyRuntime(config, logger);
 
   const cookiePath = config.basePath === '' ? '/' : config.basePath;
 
@@ -219,6 +228,9 @@ export function createContext(
     achievements,
     saves,
     catalog,
+    nodeRuntime,
+    relayRuntime,
+    caddyRuntime,
 
     cookiePath,
     cookieOptions: (secure: boolean) => ({

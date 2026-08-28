@@ -2,7 +2,7 @@ services:
   gameblade:
     # Pull the image CI publishes. To build locally instead, comment `image`
     # out and uncomment `build`.
-    image: ghcr.io/scopeddlol/gameblade:latest
+    image: ghcr.io/scopeddlol/gameblade-aio:latest
     # build:
     #   context: .
     container_name: gameblade
@@ -13,6 +13,7 @@ services:
       TZ: ${TZ:-Etc/UTC}
       PORT: 8080
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      ROLE: aio
 
       # Comma-separated library roots *inside the container*. These are
       # registered automatically on first start.
@@ -51,6 +52,11 @@ services:
       MEDIA_QUOTA_MB: ${MEDIA_QUOTA_MB:-20480}
       SAVE_QUOTA_MB: ${SAVE_QUOTA_MB:-10240}
 
+      # Optional P2P fallback relay. Set this to the public UDP address and
+      # publish 47821/udp below if client peers should work across difficult NAT.
+      RELAY_ENDPOINT: ${RELAY_ENDPOINT:-}
+      RELAY_PORT: 47821
+
       # --- Scanning ---
       SCAN_ON_START: ${SCAN_ON_START:-true}
       SCAN_INTERVAL_MINUTES: ${SCAN_INTERVAL_MINUTES:-360}
@@ -73,6 +79,7 @@ services:
     # removed entirely so nothing is exposed on the host.
     ports:
       - '${HTTP_PORT:-8080}:8080'
+      - '${RELAY_PORT:-47821}:47821/udp'
 
     # SQLite plus streaming file I/O; the ceiling exists to catch a runaway, not
     # because normal operation needs anywhere near this much.

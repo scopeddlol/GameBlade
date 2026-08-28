@@ -81,8 +81,15 @@ pub struct DownloadManifest {
     /// instead of verifying arriving bytes against boundaries nobody uses.
     #[serde(rename = "chunkBytes", default)]
     pub chunk_bytes: Option<u64>,
+    /// False for a split Coordinator, which knows the catalog but stores no bytes.
+    #[serde(rename = "originAvailable", default = "default_true")]
+    pub origin_available: bool,
     #[serde(default)]
     pub sources: Option<Vec<ManifestSource>>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// One node the coordinator is offering, with the grant to use it.

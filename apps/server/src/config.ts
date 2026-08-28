@@ -7,6 +7,11 @@ const booleanish = z.union([z.boolean(), z.string()]).transform((v) => {
   return ['1', 'true', 'yes', 'on'].includes(v.trim().toLowerCase());
 });
 
+const optionalUrl = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+  z.string().url().optional(),
+);
+
 /**
  * `TRUST_PROXY` accepts the same values Fastify does: a boolean, a hop count,
  * or a comma-separated list of trusted addresses/CIDRs. Behind Pangolin or any
@@ -42,30 +47,11 @@ const envSchema = z.object({
   DATA_DIR: z.string().default('/data'),
   LIBRARY_PATHS: z.string().default(''),
 
-  /**
-   * What this instance is.
-   *
-   * One image, three roles, rather than an image per role. The versions of a
-   * coordinator and its nodes have to agree about the catalog they exchange,
-   * and separate images are how they quietly stop agreeing — somebody updates
-   * one and not the other. Shipping one artifact makes matching versions the
-   * default rather than a thing to remember.
-   *
-   * `standalone` is everything in one process reading games off local disk —
-   * exactly what GameBlade has always been, and the default, so an existing
-   * deployment that upgrades behaves identically.
-   *
-   * `coordinator` holds the database, the panel and the API but no game files.
-   * It does not scan; its catalog is reported to it by nodes.
-   *
-   * `node` is the opposite half: it holds the game files, scans them and
-   * reports what it found upward. It has no database, no panel and no API of
-   * its own.
-   */
-  ROLE: z.enum(['standalone', 'coordinator', 'node']).default('standalone'),
+  /** The legacy `standalone` value remains accepted for existing deployments. */
+  ROLE: z.enum(['aio', 'standalone', 'coordinator', 'node']).default('aio'),
 
   /** Where a node reports its catalog. Required when ROLE is `node`. */
-  COORDINATOR_URL: z.string().url().optional(),
+  COORDINATOR_URL: optionalUrl,
 
   /**
    * The relay's public address, as `host:port`.
@@ -75,8 +61,18 @@ const envSchema = z.object({
    * better than handing out an address nothing is listening on.
    */
   RELAY_ENDPOINT: z.string().optional(),
+  /** UDP port the bundled relay listens on. */
+  RELAY_PORT: z.coerce.number().int().min(1).max(65_535).default(47_821),
   /** One-time code from Admin → Settings → Nodes. Only needed once. */
   ENROLMENT_TOKEN: z.string().optional(),
+  /** UDP port the bundled node agent listens on. */
+  MESH_PORT: z.coerce.number().int().min(1).max(65_535).default(47_820),
+  /** Override for development and tests; containers use the binary on PATH. */
+  GAMEBLADE_NODE_BINARY: z.string().default('gameblade-node'),
+  GAMEBLADE_RELAY_BINARY: z.string().default('gameblade-relay'),
+  CADDY_ENABLED: booleanish.default(false),
+  CADDY_BINARY: z.string().default('caddy'),
+  CADDY_CONFIG: z.string().default('/etc/caddy/Caddyfile'),
 
   BASE_PATH: z.string().optional(),
   TRUST_PROXY: z.string().optional(),
@@ -137,6 +133,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
   const e = parsed.data;
+  const role = e.ROLE === 'standalone' ? 'aio' : e.ROLE;
 
   const dataDir = path.resolve(e.DATA_DIR);
   const libraryPaths = e.LIBRARY_PATHS.split(/[,;]/)
@@ -151,19 +148,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     port: e.PORT,
     logLevel: e.LOG_LEVEL,
 
-    role: e.ROLE,
+    role,
     /** Whether this instance reads game files from its own disk. */
-    servesLocalFiles: e.ROLE !== 'coordinator',
+    servesLocalFiles: role !== 'coordinator',
     /** Whether this instance owns a database, a panel and an API. */
-    servesApi: e.ROLE !== 'node',
+    servesApi: true,
     /** Whether this instance scans local disk and reports what it found up. */
-    reportsCatalogUpstream: e.ROLE === 'node',
+    reportsCatalogUpstream: role === 'node',
     /** Where a node sends its catalog. Only meaningful in the `node` role. */
     coordinatorUrl: e.COORDINATOR_URL?.replace(/\/+$/, '') ?? null,
     /** Spent on first enrolment; absent afterwards is normal. */
     enrolmentToken: e.ENROLMENT_TOKEN ?? null,
     nodeStatePath: path.join(dataDir, 'node-state.json'),
+    nodeConfigPath: path.join(dataDir, 'node-config.json'),
+    nodeBinary: e.GAMEBLADE_NODE_BINARY,
+    nodeMeshPort: e.MESH_PORT,
     relayEndpoint: parseEndpoint(e.RELAY_ENDPOINT),
+    relayPort: e.RELAY_PORT,
+    relayBinary: e.GAMEBLADE_RELAY_BINARY,
+    caddyEnabled: e.CADDY_ENABLED,
+    caddyBinary: e.CADDY_BINARY,
+    caddyConfigPath: e.CADDY_CONFIG,
     dataDir,
     databasePath: path.join(dataDir, 'gameblade.db'),
     imageCacheDir: path.join(dataDir, 'images'),
@@ -200,8 +205,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     steamApiKey: e.STEAM_API_KEY ?? null,
     clientDownloadUrl: e.CLIENT_DOWNLOAD_URL?.trim() ? e.CLIENT_DOWNLOAD_URL.trim() : null,
 
-    scanOnStart: e.SCAN_ON_START,
-    scanIntervalMinutes: e.SCAN_INTERVAL_MINUTES,
+    scanOnStart: role !== 'coordinator' && e.SCAN_ON_START,
+    scanIntervalMinutes: role === 'coordinator' ? 0 : e.SCAN_INTERVAL_MINUTES,
     scanConcurrency: e.SCAN_CONCURRENCY,
 
     rateLimitMax: e.RATE_LIMIT_MAX,

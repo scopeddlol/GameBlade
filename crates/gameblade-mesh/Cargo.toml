@@ -1,6 +1,6 @@
 [package]
 name = "gameblade-mesh"
-version = "0.6.0"
+version = "0.6.1"
 description = "Direct node-to-client transport for GameBlade"
 edition = "2021"
 rust-version = "1.77.2"

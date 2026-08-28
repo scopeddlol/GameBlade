@@ -23,6 +23,7 @@ interface NodesResponse {
 interface LibraryOption {
   id: string;
   name: string;
+  path: string;
 }
 
 /** What the operator sees next to each node's name. */
@@ -36,7 +37,7 @@ const STATUS_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> 
 export function AdminNodesPage() {
   const queryClient = useQueryClient();
   const [label, setLabel] = useState('');
-  const [role, setRole] = useState<'origin' | 'mirror'>('mirror');
+  const [role, setRole] = useState<'origin' | 'mirror'>('origin');
   const [issued, setIssued] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -92,6 +93,9 @@ export function AdminNodesPage() {
   };
 
   const nodes = nodesQuery.data?.nodes ?? [];
+  const hasMigratedLibrary = (librariesQuery.data ?? []).some(
+    (library) => !library.path.startsWith('node://'),
+  );
 
   return (
     <div className="gb-page">
@@ -127,8 +131,8 @@ export function AdminNodesPage() {
               value={role}
               onChange={(e) => setRole(e.target.value as 'origin' | 'mirror')}
             >
-              <option value="mirror">Mirror</option>
               <option value="origin">Origin</option>
+              <option value="mirror">Mirror</option>
             </select>
           </Field>
           <button type="submit" className="gb-btn" disabled={enrolMutation.isPending}>
@@ -211,7 +215,13 @@ export function AdminNodesPage() {
                     })
                   }
                 >
-                  <option value="">Not assigned — reports refused</option>
+                  <option value="">
+                    {node.role === 'origin'
+                      ? hasMigratedLibrary
+                        ? 'Select the migrated library'
+                        : 'Automatic — creates its own library'
+                      : 'Not assigned — reports refused'}
+                  </option>
                   {(librariesQuery.data ?? []).map((library) => (
                     <option key={library.id} value={library.id}>
                       {library.name}
@@ -219,10 +229,9 @@ export function AdminNodesPage() {
                   ))}
                 </select>
                 <p className="text-ink-500 mt-1 text-[11px]">
-                  Pick the library these games are <em>already</em> in. Games are matched by folder
-                  path, so reporting into the existing library updates those entries and every game
-                  keeps its achievements, save rules and artwork. Pointing a node at a different
-                  library would add the whole catalog again as new games.
+                  {node.role === 'origin' && !node.libraryId && !hasMigratedLibrary
+                    ? 'A new origin automatically creates its logical library on the first report.'
+                    : 'Pick the library these games are already in. Games are matched by folder path, so the existing entries keep their achievements, save rules and artwork.'}
                 </p>
                 {node.catalogStatus ? (
                   <p className="text-ink-500 mt-1 text-[11px]">Last report: {node.catalogStatus}</p>

@@ -129,8 +129,12 @@ jobs:
         run: cargo build --release --bins
 
   docker:
-    name: Build image
+    name: Build ${{ matrix.target }} image
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aio, coordinator, node]
     steps:
       - uses: actions/checkout@v4
 
@@ -140,9 +144,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: ${{ matrix.target }}
           push: false
           load: true
-          tags: gameblade:ci
+          tags: gameblade-${{ matrix.target }}:ci
           cache-from: type=gha
           # min rather than max. max exports every intermediate layer of every
           # stage — including the Rust compiler's output — and the cache a
@@ -156,7 +161,7 @@ jobs:
           # A container with no library configured must still boot and report healthy.
           docker run -d --name gameblade-ci -p 8080:8080 \
             -e SCAN_ON_START=false \
-            gameblade:ci
+            gameblade-${{ matrix.target }}:ci
 
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/api/health > /dev/null; then

@@ -1070,6 +1070,7 @@ mod tests {
             token: String::new(),
             expires_at: None,
             chunk_bytes: None,
+            origin_available: true,
             sources: None,
         }
     }
@@ -1079,7 +1080,10 @@ mod tests {
         let queued = QueueEntry::from_manifest(&manifest(), PathBuf::from("/games"));
 
         assert_eq!(queued.root, PathBuf::from("/games/Hero_ Re_birth"));
-        assert_eq!(queued.files, vec!["data/game file__.dat"]);
+        assert_eq!(
+            queued.files.iter().map(PathBuf::from).collect::<Vec<_>>(),
+            vec![PathBuf::from("data").join("game file__.dat")]
+        );
     }
 
     #[test]
@@ -1111,9 +1115,12 @@ mod tests {
     #[tokio::test]
     async fn a_restored_queue_resumes_what_was_interrupted_and_keeps_what_was_paused() {
         let dir = std::env::temp_dir().join(format!(
-            "gb-queue-{}-{:?}",
+            "gb-queue-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
 

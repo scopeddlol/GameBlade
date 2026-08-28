@@ -36,6 +36,7 @@ import { requestRoutes } from './routes/requests.js';
 import { meshRoutes } from './routes/mesh.js';
 import { messageRoutes } from './routes/messages.js';
 import { socialRoutes } from './routes/social.js';
+import { nodeRoutes } from './routes/node.js';
 
 export async function buildApp(config: Config): Promise<FastifyInstance> {
   const app = Fastify({
@@ -67,14 +68,19 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
   const { db, sqlite } = createDb(config.databasePath, app.log);
   const context = createContext(config, db, sqlite, app.log);
   app.decorate('gameblade', context);
-  await context.images.init();
-  await context.media.init();
-  await context.saves.init();
-  await context.installer.init();
-  context.realtime.start();
+  if (config.role !== 'node') {
+    await context.images.init();
+    await context.media.init();
+    await context.saves.init();
+    await context.installer.init();
+    context.realtime.start();
+  }
 
   app.addHook('onClose', async () => {
     context.realtime.stop();
+    context.nodeRuntime.stop();
+    context.relayRuntime.stop();
+    context.caddyRuntime.stop();
     // Closed cleanly rather than left to time out, so the bot goes offline in
     // Discord the moment the server does instead of lingering as a ghost.
     context.discordBot.shutdown();
@@ -180,26 +186,30 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
     async (api) => {
       await healthRoutes(api);
       await authRoutes(api);
-      await homeRoutes(api);
-      await gameRoutes(api);
-      await imageRoutes(api);
-      await installerRoutes(api);
-      await discordRoutes(api);
-      await downloadRoutes(api);
-      await socialRoutes(api);
-      await meshRoutes(api);
-      await messageRoutes(api);
-      await playRoutes(api);
-      await realtimeRoutes(api);
-      await requestRoutes(api);
-      // Its own scope: the /v1 surface authenticates with an API key and
-      // nothing else, so its onRequest guard must not run for any other route.
-      await api.register(async (v1Scope) => {
-        await apiV1Routes(v1Scope);
-      });
-      await api.register(async (adminScope) => {
-        await adminRoutes(adminScope);
-      });
+      if (config.role === 'node') {
+        await nodeRoutes(api);
+      } else {
+        await homeRoutes(api);
+        await gameRoutes(api);
+        await imageRoutes(api);
+        await installerRoutes(api);
+        await discordRoutes(api);
+        await downloadRoutes(api);
+        await socialRoutes(api);
+        await meshRoutes(api);
+        await messageRoutes(api);
+        await playRoutes(api);
+        await realtimeRoutes(api);
+        await requestRoutes(api);
+        // Its own scope: the /v1 surface authenticates with an API key and
+        // nothing else, so its onRequest guard must not run for any other route.
+        await api.register(async (v1Scope) => {
+          await apiV1Routes(v1Scope);
+        });
+        await api.register(async (adminScope) => {
+          await adminRoutes(adminScope);
+        });
+      }
     },
     { prefix: apiPrefix },
   );

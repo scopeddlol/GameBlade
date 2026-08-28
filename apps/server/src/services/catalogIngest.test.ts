@@ -126,6 +126,34 @@ describe('CatalogIngestService', () => {
     expect(rows[0]?.id).toBe(original);
   });
 
+  it('creates a logical library for a fresh origin', () => {
+    db.delete(meshNodes).where(eq(meshNodes.id, nodeId)).run();
+    db.delete(libraries).where(eq(libraries.id, libraryId)).run();
+
+    const freshNodeId = newId('nod');
+    db.insert(meshNodes)
+      .values({
+        id: freshNodeId,
+        label: 'New storage node',
+        role: 'origin',
+        status: 'online',
+        publicKey: 'n'.repeat(44),
+        tokenHash: 't'.repeat(64),
+      })
+      .run();
+
+    expect(ingest.ingest(freshNodeId, [reported()])).toMatchObject({ added: 1 });
+
+    const node = db.select().from(meshNodes).where(eq(meshNodes.id, freshNodeId)).get();
+    expect(node?.libraryId).toBeTruthy();
+    expect(
+      db.select().from(libraries).where(eq(libraries.id, node!.libraryId!)).get(),
+    ).toMatchObject({
+      name: 'New storage node',
+      path: `node://${freshNodeId}`,
+    });
+  });
+
   it('never adds a second copy of a game it already has', () => {
     const original = seedExistingGame();
 
@@ -272,9 +300,18 @@ describe('CatalogIngestService', () => {
 
   /* ------------------------------------------------------------- refusals */
 
-  it('refuses a node with no library assigned rather than guessing', () => {
+  it('refuses a mirror with no library assigned rather than guessing', () => {
     // Guessing — or helpfully making a new library — would re-add the whole
     // catalog as strangers. Refusing is the only safe answer.
+    db.update(meshNodes)
+      .set({ libraryId: null, role: 'mirror' })
+      .where(eq(meshNodes.id, nodeId))
+      .run();
+
+    expect(() => ingest.ingest(nodeId, [reported()])).toThrow(/no library assigned/i);
+  });
+
+  it('refuses an unassigned origin when a migrated local library exists', () => {
     db.update(meshNodes).set({ libraryId: null }).where(eq(meshNodes.id, nodeId)).run();
 
     expect(() => ingest.ingest(nodeId, [reported()])).toThrow(/no library assigned/i);

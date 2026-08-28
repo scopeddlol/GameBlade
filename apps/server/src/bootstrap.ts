@@ -5,7 +5,6 @@ import type { FastifyInstance } from 'fastify';
 import { maintain } from './db/index.js';
 import { libraries } from './db/schema.js';
 import { newId } from './lib/ids.js';
-import { CatalogReporter } from './services/catalogReporter.js';
 import { MESH_HEARTBEAT_TIMEOUT_SECONDS } from '@gameblade/shared';
 
 /**
@@ -15,24 +14,27 @@ import { MESH_HEARTBEAT_TIMEOUT_SECONDS } from '@gameblade/shared';
  * library or resets an account an administrator has since changed.
  */
 export async function bootstrap(app: FastifyInstance): Promise<void> {
-  const { config, auth, profiles, discord, discordBot } = app.gameblade;
+  const { config, auth, profiles, discord, discordBot, nodeRuntime, relayRuntime, caddyRuntime } =
+    app.gameblade;
 
   await seedLibraries(app);
 
-  // Announcements use Discord's HTTP API, so authenticating the configured
-  // bot here is its real startup and catches an invalid token immediately.
-  try {
-    const bot = await discord.startBot();
-    if (bot) app.log.info({ username: bot.username, id: bot.id }, 'Discord bot started');
-  } catch (error) {
-    app.log.error({ err: error }, 'Discord bot failed to start; check its token and permissions');
-  }
+  if (config.role === 'node') {
+    await nodeRuntime.start();
+  } else {
+    // Announcements use Discord's HTTP API, so authenticating the configured
+    // bot here is its real startup and catches an invalid token immediately.
+    try {
+      const bot = await discord.startBot();
+      if (bot) app.log.info({ username: bot.username, id: bot.id }, 'Discord bot started');
+    } catch (error) {
+      app.log.error({ err: error }, 'Discord bot failed to start; check its token and permissions');
+    }
 
-  // The gateway connection is separate and only comes up if the operator left
-  // it switched on. Not awaited: connecting, identifying and registering
-  // commands is several round trips to Discord, and none of them is a reason
-  // for this server to be slow to accept its first request.
-  discordBot.restore();
+    discordBot.restore();
+    relayRuntime.start();
+    caddyRuntime.start();
+  }
 
   if (config.bootstrapAdmin) {
     const existing = auth.findByUsername(config.bootstrapAdmin.username);
@@ -120,46 +122,44 @@ export function startSchedules(app: FastifyInstance): () => void {
   } = app.gameblade;
   const timers: NodeJS.Timeout[] = [];
 
-  /**
-   * A node's whole job, once its files are scanned: tell the coordinator.
-   *
-   * Runs on its own timer rather than hanging off the end of a scan, so a
-   * coordinator that was unreachable when the scan finished is retried without
-   * needing another scan to trigger it — and so a node that restarts reports
-   * what it already knows straight away instead of waiting for the next walk.
-   */
-  if (config.reportsCatalogUpstream) {
-    if (!config.coordinatorUrl) {
-      app.log.error('ROLE is "node" but COORDINATOR_URL is not set; nothing will be reported');
-    } else {
-      const reporter = new CatalogReporter(
-        db,
-        {
-          coordinatorUrl: config.coordinatorUrl,
-          enrolmentToken: config.enrolmentToken,
-          statePath: config.nodeStatePath,
-        },
-        app.log,
-      );
+  // A Node has one narrow workload: scan, chunk-hash, publish. It must not run
+  // Coordinator backups, Discord announcements, save-manifest pulls or stale
+  // node sweeps against its private working database.
+  if (config.role === 'node') {
+    const runSync = () => {
+      try {
+        void app.gameblade.nodeRuntime.sync().catch((error: unknown) => {
+          app.log.debug({ err: error }, 'scheduled node sync skipped');
+        });
+      } catch (error) {
+        // A concurrent manual sync is ordinary and already visible in the UI.
+        app.log.debug({ err: error }, 'scheduled node sync skipped');
+      }
+    };
 
-      const publish = async () => {
-        try {
-          if (await reporter.ensureRegistered()) await reporter.report();
-        } catch (error) {
-          app.log.warn({ err: error }, 'catalog report failed');
-        }
-      };
-
-      // Soon after boot, then steadily. The first attempt is delayed enough for
-      // the mesh agent beside this process to have written its key.
-      const first = setTimeout(() => void publish(), 8_000);
+    if (config.scanOnStart) {
+      const first = setTimeout(runSync, 3_000);
       first.unref();
       timers.push(first);
-
-      const repeat = setInterval(() => void publish(), 5 * 60_000);
-      repeat.unref();
-      timers.push(repeat);
     }
+
+    if (config.scanIntervalMinutes > 0) {
+      const interval = setInterval(runSync, config.scanIntervalMinutes * 60_000);
+      interval.unref();
+      timers.push(interval);
+    }
+
+    // Keep retrying catalog publication even when a full disk walk is not due.
+    const report = setInterval(() => void app.gameblade.nodeRuntime.report(), 5 * 60_000);
+    report.unref();
+    timers.push(report);
+
+    return () => {
+      for (const timer of timers) {
+        clearTimeout(timer);
+        clearInterval(timer);
+      }
+    };
   }
 
   if (config.scanOnStart) {

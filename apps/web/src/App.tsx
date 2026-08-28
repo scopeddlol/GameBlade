@@ -34,6 +34,7 @@ import { LoginPage } from './pages/LoginPage.js';
 import { RegisterPage } from './pages/RegisterPage.js';
 import { ResetPasswordPage } from './pages/ResetPasswordPage.js';
 import { SetupPage } from './pages/SetupPage.js';
+import { NodePage } from './pages/NodePage.js';
 
 /**
  * The admin routes stay administrators-only. A signed-in player has no pages
@@ -79,17 +80,39 @@ function RequireUser({ children }: { children: ReactElement }) {
  * and the landing page all agree — the endpoint is public, so it works before
  * anyone has logged in.
  */
-function useServerTheme() {
+function useServerTheme(enabled: boolean) {
   const infoQuery = useQuery({
     queryKey: ['public', 'info'],
     queryFn: () => api.get<PublicServerInfo>('/public/info'),
     staleTime: 60_000,
+    enabled,
   });
   useApplyTheme(infoQuery.data?.theme.tokens);
 }
 
 export function App() {
-  useServerTheme();
+  const { status } = useSession();
+  const isNode = status?.role === 'node';
+  useServerTheme(status !== null && !isNode);
+
+  if (isNode) {
+    return (
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/setup" element={<SetupPage />} />
+        <Route
+          path="/"
+          element={
+            <RequireAdmin>
+              <NodePage />
+            </RequireAdmin>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    );
+  }
+
   return (
     <Routes>
       <Route path="/" element={<LandingPage />} />

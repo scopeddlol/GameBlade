@@ -45,10 +45,9 @@ RUN pnpm --filter @gameblade/server deploy --prod --legacy /app/deploy
 # ---------------------------------------------------------------------------
 # Mesh agent: the QUIC side of a node, built once and carried into the runtime.
 #
-# In the same image as the server rather than an image of its own, because a
-# coordinator and its nodes have to agree about the catalog they exchange and
-# separate artifacts are how they quietly stop agreeing. It is a few megabytes
-# and only a node ever runs it.
+# Built once so the separately published Node and Coordinator images still use
+# binaries from the exact same source revision. Each final image copies only
+# the binary it actually runs.
 # ---------------------------------------------------------------------------
 FROM rust:1-alpine AS mesh
 RUN apk add --no-cache musl-dev
@@ -71,9 +70,9 @@ RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
           target/release/mesh-doctor /out/
 
 # ---------------------------------------------------------------------------
-# Runtime stage
+# Shared runtime: each public image inherits only the binaries it actually runs.
 # ---------------------------------------------------------------------------
-FROM node:22-alpine AS runtime
+FROM node:22-alpine AS runtime-base
 
 # tini reaps zombies and forwards SIGTERM, so an in-flight download is closed
 # cleanly instead of the process being killed outright.
@@ -93,14 +92,10 @@ COPY --from=builder --chown=node:node /app/deploy/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/deploy/dist ./dist
 COPY --from=builder --chown=node:node /app/deploy/package.json ./package.json
 COPY --from=builder --chown=node:node /app/apps/web/dist ./public
-COPY --from=mesh --chown=node:node /out/gameblade-node /usr/local/bin/gameblade-node
-COPY --from=mesh --chown=node:node /out/gameblade-relay /usr/local/bin/gameblade-relay
-COPY --from=mesh --chown=node:node /out/mesh-doctor /usr/local/bin/mesh-doctor
 
 # Never run the server as root: it has read access to the whole game library.
 USER node
 
-EXPOSE 8080
 VOLUME ["/data"]
 
 # Uses the app's own health route, so a locked or corrupt database reports unhealthy.
@@ -109,3 +104,35 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/index.js"]
+
+# VPS control plane: web/API/Discord plus the optional UDP relay. No node agent
+# and no game-library volume are present in this artifact.
+FROM runtime-base AS coordinator
+USER root
+RUN apk add --no-cache caddy
+COPY deploy/Caddyfile /etc/caddy/Caddyfile
+RUN chown node:node /etc/caddy/Caddyfile
+USER node
+ENV ROLE=coordinator \
+    PORT=3000 \
+    CADDY_ENABLED=true \
+    CADDY_ADDRESS=:8080 \
+    XDG_DATA_HOME=/data/caddy \
+    XDG_CONFIG_HOME=/data/caddy-config
+COPY --from=mesh --chown=node:node /out/gameblade-relay /usr/local/bin/gameblade-relay
+EXPOSE 8080 8443 47821/udp
+
+# Storage appliance: local scanner/UI plus one supervised QUIC agent. The Node
+# web UI is selected by ROLE; Coordinator/admin routes are not registered.
+FROM runtime-base AS node
+ENV ROLE=node
+COPY --from=mesh --chown=node:node /out/gameblade-node /usr/local/bin/gameblade-node
+COPY --from=mesh --chown=node:node /out/mesh-doctor /usr/local/bin/mesh-doctor
+EXPOSE 8080 47820-47839/udp
+
+# Legacy all-in-one server. This is the final stage intentionally, preserving
+# `docker build .` and older local workflows while GHCR publishes it as AIO.
+FROM runtime-base AS aio
+ENV ROLE=aio
+COPY --from=mesh --chown=node:node /out/gameblade-relay /usr/local/bin/gameblade-relay
+EXPOSE 8080 47821/udp

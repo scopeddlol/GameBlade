@@ -347,6 +347,7 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
         &job.client,
         &job.game_id,
         manifest.chunk_bytes == Some(CHUNK_BYTES),
+        manifest.origin_available,
     )
     .await;
 

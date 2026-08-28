@@ -49,7 +49,12 @@ export function LoginPage() {
     const from = (location.state as { from?: string } | null)?.from;
     // Playing happens in the desktop client either way, but a signed-in
     // visitor still has their own account to manage here.
-    return <Navigate to={from ?? (isAdmin ? '/admin' : '/account')} replace />;
+    return (
+      <Navigate
+        to={from ?? (status?.role === 'node' ? '/' : isAdmin ? '/admin' : '/account')}
+        replace
+      />
+    );
   }
 
   const handleSubmit = async (event: FormEvent) => {
@@ -61,7 +66,11 @@ export function LoginPage() {
       setCsrfToken(session.csrfToken);
       await refresh();
       const from = (location.state as { from?: string } | null)?.from;
-      navigate(from ?? (session.user.role === 'admin' ? '/admin' : '/account'), { replace: true });
+      navigate(
+        from ??
+          (status?.role === 'node' ? '/' : session.user.role === 'admin' ? '/admin' : '/account'),
+        { replace: true },
+      );
     } catch (caught) {
       setError(caught instanceof ApiRequestError ? caught.message : 'Could not reach the server.');
     } finally {

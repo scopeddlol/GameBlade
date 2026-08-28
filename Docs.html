@@ -474,6 +474,9 @@
         content: 'New in 0.5.3';
         color: var(--new);
       }
+      .new.current::before {
+        content: 'New in 0.6.1';
+      }
 
       .cards {
         display: grid;
@@ -588,7 +591,7 @@
   <body>
     <header class="top">
       <button class="menu-toggle" id="menu-toggle" aria-expanded="false">Contents</button>
-      <span class="brand">GameBlade <span class="version">0.5.3</span></span>
+      <span class="brand">GameBlade <span class="version">0.6.1</span></span>
       <span class="spacer"></span>
       <a class="external" href="https://github.com/scopeddlol/GameBlade">GitHub</a>
       <a class="external" href="docs/API.md">API reference</a>
@@ -607,9 +610,9 @@
         <section id="what-it-is">
           <h1>GameBlade</h1>
           <p class="lede">
-            A self-hosted platform for preserving free-to-play and DRM-free games: a Docker server
-            that holds the archive, and a Windows desktop client that makes playing from it feel
-            like a modern game launcher.
+            A self-hosted platform for preserving free-to-play and DRM-free games: purpose-built
+            Coordinator, Node and all-in-one Docker services, plus a Windows desktop client that
+            makes playing from them feel like a modern game launcher.
           </p>
 
           <p>
@@ -620,10 +623,10 @@
 
           <div class="cards">
             <div class="card">
-              <h4>Server, not a web app</h4>
+              <h4>Service, not just a web app</h4>
               <p>
-                The server hosts the files, a public landing page and an admin panel. Everything a
-                player does happens in the desktop client.
+                AIO hosts files directly; a Coordinator connects storage Nodes. Both provide the
+                landing page and admin panel, while playing happens in the desktop client.
               </p>
             </div>
             <div class="card">
@@ -641,21 +644,19 @@
               </p>
             </div>
             <div class="card">
-              <h4>Small</h4>
-              <p>One Alpine container, SQLite, no external database or cache.</p>
+              <h4>Deploy it your way</h4>
+              <p>Use AIO on one host, or split the control plane from one or more storage Nodes.</p>
             </div>
           </div>
 
-          <div class="new">
-            <p><strong>0.5.3 at a glance.</strong> The larger changes are described in their own sections:</p>
+          <div class="new current">
+            <p><strong>0.6.1 at a glance.</strong> The networking release is now separated into real products:</p>
             <ul>
-              <li><a href="#scanning">The library scanner</a>, rebuilt — the run that never finished.</li>
-              <li><a href="#messages">Direct messages and group chats</a>.</li>
-              <li><a href="#offline">The client works offline</a>, where it previously refused to start.</li>
-              <li><a href="#database">Database tuning</a> for a catalog on a spinning disk.</li>
-              <li><a href="#save-paths">Save rules derived from achievement rules</a>.</li>
-              <li><a href="#discord-posting">Tagging people, roles and channels</a> in what the bot posts.</li>
-              <li><a href="#media">A real media viewer</a>, and <a href="#profiles">more on a profile</a>.</li>
+              <li>Three independent Docker images: Coordinator, Node and AIO.</li>
+              <li>A Node management UI with multiple libraries and selective or all-library scans.</li>
+              <li>Multiple Coordinator connections per Node, each with isolated enrollment state.</li>
+              <li>Automatic chunk hashing, one supervised serving agent per Coordinator/library pairing.</li>
+              <li>Bundled Caddy with automatic HTTPS in the Coordinator image.</li>
             </ul>
           </div>
         </section>
@@ -674,9 +675,19 @@
               </thead>
               <tbody>
                 <tr>
-                  <td><strong>Server</strong> (Docker)</td>
+                  <td><strong>AIO</strong> (Docker)</td>
                   <td>You</td>
-                  <td>Reads the library from disk, serves the API, stores saves and profiles</td>
+                  <td>The original single-container GameBlade experience, with optional P2P</td>
+                </tr>
+                <tr>
+                  <td><strong>Coordinator</strong> (Docker)</td>
+                  <td>Administrator</td>
+                  <td>Admin UI, landing page, API, Discord bot, Caddy and mesh coordination</td>
+                </tr>
+                <tr>
+                  <td><strong>Node</strong> (Docker)</td>
+                  <td>Storage operator</td>
+                  <td>Manages libraries, scans files and serves verified chunks to clients</td>
                 </tr>
                 <tr>
                   <td><strong>Landing page</strong> (<code>/</code>)</td>
@@ -712,10 +723,12 @@
             <table>
               <tbody>
                 <tr>
-                  <td><strong>Server image</strong></td>
+                  <td><strong>Docker images</strong></td>
                   <td>
-                    <code>ghcr.io/scopeddlol/gameblade</code> — <code>latest</code>, plus a tag per
-                    release. Built for <code>linux/amd64</code> and <code>linux/arm64</code>.
+                    <code>ghcr.io/scopeddlol/gameblade-aio</code>,
+                    <code>ghcr.io/scopeddlol/gameblade-coordinator</code>, and
+                    <code>ghcr.io/scopeddlol/gameblade-node</code> —
+                    <code>latest</code>, plus a tag per release.
                   </td>
                 </tr>
                 <tr>
@@ -738,7 +751,8 @@
 cd GameBlade
 cp .env.example .env</code></pre>
 
-          <p>Edit <code>.env</code> and set at least <code>LIBRARY_PATH</code>. Then:</p>
+          <p>This quick start is for AIO. Edit <code>.env</code>, set
+            <code>LIBRARY_PATH</code>, then:</p>
 
           <pre><code>docker compose up -d</code></pre>
 
@@ -791,9 +805,10 @@ cp .env.example .env</code></pre>
         <section id="configuration">
           <h2>Configuration</h2>
           <p>
-            Everything is optional except a library path. Values set in the admin UI take precedence
-            over environment variables, so you can seed credentials via compose and change them
-            later without touching the stack.
+            AIO needs a library path. A Node can seed mounted paths with
+            <code>LIBRARY_PATHS</code> or add them in its UI; a Coordinator needs no library.
+            Values set in an admin UI take precedence over environment variables where both are
+            available.
           </p>
 
           <div class="scroller">
@@ -824,6 +839,9 @@ cp .env.example .env</code></pre>
                 <tr><td><code>SCAN_INTERVAL_MINUTES</code></td><td><code>360</code></td><td>Scheduled rescan interval; <code>0</code> disables</td></tr>
                 <tr><td><code>LOG_LEVEL</code></td><td><code>info</code></td><td><code>fatal</code> … <code>trace</code></td></tr>
                 <tr><td><code>SESSION_SECRET</code></td><td>generated</td><td>Download-token signing key; set only for multiple replicas</td></tr>
+                <tr><td><code>CADDY_ADDRESS</code></td><td><code>:8080</code></td><td>Coordinator hostname for bundled Caddy; a public DNS name enables automatic HTTPS</td></tr>
+                <tr><td><code>RELAY_ENDPOINT</code></td><td>—</td><td>Public Coordinator relay address, such as <code>games.example.com:47821</code></td></tr>
+                <tr><td><code>MESH_PORT</code></td><td><code>47820</code></td><td>First Node QUIC port; additional connections use consecutive ports</td></tr>
               </tbody>
             </table>
           </div>
@@ -831,6 +849,18 @@ cp .env.example .env</code></pre>
 
         <section id="proxy">
           <h2>Running behind a reverse proxy</h2>
+
+          <div class="new current">
+            <p>
+              <strong>The Coordinator image ships with Caddy.</strong> Set
+              <code>CADDY_ADDRESS=games.example.com</code>, point that name at the VPS, and publish
+              host TCP 80/443 to container 8080/8443. Caddy obtains and renews certificates and
+              proxies to GameBlade on private port 3000. Use <code>CADDY_ADDRESS=:8080</code> for
+              HTTP-only LAN testing. If an external proxy already owns TLS, set
+              <code>CADDY_ENABLED=false</code>, publish container port <code>3000</code>, and route
+              that proxy directly to it.
+            </p>
+          </div>
 
           <h3 id="proxy-required">Required in every case</h3>
           <p>
@@ -885,11 +915,11 @@ cp .env.example .env</code></pre>
         </section>
 
         <section id="roles">
-          <h2>Three roles, one image</h2>
+          <h2>Three services, three images</h2>
           <p>
-            GameBlade ships as one image that can be any of three things. Which one it is comes
-            from <code>ROLE</code>, and the default has not changed &mdash; an existing install
-            that upgrades keeps behaving exactly as it did.
+            v0.6.1 gives each deployment shape its own artifact. Matching version tags keep the
+            wire protocol aligned, while separate images prevent a Coordinator from accidentally
+            running a scanner or a Node from exposing the full admin and player API.
           </p>
 
           <div class="scroller">
@@ -899,32 +929,44 @@ cp .env.example .env</code></pre>
               </thead>
               <tbody>
                 <tr>
-                  <td><code>standalone</code></td>
+                  <td><code>gameblade-aio</code></td>
                   <td>Everything: database, panel, and the games on local disk</td>
                   <td>One machine. The default, and what GameBlade has always been.</td>
                 </tr>
                 <tr>
-                  <td><code>coordinator</code></td>
+                  <td><code>gameblade-coordinator</code></td>
                   <td>Database, admin panel, landing page, API. No game files.</td>
                   <td>A VPS. Small, because coordination is kilobytes.</td>
                 </tr>
                 <tr>
-                  <td><code>node</code></td>
-                  <td>The game files. Scans them and reports upward.</td>
+                  <td><code>gameblade-node</code></td>
+                  <td>One or more game libraries, a management UI, scanner and serving agents.</td>
                   <td>Wherever the library lives.</td>
                 </tr>
               </tbody>
             </table>
           </div>
 
-          <div class="note">
-            <p>
-              <strong>One image rather than one per role.</strong> A coordinator and its nodes
-              have to agree about the catalog they exchange, and separate images are how they
-              quietly stop agreeing &mdash; you update one and forget the other. Shipping a single
-              artifact makes matching versions the default instead of something to remember.
-            </p>
-          </div>
+          <div class="note"><p><strong>Pin the same release tag.</strong> Upgrade Coordinator,
+            Nodes and desktop clients together. AIO remains the compatible path for existing
+            single-host installations and still accepts the old <code>ROLE=standalone</code> value.</p></div>
+
+          <h3>Node management, libraries and Coordinators</h3>
+          <ol>
+            <li>Mount every host library read-only into the Node container.</li>
+            <li>Open the Node UI (port 8081 in the example Compose file), create its administrator, and add each container path.</li>
+            <li>Generate an <strong>Origin</strong> enrollment in a Coordinator, then add a connection in the Node UI and choose which library it publishes.</li>
+            <li>Repeat for additional libraries or Coordinators. Every pairing has its own identity, token and serving process.</li>
+            <li>Use <strong>Scan</strong> beside one library or <strong>Scan all</strong>. The Node computes verification chunks automatically before publishing.</li>
+          </ol>
+          <p>
+            A library may be connected to several Coordinators, and one Node may serve unrelated
+            libraries to different Coordinators. Additional agents use consecutive UDP ports
+            beginning at <code>MESH_PORT</code>. The example Compose file publishes
+            <code>47820-47839/udp</code> for up to 20 pairings; outbound NAT discovery normally
+            works without a forward, while forwarding the matching range improves direct LAN/WAN
+            reachability.
+          </p>
 
           <h3>Moving an existing install to a coordinator</h3>
           <p>
@@ -942,14 +984,14 @@ cp .env.example .env</code></pre>
               the original stays where it is and stays whole.
             </li>
             <li>
-              <strong>Start the coordinator</strong> with <code>ROLE=coordinator</code> and check
+              <strong>Start <code>gameblade-coordinator</code></strong> and check
               it while the old instance is still the live one: sign in, browse the catalog, open a
               save, read a message.
             </li>
             <li>
-              <strong>Enrol the node</strong> that holds the games, and
-              <strong>assign it the library its games are already in</strong> on
-              <strong>Admin &rarr; Settings &rarr; Nodes</strong>.
+              <strong>Enrol <code>gameblade-node</code></strong> for the library that holds the games.
+              Existing migrated catalogs should be assigned to their existing logical library;
+              a new Origin creates its logical library automatically on first report.
             </li>
             <li>
               <strong>Point the proxy at the coordinator</strong> only once all of that looks
@@ -959,13 +1001,14 @@ cp .env.example .env</code></pre>
 
           <div class="warn">
             <p>
-              <strong>Assign the right library.</strong> A node's catalog is matched into a library
+              <strong>Assign the right library when migrating.</strong> A node's catalog is matched into a library
               by relative path, so reporting into the library those games are already in updates
               those entries and every game keeps its id &mdash; and with it every achievement,
               save rule, artwork match, favourite and playtime record. Pointing a node at a
               <em>different</em> library would add the whole catalog again as new games and leave
-              all of that attached to entries nothing references. Reports are refused until a
-              library is assigned, precisely so this cannot happen by accident.
+              all of that attached to entries nothing references. Fresh Origin enrollments create
+              a logical library automatically; mirrors and migrated catalogs should be assigned
+              explicitly.
             </p>
           </div>
 
@@ -987,8 +1030,8 @@ cp .env.example .env</code></pre>
           </p>
           <p>
             It needs the coordinator's public key and nothing else. No database, no credentials, no
-            API. Tickets are verified locally, which is what lets it be a small process next to the
-            coordinator rather than part of it.
+            API. In v0.6.1 the Coordinator supervises this relay itself whenever
+            <code>RELAY_ENDPOINT</code> is set.
           </p>
 
           <div class="note">
@@ -1032,10 +1075,10 @@ cp .env.example .env</code></pre>
 
           <h3>What a node is</h3>
           <p>
-            A node is a machine that holds game files and serves them to clients. The machine
-            running the server is usually the first one. A node is known by its Ed25519 key rather
-            than its address, because a machine on a home connection gets a new address whenever
-            the lease renews.
+            A Node is the storage service: it can mount several libraries and connect each one to
+            one or more Coordinators. Every connection is known by its own Ed25519 key rather than
+            its address, because a machine on a home connection gets a new address whenever the
+            lease renews.
           </p>
           <p>
             Nothing a node says is trusted. Its claim to hold a game is a hint about who to ask,
@@ -1048,11 +1091,9 @@ cp .env.example .env</code></pre>
           <h3>Turning it on</h3>
           <ol>
             <li>
-              <strong>Hash the games.</strong> A game is only eligible once every one of its files
-              has per-chunk hashes: without them a client cannot check a piece that came from
-              somewhere else, so it will not accept one. Use
-              <strong>Admin → Catalog → Games → Compute chunk hashes</strong>. It reads every byte
-              once and produces the whole-file checksums at the same time.
+              <strong>Add and scan the libraries in the Node UI.</strong> A game is only eligible once
+              every file has per-chunk hashes. The Node now computes them automatically after a scan;
+              use one library's <strong>Scan</strong> button or <strong>Scan all</strong>.
             </li>
             <li>
               <strong>Enrol the node.</strong> <strong>Admin → Settings → Nodes</strong> generates a
@@ -1060,8 +1101,8 @@ cp .env.example .env</code></pre>
               is spent the moment a node registers with it.
             </li>
             <li>
-              <strong>Run the agent</strong> on the machine holding the files, and give it the code.
-              It registers, receives its own credential, and starts announcing what it holds.
+              <strong>Add the connection in the Node UI</strong>, choose its library, and paste the
+              code. The image supervises the serving agent; there is no second container to start.
             </li>
             <li>
               <strong>Switch the mesh on</strong> in <strong>Admin → Settings → Bandwidth</strong>.
@@ -1073,7 +1114,9 @@ cp .env.example .env</code></pre>
 
           <div class="warn">
             <p>
-              <strong>Forward one UDP port to the node.</strong> This is the single cheapest thing
+              <strong>Forward the Node's UDP range when practical.</strong> The first connection uses
+              <code>MESH_PORT</code> (47820 by default) and additional connections use consecutive
+              ports. This is the single cheapest thing
               you can do for reliability. Two machines both behind NAT have to punch a hole through
               it, which usually works and sometimes cannot — a symmetric NAT or a carrier-grade one
               defeats it. If <em>one</em> side is directly reachable, the problem essentially
@@ -1117,11 +1160,10 @@ cp .env.example .env</code></pre>
 
           <h3>When it does not apply</h3>
           <p>
-            All of these fall back to downloading from this server, and none of them are errors: the
-            mesh is switched off, the client is an older build, the game has no chunk hashes, no node
-            holds a current copy, or nothing would connect. The origin is always in the list of
-            sources and can never be removed from it, which is what keeps the mesh an optimisation
-            rather than something to depend on.
+            In AIO mode, mesh failures fall back to the local HTTP origin. A split Coordinator has
+            no game bytes, so it never advertises that nonexistent origin: clients use a direct Node
+            or the encrypted relay. An older client that does not understand this split should be
+            upgraded alongside the Coordinator and Nodes.
           </p>
         </section>
 
@@ -2475,7 +2517,7 @@ packages/shared Types, zod schemas and constants used by all three</code></pre>
           <p>AGPL-3.0-only.</p>
           <footer class="page">
             <p>
-              GameBlade 0.5.3 · Documentation lives in <code>Docs.html</code> at the repository root
+              GameBlade 0.6.1 · Documentation lives in <code>Docs.html</code> at the repository root
               and is edited as ordinary HTML — the contents list on the left builds itself from the
               headings.
             </p>

@@ -16,7 +16,7 @@
 //! because there is nothing for one to attest: the coordinator already said
 //! which key it means, and that is a stronger statement than a CA could make.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -265,18 +265,17 @@ impl MeshEndpoint {
     /// always regardless of what the other side is behind — which is the
     /// cheapest reliability win available here.
     pub fn node(identity: NodeIdentity, port: u16) -> MeshResult<Self> {
-        // Dual-stack where the OS allows it: if both ends have IPv6, a direct
-        // connection needs no traversal at all.
-        let address = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
-        match Self::bind(identity.clone(), address, true, false) {
-            Ok(endpoint) => Ok(endpoint),
-            Err(_) => Self::bind(
-                identity,
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
-                true,
-                false,
-            ),
-        }
+        // The client endpoint and STUN discovery are IPv4 today. An IPv6
+        // wildcard is dual-stack on some platforms but IPv6-only on Windows,
+        // which made a node appear to bind successfully while every IPv4
+        // client timed out. Bind the address family the rest of the transport
+        // actually uses until explicit dual-stack sockets are implemented.
+        Self::bind(
+            identity,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
+            true,
+            false,
+        )
     }
 
     /// Bind a node endpoint and learn its external address on the way.

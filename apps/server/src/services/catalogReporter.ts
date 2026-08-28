@@ -1,5 +1,4 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import type { ReportedFile, ReportedGame } from '@gameblade/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
@@ -23,8 +22,8 @@ interface NodeState {
 
 export interface ReporterConfig {
   coordinatorUrl: string;
-  enrolmentToken: string | null;
   statePath: string;
+  libraryId: string;
 }
 
 /**
@@ -51,69 +50,17 @@ export class CatalogReporter {
   ) {}
 
   /**
-   * Enrol with the coordinator, or recover the enrolment from last time.
-   *
-   * The code is spent on first use, so it is normal — and expected — for it to
-   * be absent from the environment after the first run. What identifies this
-   * node afterwards is the key in the state file.
+   * Wait for the bundled QUIC agent to enrol and write the shared identity.
+   * Only that process registers now; letting both the scanner and agent spend
+   * the same one-time token was a race that could rotate credentials underneath
+   * whichever process lost.
    */
   async ensureRegistered(): Promise<boolean> {
     await this.loadState();
 
     if (this.state.nodeId && this.state.nodeToken) return true;
-
-    if (!this.config.enrolmentToken) {
-      this.logger.warn(
-        {},
-        'no enrolment code and no saved registration; set GAMEBLADE_ENROLMENT once to enrol this node',
-      );
-      return false;
-    }
-
-    // The mesh agent alongside this process owns the keypair. If it has not
-    // started yet there is nothing to register with, so wait rather than
-    // generating a second identity for the same node.
-    if (!this.state.secretKey) {
-      this.logger.info({}, 'waiting for the mesh agent to generate this node’s key');
-      return false;
-    }
-
-    try {
-      const response = await fetch(`${this.config.coordinatorUrl}/api/mesh/register`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          enrolmentToken: this.config.enrolmentToken,
-          publicKey: await this.publicKey(),
-          endpoints: [],
-        }),
-      });
-
-      if (!response.ok) {
-        this.logger.error(
-          { status: response.status },
-          'the coordinator refused this node’s enrolment',
-        );
-        return false;
-      }
-
-      const body = (await response.json()) as {
-        nodeId: string;
-        nodeToken: string;
-        coordinatorPublicKey: string;
-      };
-
-      this.state.nodeId = body.nodeId;
-      this.state.nodeToken = body.nodeToken;
-      this.state.coordinatorKey = body.coordinatorPublicKey;
-      await this.saveState();
-
-      this.logger.info({ nodeId: body.nodeId }, 'node enrolled with the coordinator');
-      return true;
-    } catch (error) {
-      this.logger.warn({ err: error }, 'could not reach the coordinator to enrol');
-      return false;
-    }
+    this.logger.info({}, 'waiting for the node agent to finish enrolment');
+    return false;
   }
 
   /**
@@ -167,7 +114,11 @@ export class CatalogReporter {
    * attached to that id stays attached.
    */
   collect(): ReportedGame[] {
-    const rows = this.db.select().from(games).all();
+    const rows = this.db
+      .select()
+      .from(games)
+      .where(eq(games.libraryId, this.config.libraryId))
+      .all();
     const out: ReportedGame[] = [];
 
     for (const game of rows) {
@@ -221,28 +172,5 @@ export class CatalogReporter {
       // No state is a first run, not a failure.
       this.state = {};
     }
-  }
-
-  private async saveState(): Promise<void> {
-    await mkdir(path.dirname(this.config.statePath), { recursive: true });
-    await writeFile(this.config.statePath, JSON.stringify(this.state, null, 2), 'utf8');
-  }
-
-  /** The public half of the key the mesh agent generated. */
-  private async publicKey(): Promise<string> {
-    const { createPrivateKey, createPublicKey } = await import('node:crypto');
-    const secret = Buffer.from(this.state.secretKey ?? '', 'base64url');
-
-    // Ed25519 secret keys wrap into PKCS#8 behind a fixed sixteen-byte prefix.
-    // Building it here avoids a dependency for what is a constant.
-    const pkcs8 = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), secret]);
-
-    const privateKey = createPrivateKey({ key: pkcs8, format: 'der', type: 'pkcs8' });
-    // The raw 32 bytes are the tail of the SPKI encoding, which is what the
-    // coordinator and the mesh agent both exchange.
-    return createPublicKey(privateKey)
-      .export({ format: 'der', type: 'spki' })
-      .subarray(12)
-      .toString('base64url');
   }
 }

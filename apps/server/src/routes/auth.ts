@@ -33,6 +33,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       serverName,
       needsSetup: auth.countUsers() === 0,
       allowSelfRegistration,
+      role: config.role,
     };
   });
 

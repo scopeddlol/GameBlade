@@ -151,10 +151,15 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
       })),
       token: issued.token,
       expiresAt: issued.expiresAt,
+      originAvailable: config.servesLocalFiles,
       ...(chunked ? { chunkBytes: MESH_CHUNK_BYTES } : {}),
       // Always includes the origin; nodes appear once the mesh is on and one
       // holds a copy matching this game's current fingerprint.
-      sources: mesh.sourcesFor(id, { chunked, excludeOwnerId: context.user.id }),
+      sources: mesh.sourcesFor(id, {
+        chunked,
+        excludeOwnerId: context.user.id,
+        originAvailable: config.servesLocalFiles,
+      }),
     };
     return body;
   });
