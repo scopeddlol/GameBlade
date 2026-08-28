@@ -6,7 +6,14 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
-import { gameFileChunks, gameFiles, games, libraries, meshNodes } from '../db/schema.js';
+import {
+  gameFileChunks,
+  gameFiles,
+  games,
+  libraries,
+  meshNodes,
+  meshTransfers,
+} from '../db/schema.js';
 import { newId } from '../lib/ids.js';
 
 /**
@@ -681,6 +688,147 @@ describe('mesh coordinator', () => {
     });
 
     expect(app.gameblade.mesh.takePunches(node.nodeId)).toHaveLength(0);
+  });
+
+  /* ------------------------------------------------------------------ relay */
+
+  /** Put a node online and holding the test game. */
+  async function nodeHoldingGame(key: string) {
+    const node = await enrol('Home archive', key);
+    const contentHash = app.gameblade.mesh.contentHashFor(gameId);
+    await app.inject({
+      method: 'POST',
+      url: '/api/mesh/heartbeat',
+      headers: nodeAuth(node),
+      payload: { endpoints: [], games: [{ gameId, contentHash }] },
+    });
+    return node;
+  }
+
+  it('says plainly when there is no relay, rather than offering a dead address', async () => {
+    // A client told to connect somewhere nothing is listening fails slowly and
+    // confusingly; told there is no relay, it stops.
+    await nodeHoldingGame('r'.repeat(44));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/mesh/relay/${gameId}`,
+      headers: auth(player),
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ error: { code: 'no_relay' } });
+  });
+
+  it('refuses a relay session while the mesh is switched off', async () => {
+    app.gameblade.settings.update({ meshEnabled: false });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/mesh/relay/${gameId}`,
+      headers: auth(player),
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('refuses a relay session to someone not signed in', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/mesh/relay/${gameId}`,
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('will not relay a game no node is offering', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/mesh/relay/${gameId}`,
+      headers: auth(player),
+      payload: {},
+    });
+
+    // Either no relay configured or no node — both refuse rather than
+    // inventing a session nothing could use.
+    expect([404, 503]).toContain(response.statusCode);
+  });
+
+  it('pairs both ends on the same session when a relay exists', async () => {
+    // The two tickets must share a session id: that is the only thing the relay
+    // uses to work out which two sockets belong together.
+    const node = await nodeHoldingGame('t'.repeat(44));
+
+    // Stand a relay up for this test only.
+    app.gameblade.config.relayEndpoint = { address: '203.0.113.200', port: 47821 };
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/mesh/relay/${gameId}`,
+      headers: auth(player),
+      payload: { nodeId: node.nodeId },
+    });
+    expect(response.statusCode).toBe(200);
+
+    const body = response.json() as {
+      sessionId: string;
+      ticket: string;
+      relay: { address: string; port: number };
+    };
+    expect(body.relay).toEqual({ address: '203.0.113.200', port: 47821 });
+
+    const clientTicket = app.gameblade.downloadTokens.verifyRelayTicket(body.ticket);
+    expect(clientTicket).toMatchObject({
+      sessionId: body.sessionId,
+      side: 'client',
+      userId: player.id,
+      nodeId: node.nodeId,
+    });
+
+    // And the node was told, on the channel it already holds open.
+    const queued = app.gameblade.mesh.takePunches(node.nodeId);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.relay?.ticket).toBeTruthy();
+
+    const nodeTicket = app.gameblade.downloadTokens.verifyRelayTicket(queued[0]!.relay!.ticket);
+    expect(nodeTicket).toMatchObject({ sessionId: body.sessionId, side: 'node' });
+
+    app.gameblade.config.relayEndpoint = null;
+  });
+
+  it('counts relayed transfers against the same allowance', async () => {
+    // The relay is a different route to the same bytes, not a way around the
+    // quota — otherwise it would be the cheapest way to ignore one.
+    const node = await nodeHoldingGame('q'.repeat(44));
+    app.gameblade.config.relayEndpoint = { address: '203.0.113.200', port: 47821 };
+    app.gameblade.settings.update({ monthlyQuotaMb: 1 });
+
+    app.gameblade.db
+      .insert(meshTransfers)
+      .values({
+        nonce: 'spent',
+        nodeId: node.nodeId,
+        userId: player.id,
+        gameId,
+        bytesServed: 10 * 1024 * 1024,
+      })
+      .run();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/mesh/relay/${gameId}`,
+      headers: auth(player),
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(429);
+
+    app.gameblade.db.delete(meshTransfers).run();
+    app.gameblade.settings.update({ monthlyQuotaMb: 0 });
+    app.gameblade.config.relayEndpoint = null;
   });
 
   /* ------------------------------------------------------------------ admin */

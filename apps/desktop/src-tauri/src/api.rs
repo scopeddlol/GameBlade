@@ -147,6 +147,25 @@ fn default_heartbeat() -> u64 {
     30
 }
 
+/// Where the relay is, and this client's half of the pairing.
+///
+/// The response also carries the node's id and public key. Neither is read:
+/// the client already holds both from the resolve that chose this node, and
+/// pins the certificate against *that* copy. Taking the key from here instead
+/// would mean trusting a second, later answer about who it is talking to —
+/// weaker for no benefit — so the extra fields are deliberately ignored.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RelaySession {
+    pub relay: RelayAddress,
+    pub ticket: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RelayAddress {
+    pub address: String,
+    pub port: u16,
+}
+
 /// What `POST /download/:gameId/token` hands back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssuedDownloadToken {
@@ -402,7 +421,11 @@ impl ApiClient {
     /// A server that has never heard of the mesh 404s here, which is an empty
     /// answer rather than an error — the origin was always going to be the
     /// fallback anyway.
-    pub async fn resolve_mesh(&self, game_id: &str, candidates: &[(String, u16)]) -> MeshResolution {
+    pub async fn resolve_mesh(
+        &self,
+        game_id: &str,
+        candidates: &[(String, u16)],
+    ) -> MeshResolution {
         let Ok(request) = self.authorised(
             self.http
                 .post(self.endpoint(&format!("/mesh/resolve/{game_id}"))),
@@ -503,6 +526,33 @@ impl ApiClient {
         let request = self.authorised(self.http.delete(self.endpoint("/mesh/peer")))?;
         check_status(request.send().await?).await?;
         Ok(())
+    }
+
+    /// Ask for a relay session, having failed to reach a node directly.
+    ///
+    /// Asked for only after the direct attempt failed, because relaying spends
+    /// the coordinator's bandwidth — the very thing the mesh exists to save. A
+    /// server with no relay answers plainly and this returns nothing, which is
+    /// the right outcome: there is no path, and pretending otherwise would fail
+    /// slowly instead of quickly.
+    pub async fn request_relay(&self, game_id: &str, node_id: &str) -> Option<RelaySession> {
+        let request = self
+            .authorised(
+                self.http
+                    .post(self.endpoint(&format!("/mesh/relay/{game_id}"))),
+            )
+            .ok()?;
+
+        let response = request
+            .json(&serde_json::json!({ "nodeId": node_id }))
+            .send()
+            .await
+            .ok()?;
+
+        if !response.status().is_success() {
+            return None;
+        }
+        response.json().await.ok()
     }
 
     /// Reads a non-2xx response into its structured parts without turning it

@@ -57,7 +57,8 @@ COPY crates/gameblade-mesh ./gameblade-mesh
 RUN cd gameblade-mesh \
     && cargo build --release --bins \
     && mkdir -p /out \
-    && cp target/release/gameblade-node target/release/mesh-doctor /out/
+    && cp target/release/gameblade-node target/release/gameblade-relay \
+         target/release/mesh-doctor /out/
 
 # ---------------------------------------------------------------------------
 # Runtime stage
@@ -83,6 +84,7 @@ COPY --from=builder --chown=node:node /app/deploy/dist ./dist
 COPY --from=builder --chown=node:node /app/deploy/package.json ./package.json
 COPY --from=builder --chown=node:node /app/apps/web/dist ./public
 COPY --from=mesh --chown=node:node /out/gameblade-node /usr/local/bin/gameblade-node
+COPY --from=mesh --chown=node:node /out/gameblade-relay /usr/local/bin/gameblade-relay
 COPY --from=mesh --chown=node:node /out/mesh-doctor /usr/local/bin/mesh-doctor
 
 # Never run the server as root: it has read access to the whole game library.

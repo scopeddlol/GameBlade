@@ -235,6 +235,21 @@ async fn read_chunk_at(path: &Path, index: u64, size_bytes: u64) -> Option<Vec<u
 pub struct PunchRequest {
     pub address: String,
     pub port: u16,
+    /// Present when the client gave up on a direct path and wants the relay.
+    ///
+    /// Arrives on the same channel as a punch because it answers the same
+    /// question — someone is trying to reach you, here is how — and the node's
+    /// response is simply different: dial the relay instead of punching.
+    #[serde(default)]
+    pub relay: Option<RelayInstruction>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RelayInstruction {
+    pub address: String,
+    pub port: u16,
+    /// This node's half of the pairing.
+    pub ticket: String,
 }
 
 #[derive(Debug, Deserialize)]

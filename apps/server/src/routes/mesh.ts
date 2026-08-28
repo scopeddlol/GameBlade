@@ -14,6 +14,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { requireAdmin, requireUser } from '../auth/middleware.js';
 import { gameFiles, games } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
+import { newId } from '../lib/ids.js';
 
 /**
  * The address a request appears to come from.
@@ -36,7 +37,8 @@ function observedAddress(request: FastifyRequest): string | undefined {
 }
 
 export async function meshRoutes(app: FastifyInstance): Promise<void> {
-  const { db, mesh, settings, downloadTokens, chunks, bandwidth, catalogIngest } = app.gameblade;
+  const { db, mesh, settings, downloadTokens, chunks, bandwidth, catalogIngest, config } =
+    app.gameblade;
 
   /**
    * Authenticate a node by its id and its enrolment-issued node token.
@@ -309,6 +311,64 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
       })),
       grants,
       coordinatorPublicKey: downloadTokens.publicKeyBase64(),
+    };
+  });
+
+  /**
+   * Fall back to the relay, for a client that could not reach a node directly.
+   *
+   * Asked for only after the direct attempt failed, because relaying costs this
+   * server's bandwidth — the very thing the mesh exists to stop spending. It
+   * exists so that download happens at all rather than fast.
+   */
+  app.post('/mesh/relay/:gameId', async (request) => {
+    const context = requireUser(request);
+    const { gameId } = request.params as { gameId: string };
+    const { nodeId } = (request.body ?? {}) as { nodeId?: string };
+
+    if (!settings.get().meshEnabled) throw ApiError.forbidden('The mesh is switched off');
+
+    const relay = config.relayEndpoint;
+    if (!relay) {
+      // Not an error worth dressing up: there is no relay, so there is nothing
+      // to offer, and a client told otherwise would fail at an address nothing
+      // is listening on.
+      throw new ApiError(503, 'no_relay', 'This server has no relay configured.');
+    }
+
+    const node = mesh
+      .nodesForGame(gameId, { excludeOwnerId: context.user.id })
+      .find((candidate) => !nodeId || candidate.id === nodeId);
+    if (!node) throw ApiError.notFound('No node is offering that game');
+
+    // Checked here as well as on the direct path: the relay is a different
+    // route to the same bytes, not a way around the allowance.
+    bandwidth.assertWithinQuota(context.user.id);
+
+    const sessionId = newId('rly');
+    const tickets = downloadTokens.issueRelayTickets({
+      sessionId,
+      nodeId: node.id,
+      userId: context.user.id,
+    });
+
+    // The node hears about this on the channel it already holds open, so it
+    // dials the relay at the same moment the client does.
+    mesh.requestPunch(node.id, {
+      address: relay.address,
+      port: relay.port,
+      userId: context.user.id,
+      queuedAt: new Date().toISOString(),
+      relay: { address: relay.address, port: relay.port, ticket: tickets.node },
+    });
+
+    return {
+      sessionId,
+      relay: { address: relay.address, port: relay.port },
+      ticket: tickets.client,
+      expiresAt: tickets.expiresAt,
+      nodeId: node.id,
+      publicKey: node.publicKey,
     };
   });
 

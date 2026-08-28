@@ -441,6 +441,25 @@ impl MeshEndpoint {
         Ok(())
     }
 
+    /// Tell the relay which session this endpoint belongs to.
+    ///
+    /// Sent from the same socket QUIC uses, for the same reason a punch is: the
+    /// relay pairs on source address, so a hello from anywhere else would pair
+    /// a socket that never carries the transfer.
+    ///
+    /// Repeated a few times because it is a single unacknowledged datagram, and
+    /// losing it would leave a session half-open until it timed out.
+    pub async fn announce_to_relay(&self, relay: SocketAddr, ticket: &str) -> MeshResult<()> {
+        let hello = crate::relay::hello_packet(ticket);
+
+        for _ in 0..PUNCH_PACKETS {
+            let _ = self.punch.send_to(&hello, relay);
+            tokio::time::sleep(PUNCH_SPACING).await;
+        }
+
+        Ok(())
+    }
+
     /// The port this endpoint's NAT mapping is for.
     ///
     /// Local, so it is only the whole answer on a machine with a public

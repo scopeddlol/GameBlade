@@ -26,6 +26,13 @@ use crate::transport::MeshEndpoint;
 /// to the tunnel it was supposed to beat.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 
+/// How long to let the node's announcement reach the relay before handshaking.
+///
+/// The coordinator tells both ends at once, so this only has to cover the
+/// node's own round trip. The relay drops traffic for a session it has only
+/// half of, so starting early costs a retransmit rather than a failure.
+const RELAY_PAIRING_LEAD: Duration = Duration::from_millis(400);
+
 /// A node the client can talk to.
 #[derive(Debug, Clone)]
 pub struct NodeCandidate {
@@ -182,6 +189,47 @@ pub async fn connect_to_node(
         node_id: candidate.node_id.clone(),
         label: candidate.label.clone(),
         address,
+        handshake_ms: started.elapsed().as_millis() as u64,
+        connection,
+        grant: candidate.grant.clone(),
+    })
+}
+
+/// Reach a node through the relay, having failed to reach it directly.
+///
+/// The only difference from a direct connection is where the packets go: the
+/// client announces itself to the relay, then speaks QUIC to the relay's
+/// address, and the relay forwards to the node. Everything else is identical —
+/// the same certificate pinning against the same key, the same grant, the same
+/// per-chunk verification — because the QUIC session runs end to end and the
+/// relay is only carrying it.
+pub async fn connect_through_relay(
+    endpoint: &MeshEndpoint,
+    relay: SocketAddr,
+    ticket: &str,
+    candidate: &NodeCandidate,
+) -> MeshResult<NodeSession> {
+    let started = Instant::now();
+
+    // Announce first: the relay has to know which session this socket belongs
+    // to before it will forward anything from it.
+    endpoint.announce_to_relay(relay, ticket).await?;
+
+    // A beat for the node's own announcement to land, so the relay has both
+    // ends before the handshake starts. Without both it drops what arrives.
+    tokio::time::sleep(RELAY_PAIRING_LEAD).await;
+
+    let connection = tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        endpoint.connect(relay, &candidate.public_key),
+    )
+    .await
+    .map_err(|_| MeshError::Unreachable("the relay did not complete a handshake".into()))??;
+
+    Ok(NodeSession {
+        node_id: candidate.node_id.clone(),
+        label: format!("{} (relayed)", candidate.label),
+        address: relay,
         handshake_ms: started.elapsed().as_millis() as u64,
         connection,
         grant: candidate.grant.clone(),

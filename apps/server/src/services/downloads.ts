@@ -11,7 +11,9 @@ import {
 import {
   DOWNLOAD_TOKEN_TTL_SECONDS,
   MESH_GRANT_TTL_SECONDS,
+  MESH_RELAY_TICKET_TTL_SECONDS,
   type MeshGrantClaims,
+  type MeshRelayTicket,
 } from '@gameblade/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
@@ -199,6 +201,42 @@ export class DownloadTokenService {
     const claims = this.decode<MeshGrantClaims>(grant);
     if (claims.expiresAt * 1000 <= Date.now()) {
       throw new ApiError(403, 'grant_expired', 'This transfer grant has expired.');
+    }
+    return claims;
+  }
+
+  /* ---------------------------------------------------------------- relay */
+
+  /**
+   * Admit one client and one node to the relay for a single transfer.
+   *
+   * Two tickets sharing a session id, because pairing is the only thing the
+   * relay has to work out and this is what tells it. Signed with the same key
+   * as everything else, so the relay verifies locally and needs no database, no
+   * lookup and no conversation with this server.
+   */
+  issueRelayTickets(claims: { sessionId: string; nodeId: string; userId: string }): {
+    client: string;
+    node: string;
+    expiresAt: string;
+  } {
+    const expiresAt = Math.floor(Date.now() / 1000) + MESH_RELAY_TICKET_TTL_SECONDS;
+
+    const forSide = (side: 'client' | 'node') =>
+      this.encode({ ...claims, side, expiresAt } satisfies MeshRelayTicket);
+
+    return {
+      client: forSide('client'),
+      node: forSide('node'),
+      expiresAt: new Date(expiresAt * 1000).toISOString(),
+    };
+  }
+
+  /** Check a relay ticket the way the relay does. Used by its tests. */
+  verifyRelayTicket(ticket: string): MeshRelayTicket {
+    const claims = this.decode<MeshRelayTicket>(ticket);
+    if (claims.expiresAt * 1000 <= Date.now()) {
+      throw new ApiError(403, 'ticket_expired', 'This relay ticket has expired.');
     }
     return claims;
   }

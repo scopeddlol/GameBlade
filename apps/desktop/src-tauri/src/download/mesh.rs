@@ -13,6 +13,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use gameblade_mesh::client::connect_through_relay;
 use gameblade_mesh::{
     connect_to_node, coordinator_key_from_spki, MeshEndpoint, MeshError, NodeCandidate,
     NodeIdentity, NodeSession, PublicKey, SourcePool,
@@ -118,6 +119,36 @@ impl MeshContext {
                         "mesh: {} unreachable ({err}); continuing without it",
                         candidate.label
                     ));
+                }
+            }
+        }
+
+        // Nothing answered directly. Before giving up on the mesh entirely, ask
+        // whether this server runs a relay — on a coordinator holding no game
+        // files there is no HTTP origin behind us, so this is the difference
+        // between a slow download and no download at all.
+        if sessions.is_empty() {
+            for (position, candidate) in nodes.iter().enumerate() {
+                let Some(session) = client.request_relay(game_id, &candidate.node_id).await else {
+                    continue;
+                };
+                let Some(address) = socket_address(&session.relay.address, session.relay.port)
+                else {
+                    continue;
+                };
+
+                match connect_through_relay(&endpoint, address, &session.ticket, candidate).await {
+                    Ok(live) => {
+                        pool.add_node(&candidate.node_id, &candidate.label, position);
+                        sessions.push(Arc::new(live));
+                        break;
+                    }
+                    Err(err) => {
+                        tracing_log(&format!(
+                            "mesh: relay to {} failed ({err})",
+                            candidate.label
+                        ));
+                    }
                 }
             }
         }
