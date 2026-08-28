@@ -54,6 +54,12 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # Bounds what the builder keeps rather than letting it grow until the disk
+      # fills. Before the build, so a runner that is already full can make room
+      # for this one instead of failing on it.
+      - name: Keep the build cache bounded
+        run: docker buildx prune --force --keep-storage 12GB || true
+
       - name: Build (no push)
         uses: docker/build-push-action@v6
         with:
@@ -62,7 +68,11 @@ jobs:
           load: true
           tags: gameblade:ci
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # min rather than max. max exports every intermediate layer of every
+          # stage, which on a self-hosted runner means the compiler's output
+          # from both workflows accumulating on one disk until it fills. min
+          # keeps the final layers, which is what a rebuild actually reuses.
+          cache-to: type=gha,mode=min
 
       - name: Smoke test the image
         run: |
