@@ -16,9 +16,10 @@ export class RelayRuntime {
   ) {}
 
   start(): void {
-    if (this.child || this.stopping || !this.config.relayEndpoint || this.config.role === 'node') {
-      return;
-    }
+    if (this.child || !this.config.relayEndpoint || this.config.role === 'node') return;
+    // Cleared here rather than left set by a previous stop(), so a relay that
+    // is stopped and started again still comes back.
+    this.stopping = false;
 
     const child = spawn(this.config.relayBinary, [], {
       env: {

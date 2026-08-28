@@ -418,20 +418,28 @@ export class NodeRuntime {
         await readFile(this.config.nodeConfigPath, 'utf8'),
       ) as StoredNodeConfig;
       if (Array.isArray(raw.connections)) {
-        const used = new Set<number>();
+        // Two passes, so a connection needing a replacement port cannot be
+        // handed one that a later connection is legitimately keeping — which
+        // is what a single pass does, since it only knows the ports it has
+        // already walked past.
+        const retained = new Set<number>();
+        for (const entry of raw.connections) {
+          if (isMeshPort(entry.meshPort)) retained.add(entry.meshPort);
+        }
+
+        const taken = new Set(retained);
+        const kept = new Set<number>();
         let changed = false;
         const connections = raw.connections.map((entry) => {
-          let meshPort = entry.meshPort;
-          if (
-            !Number.isInteger(meshPort) ||
-            meshPort < 1 ||
-            meshPort > 65_535 ||
-            used.has(meshPort)
-          ) {
-            meshPort = firstAvailablePort(this.config.nodeMeshPort, used);
-            changed = true;
+          // A duplicate is kept by the first connection that claims it; the
+          // rest are reassigned.
+          if (isMeshPort(entry.meshPort) && !kept.has(entry.meshPort)) {
+            kept.add(entry.meshPort);
+            return { ...entry, meshPort: entry.meshPort };
           }
-          used.add(meshPort);
+          const meshPort = firstAvailablePort(this.config.nodeMeshPort, taken);
+          taken.add(meshPort);
+          changed = true;
           return { ...entry, meshPort };
         });
         if (changed) await this.writeStoredConfig({ version: 2, connections });
@@ -500,6 +508,10 @@ export function normaliseCoordinatorUrl(raw: string): string {
     throw ApiError.badRequest('The Coordinator URL cannot contain credentials, a query, or a hash');
   }
   return parsed.toString().replace(/\/+$/, '');
+}
+
+function isMeshPort(port: number | undefined): port is number {
+  return Number.isInteger(port) && (port as number) >= 1 && (port as number) <= 65_535;
 }
 
 function firstAvailablePort(base: number, used: Set<number>): number {

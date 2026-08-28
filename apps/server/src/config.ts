@@ -151,8 +151,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     role,
     /** Whether this instance reads game files from its own disk. */
     servesLocalFiles: role !== 'coordinator',
-    /** Whether this instance owns a database, a panel and an API. */
-    servesApi: true,
     /** Whether this instance scans local disk and reports what it found up. */
     reportsCatalogUpstream: role === 'node',
     /** Where a node sends its catalog. Only meaningful in the `node` role. */

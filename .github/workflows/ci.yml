@@ -134,7 +134,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [aio, coordinator, node]
+        include:
+          - target: aio
+            app_port: 8080
+          - target: node
+            app_port: 8080
+          # Fastify listens privately here; the bundled Caddy is what answers
+          # on 8080. Recorded so a failure can say which of the two is missing.
+          - target: coordinator
+            app_port: 3000
     steps:
       - uses: actions/checkout@v4
 
@@ -178,6 +186,15 @@ jobs:
           done
 
           echo "container did not become healthy" >&2
+          # Separates "the server never started" from "the server is up but the
+          # coordinator's Caddy is not proxying to it" — one image runs two
+          # processes, and the published port only proves the outer one.
+          docker exec gameblade-ci node -e "
+            require('http')
+              .get({host:'127.0.0.1',port:${{ matrix.app_port }},path:'/api/health'},
+                r=>console.log('app port ${{ matrix.app_port }} responded ' + r.statusCode))
+              .on('error', e => console.log('app port ${{ matrix.app_port }} unreachable: ' + e.message));
+          " || true
           docker logs gameblade-ci
           docker rm -f gameblade-ci
           exit 1
