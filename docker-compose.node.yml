@@ -16,12 +16,28 @@
 #   1. Mount your games at /library below and `docker compose up -d`.
 #   2. Open http://<this machine>:8080.
 #   3. Fill in the coordinator's address and an enrolment code from
-#      Admin -> Settings -> Nodes on the coordinator.
+#      Admin -> Nodes on the coordinator.
 #
-# That is the whole configuration. Nothing here needs editing except the volume
+# That is the whole configuration. Nothing here needs editing except the volumes
 # and, if you want it reachable from the LAN, the port binding. The answers from
 # step 3 are written into ./data/node-state.json and survive restarts, so this
 # never has to be told twice.
+#
+# ---------------------------------------------------------------------------
+# More than one drive
+# ---------------------------------------------------------------------------
+#
+# A node can hold as many libraries as it has disks. Mount each one under
+# /libraries instead of at /library, and the directory name is the library's
+# name on the coordinator:
+#
+#   - /mnt/3TB:/libraries/3TB:ro
+#   - /mnt/E:/libraries/E:ro
+#
+# Both forms work together, and either can be used alone. What does *not* work
+# is mounting two drives at the same /library — Docker keeps one of them and
+# the other is simply not there, which is why this is two paths rather than
+# two mounts of one.
 
 services:
   node:
@@ -46,14 +62,26 @@ services:
       # COORDINATOR_URL: https://games.example.com
       # ENROLMENT_TOKEN: paste-once-then-remove
 
+      # Library roots, if the mounts below are not where you want them. Set
+      # this and it is exactly what gets scanned; leave it out and the mounts
+      # decide, which is what the volumes below are written for.
+      # LIBRARY_PATHS: /library,/mnt/extra
+
     volumes:
       # The node's identity, its local index, and nothing else worth keeping.
       # node-state.json in here is what makes this machine *this node* — copy it
       # if you ever move the node to different hardware.
       - ./data:/data
-      # Your games. Read-only: a node serves this library and must never write
-      # to it. Change the left-hand side; /library is where the image looks.
+      # Your games. Read-only: a node serves these files and must never write to
+      # them. Change the left-hand side; the right-hand side is where the image
+      # looks.
+      #
+      # One library: mount it at /library.
       - /path/to/games:/library:ro
+      # Several: one mount each under /libraries, named by the directory. Delete
+      # the /library line above if you only want these.
+      # - /mnt/3TB:/libraries/3TB:ro
+      # - /mnt/E:/libraries/E:ro
 
     ports:
       # The node's own page: setup while it is unenrolled, then what it scanned,

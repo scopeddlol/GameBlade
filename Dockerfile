@@ -84,7 +84,7 @@ FROM node:22-alpine AS runtime
 # tini reaps zombies and forwards SIGTERM, so an in-flight download is closed
 # cleanly instead of the process being killed outright.
 RUN apk add --no-cache tini libc6-compat \
-    && mkdir -p /data /library \
+    && mkdir -p /data /library /libraries \
     && chown -R node:node /data
 
 ENV NODE_ENV=production \
@@ -138,13 +138,13 @@ ENV ROLE=coordinator
 # that serves it — under one entrypoint, so a node is one container rather than
 # a pair somebody has to keep in step.
 #
-# LIBRARY_PATHS is set here so a node needs no configuration at all beyond
-# mounting the games at /library: everything else it needs, it is told once from
-# its own setup page and remembers.
+# There is deliberately no LIBRARY_PATHS here. A node reads its own mounts:
+# /library is one library, and every directory under /libraries is one more, so
+# a machine holding two drives says so with two mounts rather than with a
+# variable listing paths that also have to be mounted. Setting LIBRARY_PATHS in
+# a compose file still overrides all of it.
 FROM runtime AS node
 ENV ROLE=node \
-    LIBRARY_PATHS=/library \
-    GAMEBLADE_LIBRARY=/library \
     GAMEBLADE_STATE=/data/node-state.json
 
 COPY --chown=node:node docker/node-entrypoint.sh /usr/local/bin/gameblade-node-entrypoint

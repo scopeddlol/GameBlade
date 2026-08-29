@@ -3,7 +3,8 @@ import { Home, LogOut, Menu, Swords, UserCircle, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../hooks/useSession.js';
-import { ADMIN_SECTIONS } from './adminNav.js';
+import { useServerRole } from '../hooks/useServerRole.js';
+import { adminSections } from './adminNav.js';
 import { usePrefetch } from './AdminSection.js';
 
 /**
@@ -39,6 +40,10 @@ export function Layout() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Which sections this deployment has. A coordinator holds no game files, so
+  // the library folder and the disk scan are not things it can offer.
+  const sections = adminSections(useServerRole());
+
   const handleSignOut = async () => {
     await signOut();
     navigate('/', { replace: true });
@@ -63,7 +68,7 @@ export function Layout() {
   const sidebarBody = (
     <>
       <nav className="flex flex-col gap-1 px-3 pb-3">
-        {ADMIN_SECTIONS.map((section) => (
+        {sections.map((section) => (
           <NavLink
             key={section.to}
             to={section.to}

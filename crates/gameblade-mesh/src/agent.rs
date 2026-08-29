@@ -109,6 +109,30 @@ pub struct CatalogGame {
     pub files: Vec<CatalogFile>,
 }
 
+/// The first path segment and everything after it, if there is more than one.
+///
+/// Forward slashes only: the coordinator normalises to them, and a backslash in
+/// a relative path is a legitimate part of a name on the machine that scanned
+/// it rather than a separator here.
+fn split_first_segment(rel_path: &str) -> Option<(&str, &str)> {
+    let (first, rest) = rel_path.split_once('/')?;
+    if first.is_empty() || rest.is_empty() {
+        return None;
+    }
+    Some((first, rest))
+}
+
+/// Whether a root's own directory name is the library segment in a path.
+///
+/// The coordinator sanitises a library's name before putting it in a path —
+/// slashes become dashes — so the comparison is made against the same shape
+/// rather than against the raw directory name.
+fn root_is_named(root: &Path, segment: &str) -> bool {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == segment)
+}
+
 /// What this node can currently serve, and where it lives on disk.
 #[derive(Default)]
 pub struct LibraryIndex {
@@ -129,6 +153,44 @@ struct IndexedFile {
 impl LibraryIndex {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Take a game into the index from whichever root actually holds it.
+    ///
+    /// A node can hold several libraries, and the coordinator knows a game by
+    /// one relative path — so finding it means trying the roots rather than
+    /// being told which one. Two candidates per root, because a node with more
+    /// than one library reports paths prefixed with the library's name to keep
+    /// two roots' `Hollow Knight` from colliding upstream: the path as sent,
+    /// and the path with that leading segment taken off.
+    ///
+    /// Stops at the first root whose files are all present, so a game held
+    /// twice is served from whichever root comes first rather than being
+    /// indexed twice.
+    pub fn offer_from_roots(&mut self, roots: &[PathBuf], game: &CatalogGame) -> bool {
+        for root in roots {
+            if self.offer(root, game) {
+                return true;
+            }
+
+            // `3TB/Hollow Knight` under a root already named `3TB`.
+            let Some((first, rest)) = split_first_segment(&game.rel_path) else {
+                continue;
+            };
+            if !root_is_named(root, first) {
+                continue;
+            }
+
+            let unprefixed = CatalogGame {
+                rel_path: rest.to_string(),
+                ..game.clone()
+            };
+            if self.offer(root, &unprefixed) {
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Take a game into the index, if this machine actually has its files.
@@ -332,7 +394,8 @@ pub fn socket_address(address: &str, port: u16) -> Option<std::net::SocketAddr> 
 /// Everything the agent needs to run.
 pub struct AgentConfig {
     pub server_url: String,
-    pub library_root: PathBuf,
+    /// Every root this node holds, searched in order.
+    pub library_roots: Vec<PathBuf>,
     pub port: u16,
     pub state_path: PathBuf,
     pub enrolment_token: Option<String>,
@@ -427,6 +490,99 @@ mod tests {
             content_hash: Some("a".repeat(64)),
             files,
         }
+    }
+
+    #[test]
+    fn a_game_is_found_in_whichever_root_holds_it() {
+        // Two libraries on one node, and the coordinator knows the game by one
+        // relative path. Searching the roots is the only way to find it.
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let bytes = vec![4u8; 512];
+        write_file(second.path(), "Demo Game/game.bin", &bytes);
+
+        let mut index = LibraryIndex::new();
+        let accepted = index.offer_from_roots(
+            &[first.path().to_path_buf(), second.path().to_path_buf()],
+            &game(vec![CatalogFile {
+                id: "gfl_1".into(),
+                path: "game.bin".into(),
+                size_bytes: 512,
+                chunks: vec![CatalogChunk {
+                    index: 0,
+                    sha256: sha(&bytes),
+                }],
+            }]),
+        );
+
+        assert!(accepted);
+        assert_eq!(index.len(), 1);
+    }
+
+    #[test]
+    fn a_path_prefixed_with_its_library_name_still_resolves() {
+        // A node with more than one root reports paths prefixed with the
+        // library's name, so two roots' "Demo Game" do not collide upstream.
+        // The prefix names the root, so it is not part of the path on disk.
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("3TB");
+        let bytes = vec![9u8; 128];
+        write_file(&root, "Demo Game/game.bin", &bytes);
+
+        let mut prefixed = game(vec![CatalogFile {
+            id: "gfl_1".into(),
+            path: "game.bin".into(),
+            size_bytes: 128,
+            chunks: vec![CatalogChunk {
+                index: 0,
+                sha256: sha(&bytes),
+            }],
+        }]);
+        prefixed.rel_path = "3TB/Demo Game".into();
+
+        let mut index = LibraryIndex::new();
+        assert!(index.offer_from_roots(std::slice::from_ref(&root), &prefixed));
+        assert_eq!(index.len(), 1);
+
+        // The prefix is only stripped for the root it names. A root called
+        // something else must not have its own files reached through it.
+        let other = parent.path().join("E");
+        std::fs::create_dir_all(&other).unwrap();
+        let mut elsewhere = LibraryIndex::new();
+        assert!(!elsewhere.offer_from_roots(&[other], &prefixed));
+    }
+
+    #[test]
+    fn the_mounts_decide_when_no_roots_are_declared() {
+        let base = tempfile::tempdir().unwrap();
+        let single = base.path().join("library");
+        let many = base.path().join("libraries");
+        std::fs::create_dir_all(&single).unwrap();
+        std::fs::create_dir_all(many.join("3TB")).unwrap();
+        std::fs::create_dir_all(many.join("E")).unwrap();
+        // A file under /libraries is not a library.
+        std::fs::write(many.join("notes.txt"), b"x").unwrap();
+
+        let found = crate::discover_library_roots(single.to_str().unwrap(), many.to_str().unwrap());
+
+        assert_eq!(
+            found,
+            vec![single, many.join("3TB"), many.join("E")],
+            "the single root first, then one per directory, in name order"
+        );
+    }
+
+    #[test]
+    fn a_declared_list_wins_over_the_mounts() {
+        let roots = crate::library_roots(Some("/a, /b ;/c"));
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/a"),
+                PathBuf::from("/b"),
+                PathBuf::from("/c")
+            ]
+        );
     }
 
     #[test]

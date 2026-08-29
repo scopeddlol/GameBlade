@@ -1,6 +1,36 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+
+/**
+ * Where the node image expects a single library to be mounted.
+ *
+ * The one-library case, which is most of them: mount the games here and the
+ * node needs no configuration at all.
+ */
+export const DEFAULT_LIBRARY_ROOT = '/library';
+
+/**
+ * Where a node with more than one library mounts each of them.
+ *
+ * A node holding two drives is ordinary — one archive on a spinning 3 TB disk
+ * and another on an SSD — and there was no way to say so. `LIBRARY_PATHS` could
+ * carry a list, but the node image set it to `/library` and nothing in the
+ * compose file suggested it could be anything else, so a second `:ro` mount
+ * simply went unread and the node reported one library while holding two.
+ *
+ * Every immediate subdirectory of this is a library root, named after the
+ * directory. So two drives is two mounts and nothing else:
+ *
+ *     - /mnt/3TB:/libraries/3TB:ro
+ *     - /mnt/E:/libraries/E:ro
+ *
+ * A directory rather than a variable because the mount is the thing an
+ * operator was already going to write, and it names the library at the same
+ * time. `LIBRARY_PATHS` still overrides all of this for anyone who wants paths
+ * of their own.
+ */
+export const MULTI_LIBRARY_ROOT = '/libraries';
 
 const booleanish = z.union([z.boolean(), z.string()]).transform((v) => {
   if (typeof v === 'boolean') return v;
@@ -40,6 +70,12 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
   DATA_DIR: z.string().default('/data'),
+  /**
+   * Library roots, comma- or semicolon-separated.
+   *
+   * Set here it is exactly what gets scanned, in every role. Left empty on a
+   * node, the mounts decide instead — see `discoverLibraryRoots`.
+   */
   LIBRARY_PATHS: z.string().default(''),
 
   /**
@@ -75,7 +111,7 @@ const envSchema = z.object({
    * better than handing out an address nothing is listening on.
    */
   RELAY_ENDPOINT: z.string().optional(),
-  /** One-time code from Admin → Settings → Nodes. Only needed once. */
+  /** One-time code from Admin → Nodes. Only needed once. */
   ENROLMENT_TOKEN: z.string().optional(),
 
   BASE_PATH: z.string().optional(),
@@ -137,6 +173,52 @@ function parseEndpoint(value: string | undefined): { address: string; port: numb
   return { address, port };
 }
 
+/**
+ * A node's library roots, when the operator has not listed them.
+ *
+ * Reads the mounts rather than asking for them a second time. `/library` is
+ * the single-library case the node image has always documented; every
+ * immediate subdirectory of `/libraries` is one root each, which is how a node
+ * holding two drives says so.
+ *
+ * Both are looked at, so an operator who already had `/library` and then adds
+ * `/libraries/E` keeps the first one — the alternative would silently drop the
+ * catalog they already had and orphan everything attached to it.
+ *
+ * Unreadable entries are skipped rather than fatal: a mount that failed is a
+ * thing to say on the node's page, not a reason to refuse to start.
+ */
+export function discoverLibraryRoots(
+  single: string = DEFAULT_LIBRARY_ROOT,
+  many: string = MULTI_LIBRARY_ROOT,
+): string[] {
+  const roots: string[] = [];
+
+  const isDirectory = (candidate: string): boolean => {
+    try {
+      return statSync(candidate).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+
+  if (isDirectory(single)) roots.push(path.resolve(single));
+
+  try {
+    for (const entry of readdirSync(many, { withFileTypes: true })) {
+      // Symlinked mounts are ordinary, so `isDirectory()` alone would miss
+      // them; the stat below follows the link and answers for the target.
+      if (entry.name.startsWith('.')) continue;
+      const candidate = path.join(many, entry.name);
+      if (isDirectory(candidate)) roots.push(path.resolve(candidate));
+    }
+  } catch {
+    // No /libraries at all is the ordinary single-library node.
+  }
+
+  return roots;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const parsed = envSchema.safeParse(env);
   if (!parsed.success) {
@@ -148,10 +230,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const e = parsed.data;
 
   const dataDir = path.resolve(e.DATA_DIR);
-  const libraryPaths = e.LIBRARY_PATHS.split(/[,;]/)
+  const declaredPaths = e.LIBRARY_PATHS.split(/[,;]/)
     .map((p) => p.trim())
     .filter(Boolean)
     .map((p) => path.resolve(p));
+
+  /*
+   * A node with nothing declared reads its own mounts.
+   *
+   * Only a node: a standalone server's libraries are rows an administrator
+   * adds in the panel, and a coordinator has no disk to look at. Declaring
+   * `LIBRARY_PATHS` still wins everywhere, so an operator who wants exact
+   * paths has them and nothing is guessed underneath them.
+   */
+  const libraryPaths =
+    e.ROLE === 'node' && declaredPaths.length === 0 ? discoverLibraryRoots() : declaredPaths;
 
   return {
     env: e.NODE_ENV,
@@ -183,6 +276,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     /** The Windows client installer an administrator uploads, if any. */
     installerDir: path.join(dataDir, 'client'),
     libraryPaths,
+    /** Whether the list above was read off the mounts rather than declared. */
+    libraryPathsDiscovered: e.ROLE === 'node' && declaredPaths.length === 0,
 
     mediaQuotaBytes: e.MEDIA_QUOTA_MB * 1024 * 1024,
     saveQuotaBytes: e.SAVE_QUOTA_MB * 1024 * 1024,

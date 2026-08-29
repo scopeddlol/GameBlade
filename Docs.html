@@ -601,7 +601,7 @@
   <body>
     <header class="top">
       <button class="menu-toggle" id="menu-toggle" aria-expanded="false">Contents</button>
-      <span class="brand">GameBlade <span class="version">0.6.3</span></span>
+      <span class="brand">GameBlade <span class="version">0.6.4</span></span>
       <span class="spacer"></span>
       <a class="external" href="https://github.com/scopeddlol/GameBlade">GitHub</a>
       <a class="external" href="docs/API.md">API reference</a>
@@ -657,6 +657,44 @@
               <h4>Small</h4>
               <p>One Alpine container, SQLite, no external database or cache.</p>
             </div>
+          </div>
+
+          <div class="new" data-since="0.6.4">
+            <p>
+              <strong>A node can hold several drives, and you can watch the fleet.</strong>
+            </p>
+            <ul>
+              <li>
+                <strong>&ldquo;Connect this node&rdquo; did nothing.</strong> The setup page's
+                script was inline, and this server sends <code>script-src 'self'</code> on every
+                response, so the browser dropped it &mdash; silently. The page rendered, the button
+                depressed, and nothing was sent or logged. It is served as a file now. See
+                <a href="#node-page">looking at a node</a>.
+              </li>
+              <li>
+                <strong>More than one library on a node.</strong> Mount each drive under
+                <code>/libraries</code> and the directory name becomes the library's name.
+                <code>/library</code> still works for one. Mounting two at the same path never
+                did &mdash; Docker keeps one and drops the other, with no error anywhere. See
+                <a href="#deploy-libraries-several">a node with several drives</a>.
+              </li>
+              <li>
+                <strong>Scanning and hashing from the node's own page</strong>, with live
+                progress, instead of waiting for timers. See <a href="#node-page">looking at a
+                node</a>.
+              </li>
+              <li>
+                <strong>Nodes is its own section of the panel</strong>, with per-node statistics,
+                fleet analytics, and a live map of the tunnels. See
+                <a href="#admin-nodes">Nodes</a>.
+              </li>
+              <li>
+                <strong>A coordinator no longer offers libraries or a scan.</strong> It has no
+                disk, and scanning an absent path flagged the entire catalog its nodes had just
+                reported. Both are gone from its panel and refused by its API. See
+                <a href="#roles">the roles</a>.
+              </li>
+            </ul>
           </div>
 
           <div class="new" data-since="0.6.3">
@@ -984,11 +1022,11 @@ cp .env.example .env</code></pre>
                 <tr><td colspan="3"><strong>Role</strong></td></tr>
                 <tr><td><code>ROLE</code></td><td>from the image</td><td>Each image sets its own, so there is normally nothing to put here. Setting it overrides: <code>standalone</code>, <code>coordinator</code> or <code>node</code>. See <a href="#roles">the roles</a>.</td></tr>
                 <tr><td><code>COORDINATOR_URL</code></td><td>—</td><td>Where a node reports. Optional: leave it out and the node's <a href="#deploy-nodes">setup page</a> asks instead, remembering the answer. Set, it wins. No trailing slash needed — one is stripped.</td></tr>
-                <tr><td><code>ENROLMENT_TOKEN</code></td><td>—</td><td>The one-time code from <strong>Admin → Settings → Nodes</strong>. Optional for the same reason. Spent on first registration and not kept.</td></tr>
+                <tr><td><code>ENROLMENT_TOKEN</code></td><td>—</td><td>The one-time code from <strong>Admin → Nodes</strong>. Optional for the same reason. Spent on first registration and not kept.</td></tr>
                 <tr><td><code>RELAY_ENDPOINT</code></td><td>—</td><td>The relay's public address as <code>host:port</code>, handed to clients by a coordinator. Set on the <em>coordinator</em>, not on the relay. A value with no port is refused rather than half-accepted.</td></tr>
 
                 <tr><td colspan="3"><strong>Storage and listening</strong></td></tr>
-                <tr><td><code>LIBRARY_PATHS</code></td><td><code>/library</code> on a node</td><td>Comma- or semicolon-separated library roots <strong>inside the container</strong>. Registered automatically on first start. The node image sets it, so mounting the games at <code>/library</code> is the whole of it.</td></tr>
+                <tr><td><code>LIBRARY_PATHS</code></td><td>the mounts, on a node</td><td>Comma- or semicolon-separated library roots <strong>inside the container</strong>. Registered automatically on first start. A node left without it reads its own mounts instead: <code>/library</code>, plus one root per directory under <code>/libraries</code> — so two drives is two volumes and no variable. Setting it names the roots exactly and nothing is discovered underneath it. See <a href="#deploy-libraries-several">a node with several drives</a>.</td></tr>
                 <tr><td><code>DATA_DIR</code></td><td><code>/data</code></td><td>Database, artwork, uploads, cloud saves, client installer, and a node's <code>node-state.json</code></td></tr>
                 <tr><td><code>PORT</code> / <code>HOST</code></td><td><code>8080</code> / <code>0.0.0.0</code></td><td>Listen address inside the container</td></tr>
                 <tr><td><code>TZ</code></td><td><code>Etc/UTC</code></td><td>Container timezone; what timestamps in the panel are rendered against</td></tr>
@@ -1053,7 +1091,7 @@ cp .env.example .env</code></pre>
               <thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
               <tbody>
                 <tr><td><code>GAMEBLADE_SERVER</code></td><td>from the state file</td><td>The coordinator's base URL. Unset, the agent waits for the <a href="#deploy-nodes">setup page</a> to supply one rather than exiting.</td></tr>
-                <tr><td><code>GAMEBLADE_LIBRARY</code></td><td><code>/library</code></td><td>The library root inside this container, read-only. A path that is not there is a warning rather than an exit — a wrong volume is fixed by editing compose, which is easier against a node that is running and saying so.</td></tr>
+                <tr><td><code>GAMEBLADE_LIBRARY</code></td><td>the mounts</td><td>Library roots inside this container, read-only — one path or a comma-separated list. Left unset the agent reads the same two places the server half does, so both halves agree about what this machine holds without being told twice. Nothing mounted anywhere is a warning rather than an exit: a wrong volume is fixed by editing compose, which is easier against a node that is running and saying so.</td></tr>
                 <tr><td><code>GAMEBLADE_ENROLMENT</code></td><td>from the state file</td><td>The one-time code. The agent owns this node's keypair, so it is the process that registers; the setup page writes the code where it will find it.</td></tr>
                 <tr><td><code>GAMEBLADE_STATE</code></td><td><code>/data/node-state.json</code></td><td>Where the identity lives. Shared with the server process beside it — the node image points both at the same file.</td></tr>
                 <tr><td><code>GAMEBLADE_PORT</code></td><td><code>47820</code></td><td>UDP port to serve on. <code>0</code> takes any free port, which makes the node unreachable from outside its NAT, so pin it if you are forwarding.</td></tr>
@@ -1350,6 +1388,23 @@ cp .env.example .env</code></pre>
             </p>
           </div>
 
+          <div class="new" data-since="0.6.4">
+            <p>
+              <strong>A coordinator no longer offers what it cannot do.</strong> It has no disk, so
+              the panel does not show it a library folder to add or a scan to start, and the API
+              refuses both &mdash; a bookmark, an API key or a stale tab is enough to reach a route
+              the navigation has stopped linking to.
+            </p>
+            <p>
+              The scan in particular was not merely pointless. It walked a path that is not on that
+              machine, read the empty result as &ldquo;every game has been deleted&rdquo;, and
+              flagged the entire catalog its nodes had just reported. A coordinator's libraries are
+              made for its nodes when they enrol and are managed under
+              <a href="#admin-nodes">Nodes</a>; each node scans its own disk from
+              <a href="#node-page">its own page</a>. A standalone server is unchanged.
+            </p>
+          </div>
+
           <div class="note">
             <p>
               <strong>Four images, one build.</strong> They are the same filesystem with different
@@ -1382,9 +1437,12 @@ cp .env.example .env</code></pre>
               lists &mdash; the role sees to that &mdash; so there is nothing to switch off first.
             </li>
             <li>
-              <strong>Enrol the node</strong> that holds the games, and
-              <strong>assign it the library its games are already in</strong> on
-              <strong>Admin &rarr; Settings &rarr; Nodes</strong>.
+              <strong>Enrol the node</strong> that holds the games, choosing
+              <strong>the library its games are already in</strong> under
+              <strong>Reports into</strong> on <strong>Admin &rarr; Nodes &rarr; Enrolment</strong>.
+              Choosing it on the code rather than after the node registers is the point: assigning
+              it afterwards is a race the node wins, and the catalog everything is attached to is
+              orphaned before you get there.
             </li>
             <li>
               <strong>Point the proxy at the coordinator</strong> only once all of that looks
@@ -1520,8 +1578,21 @@ cp .env.example .env</code></pre>
             A node serves one page, about itself, on its HTTP port. It is not the admin panel and
             deliberately cannot be: a node owns no accounts, no settings and no catalog of record,
             so there is nothing on it to administer. What it can answer is the question people
-            actually walk up to a node to ask &mdash; is this thing working?
+            actually walk up to a node to ask &mdash; is this thing working? &mdash; and, since
+            0.6.4, it can start the two jobs that make it work.
           </p>
+
+          <div class="warn">
+            <p>
+              <strong>Before 0.6.4 the page&rsquo;s script never ran at all.</strong> It was inline,
+              and every response this server sends carries <code>script-src 'self'</code>, so the
+              browser dropped it and said so only in its own console. The page rendered perfectly,
+              the setup form accepted what you typed, the button depressed, and nothing was sent
+              &mdash; the page did not even refresh itself to hint that anything was wrong. If you
+              are on 0.6.3 or earlier and <strong>Connect this node</strong> appears to do nothing,
+              that is this, and the fix is the upgrade. Nothing about your node is broken.
+            </p>
+          </div>
           <div class="scroller">
             <table>
               <thead>
@@ -1533,8 +1604,17 @@ cp .env.example .env</code></pre>
                   <td>Whether the one manual step was done, or the code was never spent</td>
                 </tr>
                 <tr>
-                  <td>Its libraries, the games in each, and when each was last scanned</td>
-                  <td>Whether the volume mounted and the walk found anything</td>
+                  <td>Every library root, its games, its size, and when each was last scanned</td>
+                  <td>Whether each volume mounted and the walk found anything &mdash; a drive that
+                  did not mount is marked as such, because otherwise it looks exactly like a drive
+                  with nothing on it</td>
+                </tr>
+                <tr>
+                  <td>Games ready to serve, out of games held</td>
+                  <td>How much of this machine the coordinator can actually hand out. A game is
+                  all-or-nothing over the mesh, so one unhashed file makes the whole game
+                  unservable &mdash; which is invisible in a files-hashed percentage sitting at
+                  99.9%</td>
                 </tr>
                 <tr>
                   <td>How many files have per-chunk hashes, out of how many</td>
@@ -1547,13 +1627,56 @@ cp .env.example .env</code></pre>
               </tbody>
             </table>
           </div>
-          <p>A node's entire HTTP surface is four things:</p>
+          <div class="new" data-since="0.6.4">
+            <p>
+              <strong>Two buttons, because both of these used to happen only on timers.</strong>
+              That is right for a node that has been running for a month and useless for one
+              plugged in five minutes ago &mdash; nothing here is servable until its game is
+              hashed, the first pass over a real archive is hours, and there was no way to start
+              either or to see how far along they were except <code>docker logs</code>.
+            </p>
+            <ul>
+              <li>
+                <strong>Scan now</strong> looks for mounts that were not there at boot, registers
+                any it finds, and then walks every root. So a drive attached after the container
+                started is found without restarting it.
+              </li>
+              <li>
+                <strong>Hash everything now</strong> reads every byte of every game that is not
+                hashed yet. It stops between games rather than mid-file, so stopping it loses
+                nothing &mdash; a game already hashed is skipped next time.
+              </li>
+            </ul>
+            <p>
+              Both show live progress, both refuse to start a second copy of themselves, and the
+              page refreshes every three seconds while either is running instead of every fifteen.
+              The timers still run underneath; pressing a button only brings the same pass forward.
+            </p>
+          </div>
+
+          <p>A node's entire HTTP surface is these:</p>
           <div class="scroller">
             <table>
               <thead><tr><th>Route</th><th></th></tr></thead>
               <tbody>
                 <tr><td><code>/</code></td><td>The page above</td></tr>
+                <tr><td><code>/node.js</code></td><td>The page's script. A file rather than an inline block, because the content security policy drops those.</td></tr>
                 <tr><td><code>/api/node/status</code></td><td>The same thing as JSON, for a dashboard or a script</td></tr>
+                <tr>
+                  <td><code>POST /api/node/setup</code></td>
+                  <td>
+                    Points this node at a coordinator, once. Works only while the node has not
+                    enrolled; afterwards it is gone.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>POST /api/node/scan</code><br /><code>POST /api/node/scan/cancel</code></td>
+                  <td>Start or stop a scan. 409 if one is already running, or if none is.</td>
+                </tr>
+                <tr>
+                  <td><code>POST /api/node/hash</code><br /><code>POST /api/node/hash/cancel</code></td>
+                  <td>Start or stop the hashing pass, on the same terms.</td>
+                </tr>
                 <tr>
                   <td><code>/api/health</code></td>
                   <td>
@@ -1576,19 +1699,30 @@ cp .env.example .env</code></pre>
           <p>
             The JSON carries what the page renders: the coordinator it reports to and whether it
             enrolled, its node id, whether the agent's key exists yet, each library with its game
-            count and last scan, hashed files out of total, whether a scan is running, and the last
-            report attempt with its reason if it failed.
+            count, size, last scan and whether its path is mounted right now, games ready to serve
+            out of games held, hashed files out of total, the scan's progress, the hashing pass's
+            progress, and the last report attempt with its reason if it failed.
           </p>
           <div class="warn">
             <p>
               <strong>Keep it off the public internet.</strong> The page is unauthenticated, and it
               is given nothing worth authenticating &mdash; counts, paths already in your compose
               file, and whether the coordinator answered. There is no game data on it, no
-              credentials, no key, and nothing on a node that a request can change. It is still
-              about your infrastructure, so <code>docker-compose.node.yml</code> publishes it on
-              <code>127.0.0.1</code>. To reach it from elsewhere, put something in front that
-              authenticates &mdash; <a href="#deploy-node-ui">a tunnel, and the LAN</a> covers
-              doing both at once.
+              credentials and no key.
+            </p>
+            <p>
+              Three things can be <em>started</em> from it &mdash; enrolment, a scan and the hashing
+              pass &mdash; and each is bounded the same way: work this node already does on its own
+              timers, brought forward. None of them reads out anything the page does not already
+              show, none writes to the library (which is mounted read-only), none can be made to
+              touch another machine, and starting a pass that is already running is refused rather
+              than queued. So the worst a flood of requests achieves is a great many 409s.
+            </p>
+            <p>
+              It is still about your infrastructure, so <code>docker-compose.node.yml</code>
+              publishes it on <code>127.0.0.1</code>. To reach it from elsewhere, put something in
+              front that authenticates &mdash; <a href="#deploy-node-ui">a tunnel, and the LAN</a>
+              covers doing both at once.
             </p>
           </div>
         </section>
@@ -1610,6 +1744,16 @@ cp .env.example .env</code></pre>
               attention and a firewall dialog — all so the operating system can route packets that
               only ever reach one process. The client speaks QUIC directly instead, terminated
               inside the app. There is nothing for a player to install, approve or notice.
+            </p>
+          </div>
+
+          <div class="new" data-since="0.6.4">
+            <p>
+              <strong>You can watch it working.</strong>
+              <a href="#admin-nodes">Admin → Nodes</a> carries the fleet, its analytics, and a live
+              <a href="#tunnel-map">map of the tunnels</a> — including which of them are going
+              direct and which have fallen back through the relay, which is the difference between
+              a mesh that is doing its job and one that is not.
             </p>
           </div>
 
@@ -1640,7 +1784,7 @@ cp .env.example .env</code></pre>
               standalone server it is <a href="#hashing">an API call, not a button</a>.
             </li>
             <li>
-              <strong>Enrol the node.</strong> <strong>Admin → Settings → Nodes</strong> takes a
+              <strong>Enrol the node.</strong> <strong>Admin → Nodes</strong> takes a
               name and a role and generates a one-time code. It is shown once and stored only as a
               hash; it expires in 24 hours and is spent the moment a node registers with it.
             </li>
@@ -1667,10 +1811,16 @@ cp .env.example .env</code></pre>
           <h3 id="hashing">Computing chunk hashes</h3>
           <div class="warn">
             <p>
-              <strong>There is no button for this in the panel as of 0.6.2.</strong> The routes
-              exist and work; nothing in the admin UI calls them yet. Anywhere this manual used to
-              say <em>Admin → Catalog → Games → Compute chunk hashes</em>, it was describing a
+              <strong>There is still no per-game button for this in the admin panel.</strong> The
+              routes exist and work; nothing in the admin UI calls them. Anywhere this manual used
+              to say <em>Admin → Catalog → Games → Compute chunk hashes</em>, it was describing a
               control that has never been there.
+            </p>
+            <p>
+              A <em>node</em> is different, and since 0.6.4 has a button: it hashes its own library
+              on a timer and <a href="#node-page">its own page</a> can start that pass now. This
+              section is about doing it by hand on a standalone server, where hashing stays a
+              deliberate per-game decision because the server can always serve the file itself.
             </p>
           </div>
           <p>
@@ -2159,18 +2309,62 @@ docker compose up -d</code></pre>
           </ul>
           <p>
             The path on a coordinator's library is a label. Nothing there ever reads through it,
-            which is why an automatic one is <code>/nodes/&lt;node id&gt;</code> and why you can
-            still create one by hand with any path you like.
+            which is why an automatic one is <code>/nodes/&lt;node id&gt;</code> &mdash; and, since
+            0.6.4, why a coordinator will not let you create one by hand at all. There is nothing
+            for it to be a path to.
           </p>
 
-          <h4 id="deploy-libraries-several">A node with several libraries</h4>
+          <h4 id="deploy-libraries-several">A node with several drives</h4>
+          <div class="new" data-since="0.6.4">
+            <p>
+              <strong>A node reads its own mounts.</strong> <code>/library</code> is one library, as
+              it has always been, and every directory under <code>/libraries</code> is one more,
+              named after the directory. Both forms work together and either works alone.
+            </p>
+          </div>
+          <pre><code>    volumes:
+      - ./data:/data
+      # One drive, as before.
+      - /srv/games:/library:ro
+      # Or several, one mount each. The directory name is the library's name.
+      - /mnt/3TB:/libraries/3TB:ro
+      - /mnt/E:/libraries/E:ro</code></pre>
+          <div class="warn">
+            <p>
+              <strong>Two drives mounted at the same <code>/library</code> is not an error to
+              Docker.</strong> It keeps one of them and the other is simply never read, with no
+              message anywhere &mdash; so the node reports half an archive and nothing says which
+              half is missing. Before 0.6.4 there was no other way to say it, because the node image
+              pinned <code>LIBRARY_PATHS=/library</code>; that pin is gone.
+            </p>
+          </div>
           <p>
-            All of a node's own library roots report into its one library on the coordinator. A
-            node with more than one root prefixes each game's path with the root it came from, so
-            two roots that both contain <code>Hollow Knight</code> stay two games rather than
-            fighting over one row. A node with a single root &mdash; which is what the node image
-            configures, and what almost every node is &mdash; reports paths unchanged.
+            <code>LIBRARY_PATHS</code> still overrides all of it for anyone who wants exact paths.
+            Set, it is precisely what gets scanned and nothing is discovered underneath it.
           </p>
+          <p>
+            The mesh agent searches every root for a game rather than being told which one holds it,
+            so bytes come out of whichever drive has them.
+          </p>
+          <p>
+            All of a node's roots report into its one library on the coordinator. Paths from the
+            second root onward are prefixed with that root's name, so two drives that both contain
+            <code>Hollow Knight</code> stay two games rather than fighting over one row. The
+            <em>first</em> root's paths are deliberately left alone: changing the path of a game
+            that has already been reported would make it a stranger to the coordinator, which would
+            add the whole catalog again and orphan every achievement, save rule and playtime record
+            attached to the originals. Adding a drive adds games; it does not re-add the ones you
+            had.
+          </p>
+          <div class="note">
+            <p>
+              <strong>A root whose mount has gone is disabled, not deleted.</strong> Deleting it
+              would take its catalog with it, and a mount that failed on this boot is far more often
+              one that will be back than a drive somebody meant to remove. Disabled means the
+              scanner skips it, which is what stops one unmounted drive flagging every game on it as
+              missing. It is re-enabled by itself when the drive returns.
+            </p>
+          </div>
 
           <div class="warn">
             <p>
@@ -2202,6 +2396,10 @@ services:
       - ./data:/data
       # Change the left side. /library is where the image looks.
       - /srv/games:/library:ro
+      # For a second and third drive, one mount each under /libraries.
+      # The directory name becomes the library's name.
+      # - /mnt/3TB:/libraries/3TB:ro
+      # - /mnt/E:/libraries/E:ro
     ports:
       # The node's own page. Bound to this host's LAN address so it is
       # reachable from the network and from nowhere else.
@@ -2214,7 +2412,7 @@ services:
           <div class="new" data-since="0.6.2">
             <p>
               <strong>The rest is a form.</strong> On the coordinator, open
-              <strong>Admin → Settings → Nodes</strong>, give the node a name, pick the role
+              <strong>Admin → Nodes</strong>, give the node a name, pick the role
               <strong>Origin</strong>, and press <strong>Generate code</strong>. Then open the
               node's own page &mdash; <code>http://192.168.1.20:8080</code> &mdash; and paste the
               coordinator's address and that code into the setup panel it is showing.
@@ -2231,14 +2429,16 @@ services:
           <p>
             Repeat for the second node with its own enrolment code and its own
             <code>data/</code>. Each gets its own library automatically, which is what they must
-            have &mdash; see <a href="#deploy-libraries">libraries</a>.
+            have &mdash; see <a href="#deploy-libraries">libraries</a>. One node holding several
+            drives is a different thing and needs no second node: see
+            <a href="#deploy-libraries-several">a node with several drives</a>.
           </p>
 
           <div class="note">
             <p>
               <strong>The form is a first-run screen and closes like one.</strong> It appears only
-              while a node has not enrolled and is gone the moment it has, so an enrolled node is
-              back to having nothing a request can change. It grants nothing by itself either
+              while a node has not enrolled and is gone the moment it has, so an enrolled node has
+              nothing a request can point somewhere else. It grants nothing by itself either
               &mdash; the enrolment code is checked by the coordinator, not by the node, so a wrong
               one produces a node that fails to register and says so. Keep the page off the public
               internet regardless: it is unauthenticated, exactly as it was before.
@@ -2295,6 +2495,15 @@ services:
             next catalog report carries the results up. There is nothing to run and nothing to
             enable.
           </p>
+          <div class="new" data-since="0.6.4">
+            <p>
+              <strong>You can also start it now.</strong> The timer is right for a node that has
+              been running for a month and useless for one plugged in five minutes ago, so the
+              node's own page has a <strong>Hash everything now</strong> button with the count of
+              games left on it. It runs the same pass the timer does &mdash; there is only ever one
+              &mdash; and stops between games rather than mid-file, so stopping it loses nothing.
+            </p>
+          </div>
 
           <div class="new" data-since="0.6.3">
             <p>
@@ -2387,9 +2596,9 @@ services:
           </div>
           <p>
             Leave <code>BASE_PATH</code> unset and give each node a hostname rather than a
-            sub-path. A node answers on <code>/</code>, two <code>/api</code> routes and a
-            catch-all that returns the page again; a sub-path buys nothing over that and adds a
-            rewrite that fails quietly.
+            sub-path. A node answers on <code>/</code>, its own script, a handful of
+            <code>/api/node</code> routes and a catch-all that returns the page again; a sub-path
+            buys nothing over that and adds a rewrite that fails quietly.
           </p>
           <p>
             And nothing about game downloads passes through here. The bytes leave the agent over
@@ -2504,7 +2713,7 @@ services:
                 </tr>
                 <tr>
                   <td>Both nodes are online to the coordinator</td>
-                  <td><strong>Admin → Settings → Nodes</strong></td>
+                  <td><strong>Admin → Nodes</strong></td>
                   <td>online, seen within the last minute or so</td>
                 </tr>
                 <tr>
@@ -2588,7 +2797,7 @@ services:
               <strong>A node that goes quiet for ninety seconds is marked stale</strong> and
               withheld from new downloads while existing ones drain. That is a health signal
               rather than a disconnection &mdash; it returns to online on the next heartbeat that
-              lands. Check <strong>Admin → Settings → Nodes</strong> for when each was last heard
+              lands. Check <strong>Admin → Nodes</strong> for when each was last heard
               from.
             </p>
           </div>
@@ -2708,9 +2917,11 @@ services:
             viewport rather than forcing the page sideways.
           </p>
           <p>
-            Six sections, each with its own sub-tabs. Pointing at one starts fetching what it needs
-            before the click lands, and a page waiting on data draws its own shape rather than a
-            spinner. The flat URLs the sections used to live at still work and redirect.
+            Seven sections, each with its own sub-tabs &mdash; six on a standalone server, which
+            has no <a href="#admin-nodes">Nodes</a> to speak of until one is enrolled. Pointing at
+            one starts fetching what it needs before the click lands, and a page waiting on data
+            draws its own shape rather than a spinner. The flat URLs the sections used to live at
+            still work and redirect.
           </p>
 
           <h3 id="admin-overview">Overview</h3>
@@ -2736,7 +2947,14 @@ services:
             </li>
             <li><strong>Featured</strong> — curates the carousel on the client's Home tab, in order, with a per-slot image override.</li>
             <li><strong>Save paths</strong> — where each game keeps its saves. See <a href="#save-paths">Where the save paths come from</a>.</li>
-            <li><strong>Libraries</strong> — the folders on disk that are scanned, and the scan itself. See <a href="#scanning">Scanning</a>.</li>
+            <li>
+              <strong>Libraries</strong> — the folders on disk that are scanned, and the scan
+              itself. See <a href="#scanning">Scanning</a>. <strong>Standalone only</strong>
+              — a coordinator has no disk, so since 0.6.4 this tab is not shown on one and the
+              routes behind it are refused. Its libraries are made for its nodes when they enrol
+              and are managed under <a href="#admin-nodes">Nodes</a>; each node scans its own disk
+              from <a href="#node-page">its own page</a>.
+            </li>
           </ul>
 
           <h3 id="admin-players">Players</h3>
@@ -2782,12 +3000,86 @@ services:
             </li>
             <li><strong>Discord</strong> — sign-in, the bot, posting, roles and tickets. See <a href="#discord">Discord</a>.</li>
             <li><strong>API keys</strong> — scoped credentials for <a href="#external-api">the external API</a>.</li>
+          </ul>
+
+          <h3 id="admin-nodes">Nodes</h3>
+          <div class="new" data-since="0.6.4">
+            <p>
+              <strong>A section of its own, with four tabs.</strong> It was a tab inside Settings,
+              filed next to the Discord token and the API keys &mdash; which put &ldquo;is my
+              archive being served&rdquo; in the drawer you open once during setup. A node that
+              quietly stops reporting is a catalog that quietly stops being downloadable, and
+              nothing else on the panel says so. <code>/admin/settings/nodes</code> redirects here.
+            </p>
+          </div>
+          <p>
+            Shown on a coordinator and on a standalone server; a node has no panel at all, only
+            <a href="#node-page">its own page</a>.
+          </p>
+          <ul>
             <li>
-              <strong>Nodes</strong> — enrol a node, see what each is holding and when it was last
-              heard from, assign each one its library, block one, or remove it. Outstanding
-              enrolment codes are listed underneath with their expiry.
+              <strong>Fleet</strong> — every machine, with the numbers that explain it rather than
+              just describe it. The pairing that matters is what a node is <em>offering</em>
+              against what is in its library: a node announcing four hundred of two thousand games
+              is working perfectly and still not serving most of the archive, because the rest are
+              not hashed yet. Either number alone says nothing. Beside them: bytes served over a
+              day, a week and all time, how many players it served, how many transfers are open
+              right now, its agent build, how long since it was last heard from, its addresses, and
+              the library its reports land in.
+            </li>
+            <li>
+              <strong>Tunnel map</strong> — every connection the coordinator believes is open,
+              drawn. See <a href="#tunnel-map">the tunnel map</a>.
+            </li>
+            <li>
+              <strong>Analytics</strong> — the share of delivered bytes that never touched this
+              server, which is the number the mesh exists to move; node and origin traffic drawn
+              separately over 7 to 90 days; catalog coverage (games no online node holds, and games
+              exactly one node holds); the busiest nodes and most-pulled games of the week; and
+              what the relay has been asked to carry.
+            </li>
+            <li>
+              <strong>Enrolment</strong> — generate a code, and the list of outstanding ones with
+              their expiry.
             </li>
           </ul>
+
+          <h4 id="tunnel-map">The tunnel map</h4>
+          <div class="new" data-since="0.6.4">
+            <p>
+              A table of transfers answers &ldquo;how much&rdquo;. It does not answer the question
+              an operator actually has about a mesh, which is <em>shape</em>.
+            </p>
+          </div>
+          <p>
+            The coordinator sits in the middle, its nodes ring it, and the players pulling from each
+            node fan out beyond. A <strong>direct</strong> tunnel bows outward and never touches the
+            middle. A <strong>relayed</strong> one is drawn straight through it &mdash; because that
+            is exactly what it does, and a fleet that has quietly fallen back to the relay is a
+            fleet paying the bandwidth bill the mesh was built to avoid. Dashes flow along a tunnel
+            while bytes are moving and stop when they are not, so a stalled transfer looks stalled.
+          </p>
+          <p>
+            Click any tunnel for who, what, how fast, how long it has been open, and how many hole
+            punches it took. Filter to what is moving or to what is relayed. Pause the whole thing
+            to read one line without it moving under the pointer. A table underneath carries the
+            same data for anyone who would rather have rows.
+          </p>
+          <div class="note">
+            <p>
+              <strong>It says what it knows, not more.</strong> A direct transfer never crosses the
+              coordinator, so what is drawn is what each node last reported on its heartbeat &mdash;
+              up to half a minute old, and the page shows the age of every tunnel's last report
+              rather than implying it is watching the wire. A tunnel appears the moment permission
+              to fetch is issued and leaves five minutes after anything was last heard about it. For
+              the first half-minute a handshake in progress and one that failed look the same from
+              here, which is what the <code>connecting</code> state means.
+            </p>
+            <p>
+              Players' addresses are reduced to a network &mdash; <code>203.0.x.x</code> &mdash;
+              before they reach the page, because this is a screen people leave open.
+            </p>
+          </div>
         </section>
 
         <section id="scanning">
@@ -2795,7 +3087,9 @@ services:
           <p>
             A scan walks each library root, reconciles what is on disk against the catalog, and then
             asks the metadata providers about anything new. <strong>Admin → Catalog → Libraries</strong>
-            starts one and shows what it is doing.
+            starts one and shows what it is doing on a standalone server; on a node it is
+            <a href="#node-page">the node's own page</a>. A coordinator has no disk and does not
+            scan &mdash; see <a href="#roles">the roles</a>.
           </p>
 
           <div class="new" data-since="0.5.3">

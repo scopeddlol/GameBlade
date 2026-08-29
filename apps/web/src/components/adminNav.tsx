@@ -1,9 +1,11 @@
+import type { ServerRole } from '@gameblade/shared';
 import type { QueryKey } from '@tanstack/react-query';
 import {
   ChartLine,
   Gamepad2,
   LayoutDashboard,
   Palette,
+  Server,
   Sliders,
   Users,
   type LucideIcon,
@@ -22,6 +24,10 @@ import {
  * Sidebar and sub-tab strip come from this same list so they can never
  * disagree about where a page lives, and the prefetch hints hang off it so
  * pointing at a section can start its request before the click lands.
+ *
+ * Some of it depends on what the deployment is. A coordinator holds no game
+ * files, so a folder to add and a disk to scan are not things it has — see
+ * `adminSections`.
  */
 
 /** One request a page needs, so hovering its link can start it early. */
@@ -38,6 +44,8 @@ export interface AdminTab {
   end?: boolean;
   /** What this page asks the server for the moment it mounts. */
   prefetch?: Prefetch[];
+  /** Roles this tab applies to. Absent means every role. */
+  roles?: ServerRole[];
 }
 
 export interface AdminSection {
@@ -49,6 +57,14 @@ export interface AdminSection {
   end?: boolean;
   /** Empty for a section that is a single page. */
   tabs: AdminTab[];
+  /**
+   * Roles this entry applies to. Absent means every role.
+   *
+   * On the tabs as well as the sections, because the difference between a
+   * coordinator and a standalone server is one tab in one section rather than
+   * a whole different panel.
+   */
+  roles?: ServerRole[];
 }
 
 export const ADMIN_SECTIONS: AdminSection[] = [
@@ -91,6 +107,11 @@ export const ADMIN_SECTIONS: AdminSection[] = [
         to: '/admin/catalog/libraries',
         label: 'Libraries',
         prefetch: [{ key: ['admin', 'libraries'], path: '/admin/libraries' }],
+        // A coordinator has no disk. Its libraries are the labels its nodes'
+        // catalogs are filed under, created when a node enrols, and the page
+        // that manages them is Nodes — where the machine that actually holds
+        // the files is.
+        roles: ['standalone'],
       },
     ],
   },
@@ -126,6 +147,39 @@ export const ADMIN_SECTIONS: AdminSection[] = [
         to: '/admin/insights/health',
         label: 'Health',
         prefetch: [{ key: ['admin', 'health'], path: '/admin/health' }],
+      },
+    ],
+  },
+  {
+    to: '/admin/nodes',
+    label: 'Nodes',
+    icon: Server,
+    hint: 'The machines holding the games, what they are serving, and to whom.',
+    // A standalone server is one machine with the files on it, so there is no
+    // fleet to watch. The section appears the moment there is something to put
+    // in it, which on a coordinator is from the first enrolment.
+    roles: ['coordinator', 'standalone'],
+    tabs: [
+      {
+        to: '/admin/nodes',
+        label: 'Fleet',
+        end: true,
+        prefetch: [{ key: ['admin', 'mesh'], path: '/mesh/nodes' }],
+      },
+      {
+        to: '/admin/nodes/map',
+        label: 'Tunnel map',
+        prefetch: [{ key: ['admin', 'mesh', 'tunnels'], path: '/mesh/tunnels' }],
+      },
+      {
+        to: '/admin/nodes/analytics',
+        label: 'Analytics',
+        prefetch: [{ key: ['admin', 'mesh', 'analytics'], path: '/mesh/analytics?days=14' }],
+      },
+      {
+        to: '/admin/nodes/enrolment',
+        label: 'Enrolment',
+        prefetch: [{ key: ['admin', 'mesh'], path: '/mesh/nodes' }],
       },
     ],
   },
@@ -175,11 +229,6 @@ export const ADMIN_SECTIONS: AdminSection[] = [
         label: 'API keys',
         prefetch: [{ key: ['admin', 'api-keys'], path: '/admin/api-keys' }],
       },
-      {
-        to: '/admin/settings/nodes',
-        label: 'Nodes',
-        prefetch: [{ key: ['admin', 'mesh'], path: '/mesh/nodes' }],
-      },
     ],
   },
 ];
@@ -193,6 +242,7 @@ export const ADMIN_SECTIONS: AdminSection[] = [
  */
 export const ADMIN_REDIRECTS: Record<string, string> = {
   featured: '/admin/catalog/featured',
+  'settings/nodes': '/admin/nodes',
   'save-paths': '/admin/catalog/save-paths',
   libraries: '/admin/catalog/libraries',
   users: '/admin/players',
@@ -205,10 +255,33 @@ export const ADMIN_REDIRECTS: Record<string, string> = {
   api: '/admin/settings/api',
 };
 
+/**
+ * The sections and tabs this deployment actually has.
+ *
+ * Filtered rather than conditionally rendered in each place, so the sidebar,
+ * the sub-tab strip and the router cannot end up disagreeing about whether a
+ * page exists — which is how you get a tab that navigates to a blank screen.
+ *
+ * The role is not a permission. The server refuses the routes behind a hidden
+ * tab on its own; this is about not offering somebody an action that cannot
+ * work on the machine they are looking at.
+ */
+export function adminSections(role: ServerRole): AdminSection[] {
+  return ADMIN_SECTIONS.filter((section) => !section.roles || section.roles.includes(role)).map(
+    (section) => ({
+      ...section,
+      tabs: section.tabs.filter((tab) => !tab.roles || tab.roles.includes(role)),
+    }),
+  );
+}
+
 /** The section a path belongs to, for the heading and the sub-tab strip. */
-export function sectionFor(pathname: string): AdminSection | undefined {
+export function sectionFor(
+  pathname: string,
+  role: ServerRole = 'standalone',
+): AdminSection | undefined {
   // Longest prefix wins, so /admin/catalog/featured does not match /admin.
-  return [...ADMIN_SECTIONS]
+  return [...adminSections(role)]
     .sort((a, b) => b.to.length - a.to.length)
     .find((section) => pathname === section.to || pathname.startsWith(`${section.to}/`));
 }

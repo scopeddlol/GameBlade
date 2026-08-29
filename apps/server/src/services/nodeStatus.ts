@@ -1,9 +1,11 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { sql } from 'drizzle-orm';
-import type { Config } from '../config.js';
+import type { ScanProgress } from '@gameblade/shared';
+import { MULTI_LIBRARY_ROOT, type Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import { gameFiles, games, libraries } from '../db/schema.js';
 import { VERSION } from '../lib/version.js';
+import type { SweepProgress } from './chunks.js';
 
 /**
  * What the node agent beside this process wrote about itself.
@@ -47,15 +49,44 @@ export interface NodeStatusSnapshot {
   nodeId: string | null;
   /** Whether the mesh agent has generated this node's key yet. */
   keyPresent: boolean;
-  libraries: { name: string; path: string; games: number; lastScanAt: string | null }[];
+  libraries: NodeLibrary[];
   configuredPaths: string[];
+  /** Whether the roots above were read off the mounts rather than declared. */
+  pathsDiscovered: boolean;
+  /** Where a second, third or fourth library is mounted on this image. */
+  multiLibraryRoot: string;
   games: number;
   /** Files with per-chunk hashes; only these can be served over the mesh. */
   hashedFiles: number;
   totalFiles: number;
+  /** Games every file of which is hashed — the ones that can actually be served. */
+  servableGames: number;
+  bytes: number;
   scanning: boolean;
+  scan: ScanProgress;
+  hashing: SweepProgress;
   lastReport: ReportAttempt | null;
   startedAt: string;
+}
+
+/** One library root, as this node currently sees it. */
+export interface NodeLibrary {
+  id: string;
+  name: string;
+  path: string;
+  games: number;
+  bytes: number;
+  lastScanAt: string | null;
+  lastScanStatus: string | null;
+  /**
+   * Whether the path is a readable directory right now.
+   *
+   * The one thing worth saying about a library that the counts cannot: a drive
+   * that did not mount looks exactly like a drive with nothing on it.
+   */
+  mounted: boolean;
+  /** False while a root is unmounted, which is what makes the scanner skip it. */
+  enabled: boolean;
 }
 
 /**
@@ -75,7 +106,8 @@ export class NodeStatusService {
   constructor(
     private readonly db: Db,
     private readonly config: Config,
-    private readonly scanner: { readonly isRunning: boolean },
+    private readonly scanner: { readonly isRunning: boolean; getProgress(): ScanProgress },
+    private readonly chunks: { getSweepProgress(): SweepProgress },
   ) {}
 
   /** Called by the reporter loop after every attempt, successful or not. */
@@ -88,11 +120,15 @@ export class NodeStatusService {
 
     const rows = this.db.select().from(libraries).all();
     const counts = this.db
-      .select({ libraryId: games.libraryId, n: sql<number>`count(*)` })
+      .select({
+        libraryId: games.libraryId,
+        n: sql<number>`count(*)`,
+        bytes: sql<number>`coalesce(sum(${games.sizeBytes}), 0)`,
+      })
       .from(games)
       .groupBy(games.libraryId)
       .all();
-    const byLibrary = new Map(counts.map((row) => [row.libraryId, Number(row.n)]));
+    const byLibrary = new Map(counts.map((row) => [row.libraryId, row]));
 
     const files = this.db
       .select({
@@ -101,6 +137,34 @@ export class NodeStatusService {
       })
       .from(gameFiles)
       .get();
+
+    /*
+     * Games every one of whose files is hashed.
+     *
+     * The file counts above say how much work is left; this says how much of
+     * the library is actually on offer, which is the number an operator is
+     * really asking about. A game is all-or-nothing over the mesh, so one
+     * unhashed file in a thousand makes the whole game unservable — and that is
+     * invisible in a files-hashed percentage sitting at 99.9%.
+     */
+    const servable = this.db
+      .select({ n: sql<number>`count(*)` })
+      .from(
+        this.db
+          .select({ gameId: gameFiles.gameId })
+          .from(gameFiles)
+          .groupBy(gameFiles.gameId)
+          .having(sql`sum(case when ${gameFiles.chunkedAt} is null then 1 else 0 end) = 0`)
+          .as('complete'),
+      )
+      .get();
+
+    const mounted = await Promise.all(
+      rows.map(async (library) => {
+        const info = await stat(library.path).catch(() => null);
+        return Boolean(info?.isDirectory());
+      }),
+    );
 
     return {
       version: VERSION,
@@ -113,17 +177,28 @@ export class NodeStatusService {
       enrolmentPending: Boolean(state.enrolmentToken),
       nodeId: state.nodeId ?? null,
       keyPresent: Boolean(state.secretKey),
-      libraries: rows.map((library) => ({
+      libraries: rows.map((library, index) => ({
+        id: library.id,
         name: library.name,
         path: library.path,
-        games: byLibrary.get(library.id) ?? 0,
+        games: Number(byLibrary.get(library.id)?.n ?? 0),
+        bytes: Number(byLibrary.get(library.id)?.bytes ?? 0),
         lastScanAt: library.lastScanAt,
+        lastScanStatus: library.lastScanStatus,
+        mounted: mounted[index] ?? false,
+        enabled: library.enabled,
       })),
       configuredPaths: this.config.libraryPaths,
-      games: [...byLibrary.values()].reduce((sum, n) => sum + n, 0),
+      pathsDiscovered: this.config.libraryPathsDiscovered,
+      multiLibraryRoot: MULTI_LIBRARY_ROOT,
+      games: [...byLibrary.values()].reduce((sum, row) => sum + Number(row.n), 0),
       hashedFiles: Number(files?.hashed ?? 0),
       totalFiles: Number(files?.total ?? 0),
+      servableGames: Number(servable?.n ?? 0),
+      bytes: [...byLibrary.values()].reduce((sum, row) => sum + Number(row.bytes), 0),
       scanning: this.scanner.isRunning,
+      scan: this.scanner.getProgress(),
+      hashing: this.chunks.getSweepProgress(),
       lastReport: this.lastReport,
       startedAt: this.startedAt,
     };

@@ -154,6 +154,157 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.4 - August 29, 2026
+
+0.6.3 made pairing a node the only step there is. This is the release where
+you can watch what happens next — and where the two halves stop pretending to
+be the same machine.
+
+### "Connect this node" did nothing at all
+
+The node's setup page carries one script: the submit handler for the form, and
+the timer that refreshes the page. It was inline, and every response this server
+sends carries `script-src 'self'`, so the browser dropped it. Silently, to
+everywhere except its own console.
+
+The result was the worst possible shape of bug. The page rendered perfectly. The
+form accepted what you typed. The button depressed. Nothing was sent, nothing
+was logged, and the page did not even refresh itself to hint that anything was
+wrong — so the one screen an operator reaches before anything else works was a
+screen that could not be used, and gave no reason.
+
+The script is served as a file now, from the node's own port, which is what the
+policy has always allowed. There is a test that fails if it ever goes back
+inline, and another that asserts the policy is still on, so this cannot regress
+into an inline block that happens to work in one browser.
+
+### A node can hold more than one drive
+
+Mounting two libraries produced one library. The node image set
+`LIBRARY_PATHS=/library` and nothing in the compose file suggested it could be
+anything else, so a second `:ro` mount was simply never read — and mounting both
+at `/library` is not an error to Docker either: it keeps one and discards the
+other. Either way the node reported half an archive and said nothing about the
+half it could not see.
+
+A node now reads its own mounts. `/library` is one library, as before, and every
+directory under `/libraries` is one more, named after the directory:
+
+```yaml
+volumes:
+  - /mnt/3TB:/libraries/3TB:ro
+  - /mnt/E:/libraries/E:ro
+```
+
+Both forms work together and either works alone. `LIBRARY_PATHS` still overrides
+everything for anyone who wants exact paths.
+
+The mesh agent searches every root for a game rather than being told which one
+holds it, so bytes come out of whichever drive has them. Paths from the second
+library onward are prefixed with that library's name upstream, so two drives
+holding a folder of the same name do not collide in the coordinator's catalog —
+and the _first_ library's paths are deliberately left alone, because changing
+the path of a game that has already been reported would make it a stranger and
+orphan every achievement, save rule and playtime record hanging off it. Adding a
+drive adds games. It does not re-add the ones you had.
+
+A root whose mount has gone is disabled rather than deleted, so a drive that
+failed to come up costs you a scan rather than a catalog.
+
+### Scanning and hashing, from the node's own page
+
+Both used to happen only on timers — right for a node that has been running for
+a month, useless for one plugged in five minutes ago. Nothing on a node is
+servable until its game is hashed, the first pass over a real archive is hours,
+and there was no way to start either or to see how far along they were except
+`docker logs`.
+
+The page has both, with live progress: what the scan is reading, how many games
+are left to hash, and what the last pass did. Starting a scan looks for new
+mounts first, so a drive attached after the container started is found without
+restarting it. Neither can be started twice, and hashing stops between games
+rather than mid-file, so stopping it loses nothing.
+
+### The coordinator has stopped offering libraries
+
+A coordinator holds no game files. Its libraries are the labels its nodes'
+catalogs are filed under, created automatically when a node enrols since 0.6.3 —
+so a folder to add was a folder that is not there, and the Scan button beside it
+was actively destructive: it walked a path that does not exist, read the empty
+result as "every game has been deleted", and flagged the entire catalog its
+nodes had just reported.
+
+Both are gone from a coordinator's panel, and refused by the server as well —
+because a bookmark, an API key or a stale tab is enough to reach a route the
+navigation has stopped linking to. A standalone server is unchanged.
+
+### Nodes is a section, not a settings tab
+
+It was filed next to the Discord token and the API keys, which put "is my
+archive being served" in the drawer you open once during setup. A node that
+quietly stops reporting is a catalog that quietly stops being downloadable, and
+nothing else on the panel says so.
+
+It has four tabs of its own now.
+
+**Fleet** lists every machine with the numbers that explain it rather than just
+describe it. The pairing that matters is what a node is offering against what is
+in its library: a node announcing four hundred of two thousand games is working
+perfectly and still not serving most of the archive, because the rest are not
+hashed yet. Either number alone says nothing. Beside them: bytes served over a
+day and a week, how many players it served, its agent build, how long since it
+was last heard from, and how many transfers are open right now.
+
+**Analytics** answers the question the mesh exists for, which is not "are the
+nodes up" but "is this traffic staying off the coordinator". The headline is the
+share of delivered bytes that never touched this server; underneath it are node
+and origin traffic drawn separately over 7 to 90 days, and the coverage
+breakdown that explains a disappointing number — games no online node holds (so
+every download costs you), and games exactly one node holds (a drive failure
+from the same). Then the busiest nodes and the most-pulled games of the week,
+and what the relay has been asked to carry.
+
+**Enrolment** is where codes are generated, moved out of the fleet list it was
+pushing below the fold.
+
+### A map of the tunnels
+
+New, and the reason the section exists. A table of transfers answers "how much";
+it does not answer the question an operator actually has about a mesh, which is
+_shape_.
+
+The coordinator sits in the middle, its nodes ring it, and the players pulling
+from each node fan out beyond. A direct tunnel bows outward and never touches
+the middle. A relayed one is drawn straight _through_ it — because that is
+exactly what it does, and a fleet that has quietly fallen back to the relay is a
+fleet paying the bandwidth bill the mesh was built to avoid. Dashes flow along a
+tunnel while bytes are moving and stop when they are not, so a stalled transfer
+looks stalled.
+
+Click any tunnel for who, what, how fast, how long, and how many hole punches it
+took. Filter to what is moving or to what is relayed, pause the whole thing to
+read one line, and there is a table under the diagram with the same data for
+anyone who would rather have rows.
+
+It is honest about what it knows: a direct transfer never crosses the
+coordinator, so what is drawn is what each node last reported on its heartbeat —
+up to half a minute old. The page says so rather than implying it is watching
+the wire. Players' addresses are reduced to a network before they reach it,
+because this is a screen people leave open.
+
+### Also
+
+- A node's page now shows each library's size and how many games are actually
+  ready to serve, rather than only how many files are hashed — one unhashed file
+  in a thousand makes a whole game unservable, which is invisible in a
+  percentage sitting at 99.9%.
+- The panel knows what the deployment is, so it stops offering a coordinator
+  actions only a machine with disks can perform.
+- `Admin → Settings → Nodes` redirects to `Admin → Nodes`, because operators
+  bookmark these.
+
+---
+
 ## Version 0.6.3 - August 29, 2026
 
 0.6.2 made a coordinator and its nodes assemble. This is the release where
@@ -1280,7 +1431,7 @@ Version 0.4.5 had critical build and runtime issues. Version 0.4.6 is a complete
 
 ## Version History
 
-### v0.4.5 (Current)
+### v0.4.5
 
 - Built installers: MSI and NSIS
 - Platform: Windows x64

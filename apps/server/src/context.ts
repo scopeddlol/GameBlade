@@ -135,7 +135,7 @@ export function createContext(
   const chunks = new ChunkService(db, logger);
   const mesh = new MeshService(db, logger);
   const catalogIngest = new CatalogIngestService(db, logger);
-  const nodeStatus = new NodeStatusService(db, config, scanner);
+  const nodeStatus = new NodeStatusService(db, config, scanner, chunks);
   const auth = new AuthService(db);
   const downloadTokens = new DownloadTokenService(db, config.sessionSecret);
   const installer = new InstallerService(db, config);

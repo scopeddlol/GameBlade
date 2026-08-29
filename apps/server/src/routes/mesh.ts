@@ -343,6 +343,10 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
         nodeId: node.id,
         userId: context.user.id,
         gameId,
+        // The client's own candidate, reduced to a network before it is
+        // stored. What the map needs is "somebody, roughly there", not an
+        // address to leave on a screen.
+        clientAddress: candidates[0]?.address ?? null,
       });
       return { nodeId: node.id, grant: issued.grant, expiresAt: issued.expiresAt };
     });
@@ -398,6 +402,11 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
       userId: context.user.id,
     });
 
+    // Counted here rather than inferred later: a relayed transfer is the one
+    // case where game bytes do cross this server, and an operator watching the
+    // fleet needs to see it happening rather than find it on a bill.
+    mesh.noteRelayed(node.id, context.user.id, gameId);
+
     // The node hears about this on the channel it already holds open, so it
     // dials the relay at the same moment the client does.
     mesh.requestPunch(node.id, {
@@ -452,7 +461,36 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/mesh/nodes', async (request) => {
     requireAdmin(request);
-    return { nodes: mesh.listNodes(), enrolments: mesh.listEnrolments() };
+    return { nodes: mesh.listNodeStats(), enrolments: mesh.listEnrolments() };
+  });
+
+  /** How much of the traffic the mesh is actually carrying, and for how long. */
+  app.get('/mesh/analytics', async (request) => {
+    requireAdmin(request);
+    const { days } = request.query as { days?: string };
+    return mesh.analytics({
+      days: Number(days) || 14,
+      relay: config.relayEndpoint
+        ? `${config.relayEndpoint.address}:${config.relayEndpoint.port}`
+        : null,
+    });
+  });
+
+  /**
+   * Everything currently strung between the nodes, the relay and the clients.
+   *
+   * Polled by the panel rather than pushed, because the underlying facts only
+   * change when a node heartbeats — pushing would send the same map thirty
+   * times between two updates of the data behind it.
+   */
+  app.get('/mesh/tunnels', async (request) => {
+    requireAdmin(request);
+    return mesh.tunnelMap({
+      label: settings.get().serverName,
+      relay: config.relayEndpoint
+        ? `${config.relayEndpoint.address}:${config.relayEndpoint.port}`
+        : null,
+    });
   });
 
   app.post('/mesh/enrolments', async (request) => {

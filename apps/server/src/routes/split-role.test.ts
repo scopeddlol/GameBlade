@@ -72,11 +72,13 @@ describe('the split-role topology', () => {
 
   /* ------------------------------------------------------- library records */
 
-  it('lets a coordinator register a library whose path is not on this machine', async () => {
-    // The whole topology hangs off this. A node's catalog is filed into an
-    // assigned library and reports are refused until one exists, so a
-    // coordinator that cannot create a library cannot be given a node — and it
-    // holds no game files, so no path it would accept is ever mounted on it.
+  it('refuses to give a coordinator a library folder, because it has no disk', async () => {
+    // A coordinator holds no game files, so a folder to add is a folder that
+    // is not there. It used to be allowed — the topology could not be
+    // assembled otherwise — and that is no longer true: an enrolling node
+    // creates the library it reports into, so the only thing this offered was
+    // a path nothing reads and a Scan button that walked it and flagged the
+    // whole catalog as missing.
     const { app } = await boot({ ROLE: 'coordinator' });
     const admin = await signIn(app);
 
@@ -87,8 +89,20 @@ describe('the split-role topology', () => {
       payload: { name: 'Node A', path: '/libraries/node-a' },
     });
 
-    expect(created.statusCode).toBe(201);
-    expect((created.json() as { path: string }).path).toBe('/libraries/node-a');
+    expect(created.statusCode).toBe(409);
+    expect(created.json()).toMatchObject({
+      error: { code: 'no_local_files' },
+    });
+
+    // And the same for the scan it used to offer beside it.
+    const scanned = await app.inject({
+      method: 'POST',
+      url: '/api/admin/scan',
+      headers: auth(admin),
+      payload: {},
+    });
+    expect(scanned.statusCode).toBe(409);
+    expect(scanned.json()).toMatchObject({ error: { code: 'no_local_files' } });
   });
 
   it('still refuses a path that is not there when this machine reads its own files', async () => {
@@ -475,13 +489,21 @@ describe('the split-role topology', () => {
     const admin = await signIn(app);
     const db = app.gameblade.db;
 
-    const existing = await app.inject({
-      method: 'POST',
-      url: '/api/admin/libraries',
-      headers: auth(admin),
-      payload: { name: 'The archive as it was', path: '/libraries/original' },
-    });
-    const libraryId = (existing.json() as { id: string }).id;
+    // Written directly, the way it really arrives: this is a standalone
+    // server's library, in a database copied onto the coordinator. The API
+    // refuses to create one here, because a coordinator has no folder to add.
+    const libraryId = newId('lib');
+    db.insert(libraries)
+      .values({
+        id: libraryId,
+        name: 'The archive as it was',
+        path: '/libraries/original',
+        enabled: true,
+        createdAt: new Date().toISOString(),
+        lastScanAt: null,
+        lastScanStatus: null,
+      })
+      .run();
 
     const enrolment = await app.inject({
       method: 'POST',

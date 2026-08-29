@@ -17,6 +17,30 @@ export interface ChunkProgress {
   error: string | null;
 }
 
+/**
+ * The state of the pass over everything that is not hashed yet.
+ *
+ * Distinct from `ChunkProgress`, which describes one game: this is the sweep
+ * around it, and it is what an operator watching a node actually wants — how
+ * many games are left, how long it has been going, and whether it is moving.
+ */
+export interface SweepProgress {
+  running: boolean;
+  /** Set while a stop has been asked for and the current game is finishing. */
+  stopping: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  /** Games hashed and games that could not be, this run. */
+  hashed: number;
+  failed: number;
+  /** Games left to hash, counted live rather than at the start of the run. */
+  remaining: number;
+  /** Games this run set out to hash, so a percentage means something. */
+  total: number;
+  /** Why the last run stopped, when it was not simply finished. */
+  note: string | null;
+}
+
 /** What one pass over a file produced. */
 interface FileDigest {
   whole: string;
@@ -48,6 +72,22 @@ export class ChunkService {
 
   private running: Promise<void> | null = null;
 
+  private sweep: SweepProgress = {
+    running: false,
+    stopping: false,
+    startedAt: null,
+    finishedAt: null,
+    hashed: 0,
+    failed: 0,
+    remaining: 0,
+    total: 0,
+    note: null,
+  };
+
+  /** Set while a sweep is in flight, so a second request joins rather than races. */
+  private sweeping: Promise<void> | null = null;
+  private stopSweepRequested = false;
+
   constructor(
     private readonly db: Db,
     private readonly logger: Logger,
@@ -59,6 +99,14 @@ export class ChunkService {
 
   get isRunning(): boolean {
     return this.running !== null;
+  }
+
+  /** How the pass over everything unhashed is going. */
+  getSweepProgress(): SweepProgress {
+    // Counted live so the number falls as work lands, rather than only at the
+    // end of a run that takes hours.
+    const remaining = this.sweep.running ? this.unhashedGameIds().length : this.sweep.remaining;
+    return { ...this.sweep, remaining };
   }
 
   /** The chunk table for one file, in index order. Empty when never hashed. */
@@ -186,25 +234,110 @@ export class ChunkService {
     hashed: number;
     failed: number;
   }> {
+    const pending = this.unhashedGameIds();
+
+    this.sweep = {
+      running: true,
+      stopping: false,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      hashed: 0,
+      failed: 0,
+      remaining: pending.length,
+      total: pending.length,
+      note: null,
+    };
+
     let hashed = 0;
     let failed = 0;
+    let note: string | null = null;
 
-    for (const gameId of this.unhashedGameIds()) {
-      // An operator-triggered pass owns the service while it runs. Yielding to
-      // it rather than queueing behind it: this sweep will come round again.
-      if (shouldStop() || this.running) break;
+    try {
+      for (const gameId of pending) {
+        // An operator-triggered pass owns the service while it runs. Yielding to
+        // it rather than queueing behind it: this sweep will come round again.
+        if (this.stopSweepRequested) {
+          note = 'stopped';
+          break;
+        }
+        if (shouldStop() || this.running) {
+          note = 'paused while the disk was busy';
+          break;
+        }
 
-      try {
-        await this.start(gameId);
-        if (this.isGameChunked(gameId)) hashed += 1;
-        else failed += 1;
-      } catch (error) {
-        this.logger.warn({ err: error, gameId }, 'could not chunk-hash game');
-        failed += 1;
+        try {
+          await this.start(gameId);
+          if (this.isGameChunked(gameId)) hashed += 1;
+          else failed += 1;
+        } catch (error) {
+          this.logger.warn({ err: error, gameId }, 'could not chunk-hash game');
+          failed += 1;
+        }
+
+        this.sweep = { ...this.sweep, hashed, failed };
       }
+    } finally {
+      this.stopSweepRequested = false;
+      this.sweep = {
+        ...this.sweep,
+        running: false,
+        stopping: false,
+        finishedAt: new Date().toISOString(),
+        hashed,
+        failed,
+        remaining: this.unhashedGameIds().length,
+        note,
+      };
     }
 
     return { hashed, failed };
+  }
+
+  /**
+   * Start the sweep, or say that one is already going.
+   *
+   * Fire and forget: the pass takes hours on a real archive, so the caller gets
+   * an answer immediately and watches `getSweepProgress` rather than holding a
+   * request open for the length of it. Two callers — the timer a node runs and
+   * an operator pressing the button on its page — drive the same one run.
+   */
+  startSweep(shouldPause: () => boolean = () => false): boolean {
+    if (this.sweeping) return false;
+
+    this.stopSweepRequested = false;
+    this.sweeping = this.hashUnhashed(shouldPause)
+      .then((result) => {
+        if (result.hashed > 0 || result.failed > 0) {
+          this.logger.info(result, 'hashed games so they can be served from this node');
+        }
+      })
+      .catch((error: unknown) => {
+        this.logger.warn({ err: error }, 'chunk hashing sweep failed');
+      })
+      .finally(() => {
+        this.sweeping = null;
+      });
+
+    return true;
+  }
+
+  /**
+   * Ask the sweep to stop after the game it is on.
+   *
+   * Between games rather than mid-file: a game already hashed is skipped next
+   * time, so stopping at a boundary loses nothing, while abandoning a file
+   * part-way would mean re-reading it from the beginning.
+   */
+  stopSweep(): boolean {
+    if (!this.sweeping) return false;
+    this.stopSweepRequested = true;
+    this.sweep = { ...this.sweep, stopping: true };
+    return true;
+  }
+
+  /** Whether a sweep is in flight right now. */
+  get isSweeping(): boolean {
+    return this.sweeping !== null;
   }
 
   start(gameId: string, options: { force?: boolean } = {}): Promise<void> {
