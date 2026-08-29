@@ -101,10 +101,27 @@ export async function syncLibraryRoots(app: FastifyInstance): Promise<LibrarySyn
     return Boolean(info?.isDirectory());
   };
 
+  /*
+   * Discovery order, made durable.
+   *
+   * Which root is the *primary* one decides which games keep unprefixed paths
+   * upstream, and that is answered by whichever library row is oldest. Rows
+   * added in one pass would otherwise all carry the same millisecond, leaving
+   * the answer to the tiebreak — and `/libraries/E` sorts before `/library`,
+   * so a node mounting both at once would have made the secondary drive the
+   * primary and prefixed the main one. Staggering by discovery index makes
+   * `/library` older than anything under `/libraries`, always, and makes a tie
+   * impossible rather than merely unlikely.
+   */
+  const discoveredAt = Date.now();
+  let index = 0;
+
   for (const libraryPath of config.libraryPaths) {
     const resolved = path.resolve(libraryPath);
     const present = await readable(resolved);
     const existing = db.select().from(libraries).where(eq(libraries.path, resolved)).get();
+    const rank = index;
+    index += 1;
 
     if (existing) {
       if (present && !existing.enabled) {
@@ -139,7 +156,7 @@ export async function syncLibraryRoots(app: FastifyInstance): Promise<LibrarySyn
         name: path.basename(resolved) || 'Library',
         path: resolved,
         enabled: true,
-        createdAt: new Date().toISOString(),
+        createdAt: new Date(discoveredAt + rank).toISOString(),
         lastScanAt: null,
         lastScanStatus: null,
       })

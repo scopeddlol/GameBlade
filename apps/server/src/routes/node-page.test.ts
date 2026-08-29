@@ -117,6 +117,43 @@ describe('a node’s own page', () => {
     expect(page.body).toContain('E');
   });
 
+  it('makes /library the primary root when both are mounted at once', async () => {
+    /*
+     * Which root is primary decides which games keep unprefixed paths on the
+     * coordinator, and that is whichever library row is oldest. Rows added in
+     * one pass would otherwise share a millisecond and fall through to the
+     * path tiebreak — where `/libraries/E` sorts *before* `/library`, so the
+     * secondary drive would have become the primary and the main one would
+     * have had its paths rewritten. On a node that has already reported, that
+     * is every game becoming a stranger and every achievement, save rule and
+     * playtime record orphaned.
+     */
+    const games = await mkdtemp(path.join(tmpdir(), 'gameblade-primary-'));
+    const single = path.join(games, 'library');
+    const many = path.join(games, 'libraries');
+    await mkdir(single, { recursive: true });
+    await mkdir(path.join(many, 'E'), { recursive: true });
+    cleanups.push(() => rm(games, { recursive: true, force: true }));
+
+    const { app } = await bootNode({
+      LIBRARY_PATHS: discoverLibraryRoots(single, many).join(','),
+    });
+    await bootstrap(app);
+
+    const rows = app.gameblade.db
+      .select()
+      .from(libraries)
+      .orderBy(libraries.createdAt, libraries.path)
+      .all();
+
+    expect(rows).toHaveLength(2);
+    // The order `pathPrefixes` reads: the first is the one left unprefixed.
+    expect(rows[0]!.path).toBe(single);
+    expect(rows[1]!.path).toBe(path.join(many, 'E'));
+    // And it is decided by time rather than by the name sorting the wrong way.
+    expect(rows[0]!.createdAt < rows[1]!.createdAt).toBe(true);
+  });
+
   it('keeps a library whose drive went away, rather than emptying its catalog', async () => {
     // Deleting it would take the catalog with it, and a mount that failed on
     // this boot is far more often one that will be back than a drive somebody
