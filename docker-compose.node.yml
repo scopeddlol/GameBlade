@@ -4,67 +4,73 @@
 # coordinator, and serves game data straight to clients over QUIC so those bytes
 # never cross the coordinator's connection.
 #
-# Two processes, one node. The server scans and reports; the mesh agent serves.
-# They share a state file so they agree about which node they are.
+# Two processes, one container. The server scans and reports; the mesh agent
+# serves. They share a state file so they agree about which node they are, and
+# the image starts both — a node is one thing to run, not a pair to keep in
+# step.
 #
-# First run only: put the code from Admin → Settings → Nodes into BOTH services.
-# The agent owns this node's keypair and so has to register first; the server
-# then finds the registration already in the state file and reports against it.
-# Both derive the same identity from that one file, so the second registration
-# is recognised rather than counted as a new node, and one code covers both.
+# ---------------------------------------------------------------------------
+# Setting one up
+# ---------------------------------------------------------------------------
 #
-# The code is spent immediately and can be removed afterwards — what identifies
-# this node from then on is the key in ./data/node-state.json, which is the one
-# file here worth keeping.
+#   1. Mount your games at /library below and `docker compose up -d`.
+#   2. Open http://<this machine>:8080.
+#   3. Fill in the coordinator's address and an enrolment code from
+#      Admin -> Settings -> Nodes on the coordinator.
+#
+# That is the whole configuration. Nothing here needs editing except the volume
+# and, if you want it reachable from the LAN, the port binding. The answers from
+# step 3 are written into ./data/node-state.json and survive restarts, so this
+# never has to be told twice.
 
 services:
-  scanner:
-    image: ghcr.io/scopeddlol/gameblade:latest
+  node:
+    image: ghcr.io/scopeddlol/gameblade-node:latest
     container_name: gameblade-node
     restart: unless-stopped
+
     environment:
-      ROLE: node
-      DATA_DIR: /data
-      LIBRARY_PATHS: /library
-      COORDINATOR_URL: https://games.example.com
-      # ENROLMENT_TOKEN: paste-once-then-remove
+      TZ: Etc/UTC
+      # Scanning is the one thing worth tuning here. Everything else — the role,
+      # the library path, where the identity lives — is baked into the image.
       SCAN_ON_START: 'true'
       SCAN_INTERVAL_MINUTES: '360'
+
+      # A node hashes what it scanned by itself, because nothing else can ask
+      # it to and nothing is servable until it has. Set false only if you would
+      # rather schedule hours of disk reads yourself.
+      # AUTO_CHUNK_HASH: 'false'
+
+      # Declaring these skips the setup page, for an operator who would rather
+      # not use it. Leave them out and the page asks instead.
+      # COORDINATOR_URL: https://games.example.com
+      # ENROLMENT_TOKEN: paste-once-then-remove
+
     volumes:
+      # The node's identity, its local index, and nothing else worth keeping.
+      # node-state.json in here is what makes this machine *this node* — copy it
+      # if you ever move the node to different hardware.
       - ./data:/data
-      # Read-only: a node serves this library and must never write to it.
+      # Your games. Read-only: a node serves this library and must never write
+      # to it. Change the left-hand side; /library is where the image looks.
       - /path/to/games:/library:ro
-    # The node's own status page: what it scanned, whether it enrolled, when it
-    # last reported. Bound to localhost by default because the page has no
-    # authentication of its own and a node has nothing to say to the public
-    # internet over HTTP.
-    #
-    # To reach it from elsewhere on your network, bind it to this host's LAN
-    # address instead - '192.168.1.20:8080:8080'. Binding to the address rather
-    # than to 0.0.0.0 keeps it off every other interface this host has. For
-    # access from outside the network, put a tunnel with its own authentication
-    # in front; the two coexist, and neither needs to know about the other.
+
     ports:
+      # The node's own page: setup while it is unenrolled, then what it scanned,
+      # whether it is reporting, and how much of it is servable.
+      #
+      # Bound to localhost by default because the page has no authentication of
+      # its own. To reach it from the rest of your network, bind it to this
+      # host's LAN address instead — '192.168.1.20:8080:8080' — which keeps it
+      # off every other interface this machine has. For access from outside the
+      # network, put a tunnel with its own authentication in front.
       - '127.0.0.1:8080:8080'
 
-  mesh:
-    image: ghcr.io/scopeddlol/gameblade:latest
-    container_name: gameblade-mesh
-    restart: unless-stopped
-    entrypoint: ['/sbin/tini', '--']
-    command: ['gameblade-node']
-    environment:
-      GAMEBLADE_SERVER: https://games.example.com
-      GAMEBLADE_LIBRARY: /library
-      GAMEBLADE_STATE: /data/node-state.json
-      GAMEBLADE_PORT: '47820'
-      # The same code as the scanner's ENROLMENT_TOKEN above. This process
-      # registers first, so without it nothing here ever enrols.
-      # GAMEBLADE_ENROLMENT: paste-once-then-remove
-    volumes:
-      - ./data:/data
-      - /path/to/games:/library:ro
-    # UDP, and outbound-initiated: no port forward is needed. Publishing it is
-    # only useful if this host happens to be directly reachable.
-    ports:
+      # The mesh: where game bytes actually leave this machine. UDP, and
+      # outbound-initiated, so no port forward is strictly required — but
+      # forwarding this one at the router to this host is the single best thing
+      # you can do for download reliability.
       - '47820:47820/udp'
+
+    security_opt:
+      - 'no-new-privileges:true'

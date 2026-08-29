@@ -59,6 +59,24 @@ pub struct AgentState {
     pub node_token: Option<String>,
     #[serde(alias = "coordinator_key")]
     pub coordinator_key: Option<String>,
+
+    /// Where this node reports, once somebody has said.
+    ///
+    /// In the state file rather than only in the environment so a node can be
+    /// pointed at its coordinator from the setup page it serves, by somebody
+    /// who is not going to edit a compose file and restart a container to do
+    /// it. The environment still wins when it is set, so an operator who
+    /// prefers to declare it keeps declaring it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator_url: Option<String>,
+
+    /// The one-time enrolment code, until it is spent.
+    ///
+    /// Written here by the setup page and cleared by whichever process
+    /// successfully registers, so it lives exactly as long as it is useful and
+    /// leaves nothing behind on disk afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrolment_token: Option<String>,
 }
 
 /// One file of one game, as the coordinator describes it.
@@ -661,6 +679,48 @@ mod tests {
         for key in ["secret_key", "node_id", "node_token", "coordinator_key"] {
             assert!(written.get(key).is_none(), "{key} should not be written");
         }
+    }
+
+    #[test]
+    fn setup_written_by_the_server_is_read_by_the_agent() {
+        // The setup page runs in the other process and writes this file; the
+        // agent is what actually registers. If these two disagreed about the
+        // field names, filling the form in would appear to do nothing at all.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        std::fs::write(
+            &path,
+            r#"{"coordinatorUrl":"https://games.example.com","enrolmentToken":"abc123"}"#,
+        )
+        .unwrap();
+
+        let state = AgentState::load(&path);
+        assert_eq!(
+            state.coordinator_url.as_deref(),
+            Some("https://games.example.com")
+        );
+        assert_eq!(state.enrolment_token.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn a_spent_enrolment_code_is_not_left_on_disk() {
+        // Cleared rather than kept: it is of no further use, and a restart that
+        // still saw one would look like a node with something left to enrol.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+
+        let mut state = AgentState {
+            enrolment_token: Some("spend-me".into()),
+            coordinator_url: Some("https://games.example.com".into()),
+            ..AgentState::default()
+        };
+        state.identity().unwrap();
+        state.enrolment_token = None;
+        state.save(&path).unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("enrolmentToken"), "left behind in {raw}");
+        assert!(raw.contains("coordinatorUrl"), "url should persist: {raw}");
     }
 
     #[test]

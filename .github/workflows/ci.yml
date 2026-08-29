@@ -146,53 +146,130 @@ jobs:
         run: cargo build --release --bins
 
   docker:
-    name: Build image
+    name: Build and smoke test the images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build (no push)
+      # Built one at a time and into one daemon, so the shared layers below the
+      # role are compiled once and the other three targets are metadata on top.
+      - name: Build the standalone image
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: standalone
           push: false
           load: true
           tags: gameblade:ci
-          cache-from: type=gha
+          cache-from: type=gha,scope=image
           # min rather than max. max exports every intermediate layer of every
           # stage — including the Rust compiler's output — and the cache a
           # repository gets is finite, so a build that fills it evicts the very
           # layers the next one wanted. min keeps the final layers, which is
           # what a rebuild actually reuses.
-          cache-to: type=gha,mode=min
+          cache-to: type=gha,mode=min,scope=image
 
-      - name: Smoke test the image
+      - name: Build the coordinator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: coordinator
+          push: false
+          load: true
+          tags: gameblade-coordinator:ci
+          cache-from: type=gha,scope=image
+
+      - name: Build the node image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: node
+          push: false
+          load: true
+          tags: gameblade-node:ci
+          cache-from: type=gha,scope=image
+
+      - name: Build the relay image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: relay
+          push: false
+          load: true
+          tags: gameblade-relay:ci
+          cache-from: type=gha,scope=image
+
+      # Every role, booted. The point is the roles rather than the code: an
+      # image that has to be told what it is has one more way to be wrong, and
+      # `/api/health` naming the role is what proves it was not.
+      - name: Each image comes up as the thing its name says
         run: |
-          # A container with no library configured must still boot and report healthy.
-          docker run -d --name gameblade-ci -p 8080:8080 \
-            -e SCAN_ON_START=false \
-            gameblade:ci
+          set -euo pipefail
 
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8080/api/health > /dev/null; then
-              echo "health check passed"
-              curl -s http://127.0.0.1:8080/api/health
-              echo
-              # The web client must be bundled into the image, not just the API.
-              curl -fsS http://127.0.0.1:8080/ | grep -q '<base href=' \
-                && echo "web client served"
-              docker rm -f gameblade-ci
-              exit 0
-            fi
-            sleep 2
-          done
+          wait_for_role() {
+            name=$1 port=$2 expected=$3
+            for _ in $(seq 1 45); do
+              body=$(curl -fsS "http://127.0.0.1:$port/api/health" 2>/dev/null || true)
+              if [ -n "$body" ]; then
+                echo "$name: $body"
+                echo "$body" | grep -q "\"role\":\"$expected\"" && return 0
+                echo "$name: expected role $expected" >&2
+                return 1
+              fi
+              sleep 2
+            done
+            echo "$name did not become healthy" >&2
+            docker logs "$name" >&2
+            return 1
+          }
 
-          echo "container did not become healthy" >&2
-          docker logs gameblade-ci
-          docker rm -f gameblade-ci
-          exit 1
+          # Standalone: no library configured, and it must still boot.
+          docker run -d --name gameblade-ci -p 8080:8080 -e SCAN_ON_START=false gameblade:ci
+          wait_for_role gameblade-ci 8080 standalone
+
+          # The web client has to be in the image, not just the API.
+          curl -fsS http://127.0.0.1:8080/ | grep -q '<base href='
+          echo "web client served"
+
+          # Coordinator: nothing passed at all. Its role is the image's.
+          docker run -d --name gameblade-coordinator-ci -p 8081:8080 gameblade-coordinator:ci
+          wait_for_role gameblade-coordinator-ci 8081 coordinator
+
+          # Node: nothing passed either, and no coordinator to talk to. It must
+          # come up, serve its setup page and wait — this is the state a node is
+          # in for the minute between `docker compose up` and somebody filling
+          # that page in, and it used to be a crash loop.
+          docker run -d --name gameblade-node-ci -p 8082:8080 \
+            -v "$PWD/.github:/library:ro" gameblade-node:ci
+          wait_for_role gameblade-node-ci 8082 node
+
+          curl -fsS http://127.0.0.1:8082/ | grep -q 'Set this node up'
+          echo "node serves its setup page"
+
+          # Both halves have to be alive: a node whose agent died is a node
+          # that serves nothing while looking perfectly healthy.
+          sleep 5
+          docker exec gameblade-node-ci sh -c 'pgrep -f gameblade-node >/dev/null'
+          echo "the mesh agent is running beside the server"
+
+          # And it must still be up rather than restarting, which is what an
+          # entrypoint that mishandles either process looks like.
+          test "$(docker inspect -f '{{.State.Running}}' gameblade-node-ci)" = true
+          echo "node is stable, not restarting"
+
+          # Relay: refuses to start without the coordinator key, and says which
+          # one. Captured rather than piped, because it exits non-zero on
+          # purpose and `pipefail` would read that as the step failing.
+          relay_says=$(docker run --rm gameblade-relay:ci 2>&1 || true)
+          echo "relay: $relay_says"
+          echo "$relay_says" | grep -q 'GAMEBLADE_COORDINATOR_KEY'
+          echo "relay refuses to start unconfigured, and names what is missing"
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f gameblade-ci gameblade-coordinator-ci gameblade-node-ci 2>/dev/null || true
 
   desktop:
     name: Build desktop client

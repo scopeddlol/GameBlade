@@ -73,3 +73,17 @@ pub const MESH_DEFAULT_PORT: u16 = 47_820;
 
 /// Default UDP port the relay listens on.
 pub const MESH_RELAY_DEFAULT_PORT: u16 = 47_821;
+
+/// Where a node's games are mounted, and where its identity is kept.
+///
+/// Defaults rather than required settings, because the image puts them there:
+/// a node that has to be told its own layout is a node with two more things to
+/// get wrong in a compose file.
+pub const DEFAULT_LIBRARY_ROOT: &str = "/library";
+pub const DEFAULT_STATE_PATH: &str = "/data/node-state.json";
+
+/// How often an agent with no coordinator yet looks again.
+///
+/// Short, because somebody is standing at the setup page waiting for this to
+/// notice, and the check is one small file read.
+pub const UNCONFIGURED_POLL: std::time::Duration = std::time::Duration::from_secs(3);

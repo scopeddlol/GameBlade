@@ -71,7 +71,13 @@ RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
           target/release/mesh-doctor /out/
 
 # ---------------------------------------------------------------------------
-# Runtime stage
+# Runtime: everything, in every role.
+#
+# One build, three images. The role is baked in rather than declared, because
+# `docker pull …/gameblade-coordinator` has already said which one it is and
+# saying it a second time in a compose file is a thing to get wrong. The role
+# stages below are metadata on top of this one shared filesystem, so pulling two
+# of them to the same host pulls the layers once.
 # ---------------------------------------------------------------------------
 FROM node:22-alpine AS runtime
 
@@ -109,3 +115,53 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/index.js"]
+
+# ---------------------------------------------------------------------------
+# The roles.
+#
+# `--target` picks one. Each sets only what its role means, so nothing has to be
+# passed at run time for an image to be the thing its name says it is; anything
+# here can still be overridden in a compose file by an operator who wants to.
+# ---------------------------------------------------------------------------
+
+# Everything on one machine, reading games off local disk. The default, and what
+# GameBlade has always been.
+FROM runtime AS standalone
+ENV ROLE=standalone
+
+# The database, the panel, the landing page and the API. No game files, so
+# nothing to scan and nothing to mount but its own data directory.
+FROM runtime AS coordinator
+ENV ROLE=coordinator
+
+# The games. Two processes — the scanner that reports what is here and the agent
+# that serves it — under one entrypoint, so a node is one container rather than
+# a pair somebody has to keep in step.
+#
+# LIBRARY_PATHS is set here so a node needs no configuration at all beyond
+# mounting the games at /library: everything else it needs, it is told once from
+# its own setup page and remembers.
+FROM runtime AS node
+ENV ROLE=node \
+    LIBRARY_PATHS=/library \
+    GAMEBLADE_LIBRARY=/library \
+    GAMEBLADE_STATE=/data/node-state.json
+
+COPY --chown=node:node docker/node-entrypoint.sh /usr/local/bin/gameblade-node-entrypoint
+USER root
+RUN chmod +x /usr/local/bin/gameblade-node-entrypoint
+USER node
+
+# UDP, for the agent. Published only if this host is directly reachable — see
+# the mesh documentation; the connection is outbound-initiated either way.
+EXPOSE 47820/udp
+
+CMD ["/usr/local/bin/gameblade-node-entrypoint"]
+
+# The relay: a public UDP address that pastes two connections together. It runs
+# beside a coordinator and holds nothing, so it needs no data directory and no
+# library — just the coordinator's public key.
+FROM runtime AS relay
+EXPOSE 47821/udp
+HEALTHCHECK NONE
+CMD ["gameblade-relay"]

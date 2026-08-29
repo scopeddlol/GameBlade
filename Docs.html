@@ -33,7 +33,7 @@
 
           <div class="note">…</div>        an aside
           <div class="warn">…</div>        something that will bite
-          <div class="new" data-since="0.6.1">…</div>
+          <div class="new" data-since="0.6.2">…</div>
                                            changed in a named release; the
                                            badge reads the version out of
                                            data-since, so a note about an old
@@ -601,7 +601,7 @@
   <body>
     <header class="top">
       <button class="menu-toggle" id="menu-toggle" aria-expanded="false">Contents</button>
-      <span class="brand">GameBlade <span class="version">0.6.1</span></span>
+      <span class="brand">GameBlade <span class="version">0.6.2</span></span>
       <span class="spacer"></span>
       <a class="external" href="https://github.com/scopeddlol/GameBlade">GitHub</a>
       <a class="external" href="docs/API.md">API reference</a>
@@ -659,47 +659,45 @@
             </div>
           </div>
 
-          <div class="new" data-since="the next release">
+          <div class="new" data-since="0.6.2">
             <p>
-              <strong>The split topology works.</strong> 0.6 introduced a coordinator and its
-              nodes; on 0.6.1 four things between a fresh coordinator and a client downloading a
-              game were unfinished, and every one of them failed silently. All four are fixed:
+              <strong>A coordinator and its nodes actually assemble now</strong>, and setting one
+              up is a page rather than a compose file:
             </p>
             <ul>
               <li>
-                <strong>A node enrols.</strong> Its two processes share one identity file and were
-                writing and reading it in different casings, so the half that reports the catalog
-                waited for ever for a key it could not see. See
-                <a href="#deploy-state">the state file</a>.
+                <strong>One image per role.</strong>
+                <code>gameblade-coordinator</code>, <code>gameblade-node</code> and
+                <code>gameblade-relay</code> alongside the standalone
+                <code>gameblade</code>. Pulling one has already said what it is, so there is no
+                <code>ROLE</code> to set &mdash; and a node is one container rather than two,
+                because the scanner and the mesh agent are an implementation detail rather than
+                something to keep in step by hand. See <a href="#roles">the roles</a>.
               </li>
               <li>
-                <strong>A node hashes its own games.</strong> Nothing is servable over the mesh
-                without per-chunk hashes, and a node &mdash; which has no API by design &mdash; had
-                no way to compute them. It now does it by itself after a scan. See
-                <a href="#deploy-hashing">hashing</a>.
+                <strong>A node sets itself up from its own page.</strong> Bring it up with nothing
+                configured, open it, and give it the coordinator's address and an enrolment code.
+                No environment variables, no restart. See
+                <a href="#deploy-nodes">connecting a node</a>.
               </li>
               <li>
-                <strong>A coordinator can create a library.</strong> It was checking that the path
-                existed inside its own container, which is right on a machine that reads its own
-                files and impossible on one whose games are somebody else's disk &mdash; so the
-                library a node has to report into could not be made.
+                <strong>It stays connected.</strong> A rejected credential is now something both
+                halves of a node recover from by themselves, rather than a node that looks healthy
+                and serves nothing until somebody restarts it. See
+                <a href="#staying-connected">staying connected</a>.
               </li>
               <li>
-                <strong>A coordinator does not scan.</strong> It was scanning the libraries
-                describing what its nodes hold, finding them empty, and flagging the catalog those
-                nodes had just reported. The role decides now, rather than two settings.
+                <strong>Four things that made the split topology impossible</strong> &mdash; a node
+                that could not enrol, could not hash its own games, a coordinator that would not
+                accept a library and then scanned it &mdash; are fixed. If you built one on 0.6.1
+                and worked around them, <a href="#deploy-upgrading">what to undo</a>.
+              </li>
+              <li>
+                <strong>Releases come from CI.</strong> The PowerShell build scripts are gone; a
+                tag builds the images and the Windows client and publishes them together. See
+                <a href="#releases">cutting a release</a>.
               </li>
             </ul>
-            <p>
-              Also: a node is told about its own library rather than the whole database, and stops
-              re-fetching and re-checking every game on every heartbeat &mdash; on two nodes with
-              real libraries that was thousands of requests and filesystem checks a minute, to
-              learn nothing.
-            </p>
-            <p>
-              <a href="#deploy">The build, in order</a>, and
-              <a href="#deploy-upgrading">what to undo</a> if you worked around any of it.
-            </p>
           </div>
 
           <div class="new" data-since="0.6.1">
@@ -822,23 +820,23 @@
 
           <h3 id="where-to-get-it">Where to get it</h3>
           <p>
-            The two halves are published by different routes, and it is worth knowing which. The
-            server image is built and pushed by CI on every release. The Windows client is built on
-            demand &mdash; by CI when the client's own code changed or when a workflow is run by
-            hand, and otherwise
-            <a href="#windows-build">on a Windows machine with the build script</a> &mdash; and is
-            attached to the release afterwards. Keep the two at the same version: a client and a
-            coordinator that disagree about the catalog they exchange is the failure this is
-            structured to avoid.
+            Both halves come out of the same release, built by CI and published together: the four
+            images, and the Windows installers attached to the release itself. Nothing is built by
+            hand any more &mdash; see <a href="#releases">cutting a release</a>. Keep a client and
+            its server at the same version; that they are produced by one run is what makes that
+            the default rather than something to remember.
           </p>
           <div class="scroller">
             <table>
               <tbody>
                 <tr>
-                  <td><strong>Server image</strong></td>
+                  <td><strong>Server images</strong></td>
                   <td>
-                    <code>ghcr.io/scopeddlol/gameblade</code> — <code>latest</code>, plus a tag per
-                    release. Built for <code>linux/amd64</code> and <code>linux/arm64</code>.
+                    <code>ghcr.io/scopeddlol/gameblade</code> for one machine, plus
+                    <code>-coordinator</code>, <code>-node</code> and <code>-relay</code> for the
+                    split topology. <code>latest</code> and a tag per release on each.
+                    <code>linux/amd64</code>, and <code>linux/arm64</code> when a release asks for
+                    it.
                   </td>
                 </tr>
                 <tr>
@@ -951,13 +949,13 @@ cp .env.example .env</code></pre>
               </thead>
               <tbody>
                 <tr><td colspan="3"><strong>Role</strong></td></tr>
-                <tr><td><code>ROLE</code></td><td><code>standalone</code></td><td><code>standalone</code>, <code>coordinator</code> or <code>node</code>. See <a href="#roles">Three roles, one image</a>.</td></tr>
-                <tr><td><code>COORDINATOR_URL</code></td><td>—</td><td>Where a node reports its catalog. <strong>Required when <code>ROLE=node</code></strong>; ignored otherwise. No trailing slash needed — one is stripped.</td></tr>
-                <tr><td><code>ENROLMENT_TOKEN</code></td><td>—</td><td>The one-time code from <strong>Admin → Settings → Nodes</strong>. Spent on first registration; safe to remove afterwards.</td></tr>
+                <tr><td><code>ROLE</code></td><td>from the image</td><td>Each image sets its own, so there is normally nothing to put here. Setting it overrides: <code>standalone</code>, <code>coordinator</code> or <code>node</code>. See <a href="#roles">the roles</a>.</td></tr>
+                <tr><td><code>COORDINATOR_URL</code></td><td>—</td><td>Where a node reports. Optional: leave it out and the node's <a href="#deploy-nodes">setup page</a> asks instead, remembering the answer. Set, it wins. No trailing slash needed — one is stripped.</td></tr>
+                <tr><td><code>ENROLMENT_TOKEN</code></td><td>—</td><td>The one-time code from <strong>Admin → Settings → Nodes</strong>. Optional for the same reason. Spent on first registration and not kept.</td></tr>
                 <tr><td><code>RELAY_ENDPOINT</code></td><td>—</td><td>The relay's public address as <code>host:port</code>, handed to clients by a coordinator. Set on the <em>coordinator</em>, not on the relay. A value with no port is refused rather than half-accepted.</td></tr>
 
                 <tr><td colspan="3"><strong>Storage and listening</strong></td></tr>
-                <tr><td><code>LIBRARY_PATHS</code></td><td>—</td><td>Comma- or semicolon-separated library roots <strong>inside the container</strong>. Registered automatically on first start.</td></tr>
+                <tr><td><code>LIBRARY_PATHS</code></td><td><code>/library</code> on a node</td><td>Comma- or semicolon-separated library roots <strong>inside the container</strong>. Registered automatically on first start. The node image sets it, so mounting the games at <code>/library</code> is the whole of it.</td></tr>
                 <tr><td><code>DATA_DIR</code></td><td><code>/data</code></td><td>Database, artwork, uploads, cloud saves, client installer, and a node's <code>node-state.json</code></td></tr>
                 <tr><td><code>PORT</code> / <code>HOST</code></td><td><code>8080</code> / <code>0.0.0.0</code></td><td>Listen address inside the container</td></tr>
                 <tr><td><code>TZ</code></td><td><code>Etc/UTC</code></td><td>Container timezone; what timestamps in the panel are rendered against</td></tr>
@@ -967,7 +965,7 @@ cp .env.example .env</code></pre>
                 <tr><td><code>TRUST_PROXY</code></td><td><code>false</code></td><td><code>true</code>, a hop count, or a comma-separated list of addresses/CIDRs. See <a href="#proxy">behind a reverse proxy</a>.</td></tr>
                 <tr><td><code>BASE_PATH</code></td><td>—</td><td>Sub-path to host under, e.g. <code>/gameblade</code>. <code>/gameblade/</code> and <code>gameblade</code> normalise to the same thing.</td></tr>
                 <tr><td><code>SECURE_COOKIES</code></td><td><code>auto</code></td><td><code>auto</code> follows <code>X-Forwarded-Proto</code>; <code>true</code>/<code>false</code> force it</td></tr>
-                <tr><td><code>CORS_ORIGINS</code></td><td>—</td><td>Accepted and parsed, but nothing reads it as of 0.6.1 — no CORS headers are sent either way. Listed here so it is not mistaken for a setting that is failing.</td></tr>
+                <tr><td><code>CORS_ORIGINS</code></td><td>—</td><td>Accepted and parsed, but nothing reads it as of 0.6.2 — no CORS headers are sent either way. Listed here so it is not mistaken for a setting that is failing.</td></tr>
 
                 <tr><td colspan="3"><strong>Accounts</strong></td></tr>
                 <tr><td><code>ADMIN_USERNAME</code> / <code>ADMIN_PASSWORD</code></td><td>—</td><td>Creates the first admin, and only while the database has no accounts. Both must be set or neither applies.</td></tr>
@@ -1010,19 +1008,21 @@ cp .env.example .env</code></pre>
 
           <h3 id="config-agent">The mesh agent</h3>
           <p>
-            The agent is a separate process from the server &mdash; a second container out of the
-            same image, running <code>gameblade-node</code> &mdash; and it reads its own variables
-            rather than the server's. It is what actually serves game bytes to clients over QUIC.
+            The agent is a separate process from the server, and reads its own variables rather
+            than the server's. It is what actually serves game bytes to clients over QUIC. In the
+            <code>gameblade-node</code> image both run in one container under a shared entrypoint,
+            so none of this normally has to be set &mdash; it is here for anyone running the agent
+            somewhere else.
           </p>
 
           <div class="scroller">
             <table>
               <thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
               <tbody>
-                <tr><td><code>GAMEBLADE_SERVER</code></td><td>—</td><td><strong>Required.</strong> The coordinator's base URL. Same value as the server's <code>COORDINATOR_URL</code>.</td></tr>
-                <tr><td><code>GAMEBLADE_LIBRARY</code></td><td>—</td><td><strong>Required.</strong> The library root inside this container, read-only. Must exist at start or the agent exits.</td></tr>
-                <tr><td><code>GAMEBLADE_ENROLMENT</code></td><td>—</td><td>The one-time code, on first run. The agent owns this node's keypair, so it is the process that has to enrol first.</td></tr>
-                <tr><td><code>GAMEBLADE_STATE</code></td><td><code>/data/node-state.json</code></td><td>Where the identity lives. Shared with the server process beside it &mdash; point both at the same file.</td></tr>
+                <tr><td><code>GAMEBLADE_SERVER</code></td><td>from the state file</td><td>The coordinator's base URL. Unset, the agent waits for the <a href="#deploy-nodes">setup page</a> to supply one rather than exiting.</td></tr>
+                <tr><td><code>GAMEBLADE_LIBRARY</code></td><td><code>/library</code></td><td>The library root inside this container, read-only. A path that is not there is a warning rather than an exit — a wrong volume is fixed by editing compose, which is easier against a node that is running and saying so.</td></tr>
+                <tr><td><code>GAMEBLADE_ENROLMENT</code></td><td>from the state file</td><td>The one-time code. The agent owns this node's keypair, so it is the process that registers; the setup page writes the code where it will find it.</td></tr>
+                <tr><td><code>GAMEBLADE_STATE</code></td><td><code>/data/node-state.json</code></td><td>Where the identity lives. Shared with the server process beside it — the node image points both at the same file.</td></tr>
                 <tr><td><code>GAMEBLADE_PORT</code></td><td><code>47820</code></td><td>UDP port to serve on. <code>0</code> takes any free port, which makes the node unreachable from outside its NAT, so pin it if you are forwarding.</td></tr>
               </tbody>
             </table>
@@ -1272,34 +1272,58 @@ cp .env.example .env</code></pre>
           <div class="scroller">
             <table>
               <thead>
-                <tr><th>Role</th><th>Holds</th><th>Runs where</th></tr>
+                <tr><th>Image</th><th>Holds</th><th>Runs where</th></tr>
               </thead>
               <tbody>
                 <tr>
-                  <td><code>standalone</code></td>
+                  <td><code>gameblade</code></td>
                   <td>Everything: database, panel, and the games on local disk</td>
                   <td>One machine. The default, and what GameBlade has always been.</td>
                 </tr>
                 <tr>
-                  <td><code>coordinator</code></td>
+                  <td><code>gameblade-coordinator</code></td>
                   <td>Database, admin panel, landing page, API. No game files.</td>
                   <td>A VPS. Small, because coordination is kilobytes.</td>
                 </tr>
                 <tr>
-                  <td><code>node</code></td>
-                  <td>The game files. Scans them and reports upward.</td>
+                  <td><code>gameblade-node</code></td>
+                  <td>
+                    The game files. Scans them, reports upward, and serves them &mdash; both
+                    processes, in one container.
+                  </td>
                   <td>Wherever the library lives.</td>
+                </tr>
+                <tr>
+                  <td><code>gameblade-relay</code></td>
+                  <td>Nothing. A public UDP address and a table of paired sockets.</td>
+                  <td>Beside the coordinator, if you need it. See <a href="#relay">the relay</a>.</td>
                 </tr>
               </tbody>
             </table>
           </div>
 
+          <div class="new" data-since="0.6.2">
+            <p>
+              <strong>The image is the role.</strong> <code>docker pull</code> of
+              <code>gameblade-coordinator</code> has already said what that container is, so there
+              is nothing to declare in a compose file and nothing to get wrong &mdash; a
+              coordinator that was accidentally left as a standalone would scan libraries it
+              cannot read and flag the catalog its nodes had just reported, and would look fine
+              doing it.
+            </p>
+            <p>
+              <code>ROLE</code> still exists and still overrides, for anyone who was already
+              setting it. Nothing that worked on 0.6.1 stops working.
+            </p>
+          </div>
+
           <div class="note">
             <p>
-              <strong>One image rather than one per role.</strong> A coordinator and its nodes
-              have to agree about the catalog they exchange, and separate images are how they
-              quietly stop agreeing &mdash; you update one and forget the other. Shipping a single
-              artifact makes matching versions the default instead of something to remember.
+              <strong>Four images, one build.</strong> They are the same filesystem with different
+              metadata on top, produced by one CI job from one Dockerfile, so a coordinator and its
+              nodes cannot drift into disagreeing about the catalog they exchange &mdash; which is
+              the failure separate builds would eventually produce. Pulling two of them onto one
+              host pulls the layers once.
             </p>
           </div>
 
@@ -1423,7 +1447,7 @@ cp .env.example .env</code></pre>
           <h4 id="relay-key">Finding the coordinator's public key</h4>
           <div class="warn">
             <p>
-              <strong>The panel does not display it as of 0.6.1</strong>, although the relay's own
+              <strong>The panel does not display it as of 0.6.2</strong>, although the relay's own
               usage text says to look on the Nodes page. It is handed to a node at enrolment, so
               the place to read it is a node that has already enrolled &mdash; the
               <code>coordinatorKey</code> field of that node's
@@ -1594,7 +1618,7 @@ print(s.get("coordinatorKey") or s.get("coordinator_key"))'</code></pre>
           <h3 id="hashing">Computing chunk hashes</h3>
           <div class="warn">
             <p>
-              <strong>There is no button for this in the panel as of 0.6.1.</strong> The routes
+              <strong>There is no button for this in the panel as of 0.6.2.</strong> The routes
               exist and work; nothing in the admin UI calls them yet. Anywhere this manual used to
               say <em>Admin → Catalog → Games → Compute chunk hashes</em>, it was describing a
               control that has never been there.
@@ -1867,9 +1891,40 @@ curl -sS -H "authorization: Bearer $TOKEN" \
           <h3 id="deploy-upgrading">Upgrading from 0.6.1</h3>
           <p>
             Skip this if you are building a new one. If you already have a coordinator and nodes
-            running on 0.6.1, four things changed under you, and two of them mean undoing something
+            running on 0.6.1, six things changed under you, and two of them mean undoing something
             you were told to do:
           </p>
+          <div class="scroller">
+            <table>
+              <thead><tr><th>Then</th><th>Now</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>
+                    One image, with <code>ROLE</code> in every compose file, and a node as two
+                    services that had to agree about the library and the state path.
+                  </td>
+                  <td>
+                    An image per role, and a node in one container.
+                    <code>ghcr.io/scopeddlol/gameblade</code> still exists and is still the
+                    standalone server, so nothing breaks if you change nothing &mdash; but a
+                    coordinator or node is a smaller compose file now. Both shipped compose files
+                    have been rewritten.
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    Joining a node meant putting <code>COORDINATOR_URL</code> and
+                    <code>ENROLMENT_TOKEN</code> in its environment and restarting it.
+                  </td>
+                  <td>
+                    A node with neither serves a setup form on its own page. Both variables still
+                    work and still win where set, so an existing node carries on unchanged.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>And, from 0.6.1 itself:</p>
           <div class="scroller">
             <table>
               <thead><tr><th>Then</th><th>Now</th></tr></thead>
@@ -1943,13 +1998,11 @@ curl -sS -H "authorization: Bearer $TOKEN" \
 
           <pre><code># docker-compose.yml on the coordinator
 services:
-  gameblade:
-    image: ghcr.io/scopeddlol/gameblade:latest
+  coordinator:
+    image: ghcr.io/scopeddlol/gameblade-coordinator:latest
     container_name: gameblade-coordinator
     restart: unless-stopped
     environment:
-      ROLE: coordinator
-      DATA_DIR: /data
       TZ: Europe/London
 
       # Caddy terminates TLS and forwards X-Forwarded-*. Without this every
@@ -1957,44 +2010,25 @@ services:
       TRUST_PROXY: 'true'
       SECURE_COOKIES: auto
 
-      # Nothing here about scanning: a coordinator holds no files, so the role
-      # switches it off and says so in the log rather than leaving two more
-      # settings to get right.
-
-      # Only if you run the relay. Public host, relay port.
-      # RELAY_ENDPOINT: games.example.com:47821
-
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: '&lt;something long, used once&gt;'
-      ALLOW_SELF_REGISTRATION: 'false'
-
-      IGDB_CLIENT_ID: ''
-      IGDB_CLIENT_SECRET: ''
-      STEAMGRIDDB_API_KEY: ''
-      STEAM_API_KEY: ''
     volumes:
-      # The only thing on this host that cannot be recreated, and it is small.
       - ./data:/data
     ports:
-      # Bound to loopback: Caddy is on this host and nothing else needs it.
-      # If Caddy is in Docker on a shared network, drop this block entirely
-      # and let it reach `gameblade:8080` by service name.
+      # Loopback: Caddy is on this host. If Caddy is in Docker on a shared
+      # network, drop this and let it reach `coordinator:8080` by name.
       - '127.0.0.1:8080:8080'
     security_opt:
       - 'no-new-privileges:true'</code></pre>
 
+          <p>
+            No <code>ROLE</code>, no library mounts, and nothing about scanning: the image is the
+            coordinator, it holds no files, and it will not scan.
+          </p>
+
           <pre><code>mkdir -p data
 sudo chown -R 1000:1000 ./data
 docker compose up -d</code></pre>
-
-          <div class="note">
-            <p>
-              <strong>No <code>LIBRARY_PATHS</code> here, and no library mounts.</strong> A
-              coordinator's libraries are records of what its nodes hold; they are created in the
-              panel, where you can name them after the node reporting into each. Setting
-              <code>LIBRARY_PATHS</code> would register some at boot with names you did not choose.
-            </p>
-          </div>
 
           <p>Then the Caddyfile, which is the short part:</p>
 
@@ -2014,16 +2048,15 @@ docker compose up -d</code></pre>
 }</code></pre>
 
           <p>
-            Nothing else: Caddy streams rather than buffers, sets no timeouts, imposes no body
-            ceiling, and carries <code>/api/realtime</code> without being asked. See
-            <a href="#proxy-caddy">Caddy</a> for why each of those matters and what to check if
-            your Caddyfile already sets global options.
+            Nothing else: Caddy streams rather than buffers, sets no timeouts, imposes no
+            request-body ceiling, and carries <code>/api/realtime</code> without being asked. See
+            <a href="#proxy-caddy">Caddy</a> for why each of those matters.
           </p>
           <p>
-            Open <code>https://games.example.com</code>, sign in with the bootstrap administrator,
-            and then remove <code>ADMIN_USERNAME</code> and <code>ADMIN_PASSWORD</code> from
-            compose &mdash; they only apply while the database has no accounts, so leaving them is
-            a password sitting in a file for no benefit.
+            Open <code>https://games.example.com</code>, sign in, and then remove
+            <code>ADMIN_USERNAME</code> and <code>ADMIN_PASSWORD</code> from compose &mdash; they
+            only apply while the database has no accounts, so leaving them is a password sitting in
+            a file for no benefit.
           </p>
 
           <h3 id="deploy-libraries">2. One library per node</h3>
@@ -2067,86 +2100,142 @@ docker compose up -d</code></pre>
             libraries cannot share one path.
           </p>
 
-          <h3 id="deploy-nodes">3. The nodes</h3>
+          <h3 id="deploy-nodes">3. Connecting a node</h3>
           <p>
-            Two containers per node, out of the same image. The server scans local disk and reports
-            upward; the agent serves bytes to clients. They share <code>data/</code> so they agree
-            about which node they are.
-          </p>
-          <p>
-            Generate <strong>one enrolment code per node</strong> in
-            <strong>Admin → Settings → Nodes</strong> &mdash; name, role <code>origin</code>, then
-            <em>Generate code</em>. It is shown once, expires in 24 hours, and is spent on first
-            registration.
+            One container per machine holding games. It runs both halves of a node &mdash; the
+            scanner that reports what is here and the agent that serves it &mdash; and needs
+            nothing configured beyond where the games are.
           </p>
 
-          <pre><code># docker-compose.yml on node A (192.168.1.20)
+          <pre><code># docker-compose.yml on each node
 services:
-  server:
-    image: ghcr.io/scopeddlol/gameblade:latest
-    container_name: gameblade-node-a
+  node:
+    image: ghcr.io/scopeddlol/gameblade-node:latest
+    container_name: gameblade-node
     restart: unless-stopped
     environment:
-      ROLE: node
-      DATA_DIR: /data
-      LIBRARY_PATHS: /library
-      COORDINATOR_URL: https://games.example.com
-      ENROLMENT_TOKEN: '&lt;the code&gt;'
-      SCAN_ON_START: 'true'
-      SCAN_INTERVAL_MINUTES: '360'
       TZ: Europe/London
     volumes:
       - ./data:/data
-      - /srv/games-a:/library:ro
+      # Change the left side. /library is where the image looks.
+      - /srv/games:/library:ro
     ports:
-      # The status page. Bound to this host's LAN address rather than
-      # 127.0.0.1, so it is reachable from the network and from nowhere else.
+      # The node's own page. Bound to this host's LAN address so it is
+      # reachable from the network and from nowhere else.
       - '192.168.1.20:8080:8080'
+      # Where game bytes leave this machine.
+      - '47820:47820/udp'
+    security_opt:
+      - 'no-new-privileges:true'</code></pre>
 
-  mesh:
-    image: ghcr.io/scopeddlol/gameblade:latest
-    container_name: gameblade-mesh-a
-    restart: unless-stopped
-    entrypoint: ['/sbin/tini', '--']
-    command: ['gameblade-node']
-    environment:
-      GAMEBLADE_SERVER: https://games.example.com
-      GAMEBLADE_LIBRARY: /library
-      GAMEBLADE_STATE: /data/node-state.json
-      GAMEBLADE_PORT: '47820'
-      # The SAME code as above. The agent owns this node's keypair, so it is
-      # the process that has to register first — and the shipped compose file
-      # does not set this, which is why an untouched copy never enrols.
-      GAMEBLADE_ENROLMENT: '&lt;the code&gt;'
-    volumes:
-      - ./data:/data
-      - /srv/games-a:/library:ro
-    ports:
-      - '47820:47820/udp'</code></pre>
-
-          <p>
-            Node B is the same file with four things changed: the container names, the LAN address
-            it publishes its page on, its library path on the host, and its own enrolment code. If
-            both nodes happen to be on <em>one</em> host, also give it different ports &mdash;
-            <code>8081</code> for the page and <code>47822/udp</code> for the agent, matching
-            <code>GAMEBLADE_PORT</code> &mdash; and keep its <code>data/</code> in its own
-            directory.
-          </p>
-
-          <div class="note">
+          <div class="new" data-since="0.6.2">
             <p>
-              <strong>Both services get the same code, and that is fine.</strong> A node is
-              identified by its public key, and both processes derive the same key from the shared
-              state file. Whichever registers second is recognised as the node that already exists,
-              so the code is not checked again and nothing is duplicated. Remove both once the node
-              is enrolled.
+              <strong>The rest is a form.</strong> On the coordinator, open
+              <strong>Admin → Settings → Nodes</strong>, give the node a name, pick the role
+              <strong>Origin</strong>, and press <strong>Generate code</strong>. Then open the
+              node's own page &mdash; <code>http://192.168.1.20:8080</code> &mdash; and paste the
+              coordinator's address and that code into the setup panel it is showing.
+            </p>
+            <p>
+              That is the whole of it. The answers are written into
+              <code>data/node-state.json</code>, both processes pick them up without a restart, and
+              the page turns into the ordinary status readout once the node has enrolled. Nothing
+              needs to be typed twice, and nothing has to be edited on the machine with the games
+              on it.
             </p>
           </div>
 
           <p>
-            Back in <strong>Admin → Settings → Nodes</strong>, assign each node the library you
-            made for it. Reports are refused until you do, with a message saying exactly that.
+            Repeat for the second node, with its own enrolment code, its own <code>data/</code>,
+            and its own library on the coordinator. Two nodes must never share a library &mdash;
+            see <a href="#deploy-libraries">one library per node</a> for what happens if they do.
           </p>
+
+          <div class="note">
+            <p>
+              <strong>The form is a first-run screen and closes like one.</strong> It appears only
+              while a node has not enrolled and is gone the moment it has, so an enrolled node is
+              back to having nothing a request can change. It grants nothing by itself either
+              &mdash; the enrolment code is checked by the coordinator, not by the node, so a wrong
+              one produces a node that fails to register and says so. Keep the page off the public
+              internet regardless: it is unauthenticated, exactly as it was before.
+            </p>
+          </div>
+
+          <p>
+            If you would rather declare it than type it, <code>COORDINATOR_URL</code> and
+            <code>ENROLMENT_TOKEN</code> still work and skip the form entirely. The environment
+            wins where it is set.
+          </p>
+
+          <h3 id="staying-connected">Staying connected</h3>
+          <p>
+            A node and its coordinator are meant to stay joined for as long as both machines are
+            up, and everything between them is built to survive the other end going away.
+          </p>
+          <div class="scroller">
+            <table>
+              <thead><tr><th>What happens</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>The coordinator restarts, or the link drops</td>
+                  <td>
+                    Both halves retry. The agent's heartbeat and its held-open rendezvous poll
+                    reconnect on their own; the catalog report retries every ten seconds until it
+                    lands, then settles back to every five minutes.
+                  </td>
+                </tr>
+                <tr>
+                  <td>The node's public address changes</td>
+                  <td>
+                    Nothing. A node is known by its key rather than its address, and every
+                    heartbeat carries its current candidates &mdash; which is what makes a home
+                    connection a reasonable place to put one.
+                  </td>
+                </tr>
+                <tr>
+                  <td>The node's credential stops being accepted</td>
+                  <td>
+                    It registers again with the key it has always had, and is listed again within
+                    a heartbeat. No enrolment code is involved.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Either half of the node crashes</td>
+                  <td>
+                    The container exits, and <code>restart: unless-stopped</code> brings both back
+                    together.
+                  </td>
+                </tr>
+                <tr>
+                  <td>The node is deleted from the panel</td>
+                  <td>
+                    It re-registers as a new node and needs its library assigning again. Blocking
+                    it, rather than deleting it, is the way to take one out of service.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="new" data-since="0.6.2">
+            <p>
+              <strong>A rejected credential used to be permanent.</strong> The heartbeat logged
+              "refused" every thirty seconds for ever, the coordinator marked the node stale and
+              stopped handing it to clients, and the process sat there healthy serving nothing
+              until somebody noticed and restarted it. Both halves recover by themselves now: the
+              agent registers again with its key, and the server beside it rereads the credential
+              the agent just wrote.
+            </p>
+          </div>
+          <div class="warn">
+            <p>
+              <strong>A node that goes quiet for ninety seconds is marked stale</strong> and
+              withheld from new downloads while existing ones drain. That is a health signal
+              rather than a disconnection &mdash; it returns to online on the next heartbeat that
+              lands. Check <strong>Admin → Settings → Nodes</strong> for when each was last heard
+              from.
+            </p>
+          </div>
 
           <h3 id="deploy-state">4. The state file</h3>
           <p>
@@ -2318,7 +2407,7 @@ services:
                 <tr>
                   <td>The coordinator is up and knows what it is</td>
                   <td><code>curl https://games.example.com/api/health</code></td>
-                  <td><code>{"status":"ok","version":"0.6.1","role":"coordinator"}</code></td>
+                  <td><code>{"status":"ok","version":"0.6.2","role":"coordinator"}</code></td>
                 </tr>
                 <tr>
                   <td>Each node is up and knows what it is</td>
@@ -3739,73 +3828,61 @@ packages/shared Types, zod schemas and constants used by all three</code></pre>
             new migration rather than editing an applied one.
           </p>
 
-          <h3 id="windows-build">Building a Windows release by hand</h3>
-          <p>
-            The Windows client is built on demand rather than on every push, because Windows
-            minutes bill at twice the Linux rate and a Tauri build is long enough that building one
-            to prove a change to the admin panel did not break it is money for nothing. Two things
-            do trigger it:
-          </p>
-          <ul>
-            <li>
-              <strong>CI</strong> builds it when the client's own code changed &mdash; it links a
-              Rust transport crate the Linux jobs never compile for Windows, so "it built on Linux"
-              stopped being evidence that it builds at all &mdash; and on any manual run. The
-              installer it produces is a by-product, built without link-time optimisation; it is
-              not a release build.
-            </li>
-            <li>
-              <strong>Publish</strong>, run by hand with <code>build_client</code> ticked. It needs
-              a Windows runner to be online.
-            </li>
-          </ul>
-          <p>
-            For a release you actually ship, build it locally.
-            <code>scripts/build-windows.ps1</code> does the whole job on any Windows machine with
-            Node 22, pnpm and the Rust toolchain:
-          </p>
-          <pre><code>.\scripts\build-windows.ps1</code></pre>
-          <p>
-            It asks for the version, stamps it across every manifest that carries one — the five
-            <code>package.json</code> files, <code>tauri.conf.json</code>, the Rust crate and its
-            lockfile, which are read by different things and must agree — then typechecks, tests,
-            builds, and copies the <code>.exe</code> and <code>.msi</code> into
-            <code>dist/windows/&lt;version&gt;/</code>.
-          </p>
-          <p>
-            <code>scripts/build-windows.cmd</code> is a double-clickable wrapper, which also avoids
-            the execution-policy prompt. It always waits for a keypress before closing, so a failure
-            cannot vanish with the window; set <code>GAMEBLADE_NOPAUSE=1</code> to skip that when
-            scripting it. Every run is transcribed to <code>build-windows.log</code> at the repo root.
-          </p>
-
-          <div class="scroller">
-            <table>
-              <thead><tr><th>Flag</th><th></th></tr></thead>
-              <tbody>
-                <tr><td><code>-Version 0.6.1</code></td><td>Skip the prompt.</td></tr>
-                <tr><td><code>-KeepVersion</code></td><td>Build at the current version, changing no files.</td></tr>
-                <tr><td><code>-Fast</code></td><td>Drop link-time optimisation. Much quicker; not for release.</td></tr>
-                <tr><td><code>-SkipChecks</code></td><td>Skip typecheck and tests.</td></tr>
-              </tbody>
-            </table>
-          </div>
-
-          <p>
-            Only the client is built — the server ships as a container image built on Linux. Commit
-            the version bump and tag it once the installer is in hand; the tag publishes the release
-            and the image, and you attach the <code>.exe</code> to it.
-          </p>
-
-          <div class="warn">
+          <h3 id="releases">Cutting a release</h3>
+          <div class="new" data-since="0.6.2">
             <p>
-              <strong>If the window opens and closes doing nothing</strong>, it is almost always a
-              missing prerequisite. Open PowerShell in the repo and run the script directly to see the
-              message — it names every missing tool at once rather than one per run. The usual culprit
-              is that a tool <em>is</em> installed but the terminal predates the install: a running
-              process keeps the PATH it started with, so open a new one.
+              <strong>Releases come from CI, and only from CI.</strong> The PowerShell build
+              scripts are gone. There is no longer a step that depends on somebody having a Windows
+              machine, the right toolchain on it, and the discipline to run the same command every
+              time &mdash; which is the arrangement that lets a release ship with one manifest
+              still on the previous version.
             </p>
-            <pre><code>node --version; pnpm --version; cargo --version</code></pre>
+          </div>
+          <p>Two steps, and the second one is a tag:</p>
+          <pre><code># 1. Stamp the version across every manifest that carries one.
+node .github/scripts/set-version.mjs 0.6.2
+git commit -am 'Release 0.6.2'
+
+# 2. Tag it. Everything else happens on GitHub.
+git tag v0.6.2
+git push origin main --tags</code></pre>
+          <p>The <strong>Publish</strong> workflow then, in order:</p>
+          <ol>
+            <li>
+              <strong>Checks every manifest agrees with the tag</strong> and stops if not. Ten
+              files carry the version and five different tools read them; a release where they
+              disagree is not a broken build but an installer that reports the wrong version to
+              the update check, which is worse, because it ships.
+            </li>
+            <li>
+              <strong>Builds and pushes the four images</strong> &mdash; standalone, coordinator,
+              node, relay &mdash; from one Dockerfile, tagged <code>latest</code>, the version, and
+              the major.minor.
+            </li>
+            <li><strong>Builds the Windows installers</strong> on a Windows runner.</li>
+            <li>
+              <strong>Publishes the release</strong> with the <code>.exe</code> and
+              <code>.msi</code> attached and notes naming the images.
+            </li>
+          </ol>
+          <p>
+            <code>set-version.mjs --check</code> is the same script CI runs, so a disagreement can
+            be found before pushing rather than after.
+          </p>
+          <p>
+            <strong>Publish</strong> can also be run from the Actions tab with a version typed in,
+            for a release from a branch that cannot push tags. <code>build_client</code> forces the
+            Windows job outside a release, for checking a client change without cutting one; a
+            release always builds it, because there is no other way to get one now.
+          </p>
+          <div class="note">
+            <p>
+              <strong>Ordinary pushes to main</strong> refresh the <code>latest</code> images and
+              build nothing for Windows unless the client's own code changed. Windows minutes bill
+              at twice the Linux rate and a release build with full link-time optimisation is long,
+              so it is spent on the pushes that could plausibly ship and not on the ones that
+              touched the admin panel.
+            </p>
           </div>
         </section>
 
@@ -3857,7 +3934,7 @@ packages/shared Types, zod schemas and constants used by all three</code></pre>
           <p>AGPL-3.0-only.</p>
           <footer class="page">
             <p>
-              GameBlade 0.6.1 · Documentation lives in <code>Docs.html</code> at the repository root
+              GameBlade 0.6.2 · Documentation lives in <code>Docs.html</code> at the repository root
               and is edited as ordinary HTML — the contents list on the left builds itself from the
               headings.
             </p>

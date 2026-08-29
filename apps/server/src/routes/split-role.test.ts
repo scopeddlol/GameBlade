@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CSRF_HEADER, MESH_CHUNK_BYTES } from '@gameblade/shared';
@@ -153,6 +153,130 @@ describe('the split-role topology', () => {
       stop();
     }
   }, 10_000);
+
+  /* ---------------------------------------------------------------- setup */
+
+  it('serves a setup form while it has no coordinator, and takes one', async () => {
+    // The deployment path: bring a node up with nothing configured, open it,
+    // and point it at a coordinator from the page itself. Every alternative
+    // means editing a compose file on the machine with the games on it.
+    const { app, dataDir } = await boot({ ROLE: 'node' });
+
+    const page = await app.inject({ method: 'GET', url: '/' });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain('Set this node up');
+    expect(page.body).toContain('Coordinator address');
+
+    const before = (await app.inject({ method: 'GET', url: '/api/node/status' })).json() as {
+      configured: boolean;
+      coordinatorUrl: string | null;
+    };
+    expect(before.configured).toBe(false);
+    expect(before.coordinatorUrl).toBeNull();
+
+    const saved = await app.inject({
+      method: 'POST',
+      url: '/api/node/setup',
+      payload: {
+        coordinatorUrl: 'https://games.example.com/',
+        enrolmentToken: 'enrol-me-please',
+      },
+    });
+    expect(saved.statusCode).toBe(202);
+
+    // Written where both halves of a node read it, not held in this process:
+    // the mesh agent is the one that registers, and it is a different process.
+    const state = JSON.parse(
+      await readFile(path.join(dataDir, 'node-state.json'), 'utf8'),
+    ) as Record<string, string>;
+    expect(state.coordinatorUrl).toBe('https://games.example.com');
+    expect(state.enrolmentToken).toBe('enrol-me-please');
+
+    const after = (await app.inject({ method: 'GET', url: '/api/node/status' })).json() as {
+      configured: boolean;
+      coordinatorUrl: string | null;
+    };
+    expect(after.configured).toBe(true);
+    expect(after.coordinatorUrl).toBe('https://games.example.com');
+  });
+
+  it('keeps the key the agent already generated', async () => {
+    // The agent owns this node's identity and may be writing it while somebody
+    // is filling in the form. Replacing the file rather than merging into it
+    // would lose the key, and this machine would enrol twice under two
+    // identities — the coordinator would see a stranger holding the same games.
+    const { app, dataDir } = await boot({ ROLE: 'node' });
+
+    await writeFile(
+      path.join(dataDir, 'node-state.json'),
+      JSON.stringify({ secretKey: 'the-agents-key' }),
+      'utf8',
+    );
+
+    const saved = await app.inject({
+      method: 'POST',
+      url: '/api/node/setup',
+      payload: { coordinatorUrl: 'https://games.example.com', enrolmentToken: 'code' },
+    });
+    expect(saved.statusCode).toBe(202);
+
+    const state = JSON.parse(
+      await readFile(path.join(dataDir, 'node-state.json'), 'utf8'),
+    ) as Record<string, string>;
+    expect(state.secretKey).toBe('the-agents-key');
+    expect(state.coordinatorUrl).toBe('https://games.example.com');
+  });
+
+  it('refuses setup once the node is enrolled', async () => {
+    // The form is a first-run screen and closes like one. An enrolled node is
+    // back to having nothing a request can change.
+    const { app, dataDir } = await boot({ ROLE: 'node' });
+
+    await writeFile(
+      path.join(dataDir, 'node-state.json'),
+      JSON.stringify({ secretKey: 'k', nodeId: 'nod_1', nodeToken: 't' }),
+      'utf8',
+    );
+
+    const refused = await app.inject({
+      method: 'POST',
+      url: '/api/node/setup',
+      payload: { coordinatorUrl: 'https://elsewhere.example.com', enrolmentToken: 'code' },
+    });
+    expect(refused.statusCode).toBe(409);
+
+    const page = await app.inject({ method: 'GET', url: '/' });
+    expect(page.body).not.toContain('Set this node up');
+  });
+
+  it('refuses an address that is not one', async () => {
+    // A typo here becomes a node retrying an unresolvable host for ever, with
+    // nothing on the page to say which of the two fields was wrong.
+    const { app } = await boot({ ROLE: 'node' });
+
+    for (const coordinatorUrl of ['games.example.com', 'file:///etc/passwd', 'not a url']) {
+      const refused = await app.inject({
+        method: 'POST',
+        url: '/api/node/setup',
+        payload: { coordinatorUrl, enrolmentToken: 'code' },
+      });
+      expect(refused.statusCode, coordinatorUrl).toBe(400);
+    }
+  });
+
+  it('gives a coordinator no setup route at all', async () => {
+    // It is a node's first-run screen, and a coordinator has its own. Nothing
+    // about this should exist on the machine with the accounts on it.
+    const { app } = await boot({ ROLE: 'coordinator' });
+    await signIn(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/node/setup',
+      payload: { coordinatorUrl: 'https://games.example.com', enrolmentToken: 'code' },
+    });
+    expect(response.statusCode).toBe(404);
+  });
 
   /* -------------------------------------------------------------- hashing */
 

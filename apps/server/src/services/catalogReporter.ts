@@ -19,10 +19,15 @@ interface NodeState {
   nodeId?: string;
   nodeToken?: string;
   coordinatorKey?: string;
+  /** Written by the setup page, so a node can be pointed without a redeploy. */
+  coordinatorUrl?: string;
+  /** The one-time code, until whichever process registers first spends it. */
+  enrolmentToken?: string;
 }
 
 export interface ReporterConfig {
-  coordinatorUrl: string;
+  /** From the environment, when an operator declared one. The state file wins otherwise. */
+  coordinatorUrl: string | null;
   enrolmentToken: string | null;
   statePath: string;
 }
@@ -51,6 +56,25 @@ export class CatalogReporter {
   ) {}
 
   /**
+   * Which coordinator to talk to, resolved per attempt rather than at boot.
+   *
+   * The environment wins where an operator set it. Otherwise it is whatever the
+   * setup page wrote into the state file — which is the whole point of reading
+   * it every time: a node that starts unconfigured must be able to become
+   * configured without being restarted underneath the person configuring it.
+   */
+  private coordinatorUrl(): string | null {
+    const configured = this.config.coordinatorUrl ?? this.state.coordinatorUrl ?? null;
+    return configured ? configured.replace(/\/+$/, '') : null;
+  }
+
+  /** True once somebody has said where this node reports. */
+  async isConfigured(): Promise<boolean> {
+    await this.loadState();
+    return this.coordinatorUrl() !== null;
+  }
+
+  /**
    * Enrol with the coordinator, or recover the enrolment from last time.
    *
    * The code is spent on first use, so it is normal — and expected — for it to
@@ -62,10 +86,17 @@ export class CatalogReporter {
 
     if (this.state.nodeId && this.state.nodeToken) return true;
 
-    if (!this.config.enrolmentToken) {
+    const coordinatorUrl = this.coordinatorUrl();
+    if (!coordinatorUrl) {
+      this.logger.info({}, 'no coordinator set yet; waiting for this node’s setup page');
+      return false;
+    }
+
+    const enrolmentToken = this.config.enrolmentToken ?? this.state.enrolmentToken ?? null;
+    if (!enrolmentToken) {
       this.logger.warn(
         {},
-        'no enrolment code and no saved registration; set GAMEBLADE_ENROLMENT once to enrol this node',
+        'no enrolment code and no saved registration; paste one into this node’s setup page',
       );
       return false;
     }
@@ -79,11 +110,11 @@ export class CatalogReporter {
     }
 
     try {
-      const response = await fetch(`${this.config.coordinatorUrl}/api/mesh/register`, {
+      const response = await fetch(`${coordinatorUrl}/api/mesh/register`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          enrolmentToken: this.config.enrolmentToken,
+          enrolmentToken,
           publicKey: await this.publicKey(),
           endpoints: [],
         }),
@@ -106,6 +137,10 @@ export class CatalogReporter {
       this.state.nodeId = body.nodeId;
       this.state.nodeToken = body.nodeToken;
       this.state.coordinatorKey = body.coordinatorPublicKey;
+      // Spent, and remembered: the code is of no further use and the URL is
+      // how this node finds its way back after a restart.
+      delete this.state.enrolmentToken;
+      this.state.coordinatorUrl = coordinatorUrl;
       await this.saveState();
 
       this.logger.info({ nodeId: body.nodeId }, 'node enrolled with the coordinator');
@@ -124,12 +159,13 @@ export class CatalogReporter {
    * one straight after a scan.
    */
   async report(): Promise<boolean> {
-    if (!this.state.nodeId || !this.state.nodeToken) return false;
+    const coordinatorUrl = this.coordinatorUrl();
+    if (!coordinatorUrl || !this.state.nodeId || !this.state.nodeToken) return false;
 
     const payload = this.collect();
 
     try {
-      const response = await fetch(`${this.config.coordinatorUrl}/api/mesh/catalog`, {
+      const response = await fetch(`${coordinatorUrl}/api/mesh/catalog`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -138,6 +174,26 @@ export class CatalogReporter {
         },
         body: JSON.stringify({ complete: true, games: payload }),
       });
+
+      /*
+       * A rejected credential is recoverable, and used to be permanent.
+       *
+       * The mesh agent beside this process re-registers when its own heartbeat
+       * is refused, which rotates the token in the state file — so the copy
+       * held here goes stale in the ordinary course of things, not only when
+       * something is wrong. Rereading the file is the whole fix: the agent has
+       * already put a working credential in it. Anything else — a node deleted
+       * and re-enrolled, a token rotated elsewhere — resolves the same way
+       * within one heartbeat, without a restart and without anybody noticing.
+       */
+      if (response.status === 401 || response.status === 403) {
+        this.logger.warn(
+          { status: response.status },
+          'the coordinator rejected this node’s credential; rereading the state file',
+        );
+        await this.loadState();
+        return false;
+      }
 
       if (!response.ok) {
         const text = await response.text().catch(() => '');

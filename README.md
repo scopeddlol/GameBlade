@@ -25,9 +25,10 @@ file, no build step, and everything below is covered there in depth.
 - **Invite-only.** Self-registration is off by default. Accounts come from
   invite codes an administrator generates.
 - **Small.** One Alpine container, SQLite, no external database or cache.
-- **One machine, or several.** `standalone` is the default and is everything in
-  one process. A `coordinator` holds the database and the panel; `node`s hold the
-  games and serve them straight to clients. One image, three roles.
+- **One machine, or several.** `gameblade` is everything in one container. A
+  `gameblade-coordinator` holds the database and the panel; `gameblade-node`s
+  hold the games and serve them straight to clients, and set themselves up from
+  a page they serve. One build, an image per role.
 
 | Piece                        | Who uses it   | What it does                                                           |
 | ---------------------------- | ------------- | ---------------------------------------------------------------------- |
@@ -72,10 +73,13 @@ archive. Nested folders are that game's files, not separate games.
 
 ## Where to get it
 
-| Artifact           | Where                                                                                       |
-| ------------------ | ------------------------------------------------------------------------------------------- |
-| **Server image**   | `ghcr.io/scopeddlol/gameblade` — `latest`, plus a tag per release (amd64 and arm64)         |
-| **Windows client** | The `.exe` on the [latest release](https://github.com/scopeddlol/GameBlade/releases/latest) |
+| Artifact               | Where                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| **One machine**        | `ghcr.io/scopeddlol/gameblade`                                                              |
+| **Coordinator + node** | `ghcr.io/scopeddlol/gameblade-coordinator`, `-node`, and `-relay`                           |
+| **Windows client**     | The `.exe` on the [latest release](https://github.com/scopeddlol/GameBlade/releases/latest) |
+
+Each image is the role it is named for — there is no `ROLE` to set.
 
 ---
 
@@ -102,8 +106,9 @@ apps/desktop    Tauri v2 client: the tabbed UI plus Rust install/launch/sync
 packages/shared Types, zod schemas and constants used by all three
 ```
 
-The Windows client is built by hand with `scripts/build-windows.ps1` rather than
-by CI — see **[Building a Windows release](Docs.html#windows-build)**.
+Releases come from CI: stamp the version, tag it, and the Publish workflow
+builds the four images and the Windows installers and publishes them together —
+see **[Cutting a release](Docs.html#releases)**.
 
 ---
 

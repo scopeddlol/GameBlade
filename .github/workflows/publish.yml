@@ -11,7 +11,7 @@ on:
         required: false
         type: string
       build_client:
-        description: 'Build the Windows installers. Needs a Windows runner to be online.'
+        description: 'Force the Windows installers even without a version. A release always builds them.'
         required: false
         default: false
         type: boolean
@@ -37,12 +37,57 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Refuse a release whose manifests were never stamped.
+  #
+  # Ten files carry the version and five different tools read them. A release
+  # where they disagree is not a broken build — it is an installer that reports
+  # the wrong version to the update check, which is worse, because it ships. So
+  # it fails here, in thirty seconds, rather than after the Windows job.
+  version:
+    name: Check the version is stamped
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.version != '')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Every manifest says the release version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            expected="${{ inputs.version }}"
+          else
+            expected="${GITHUB_REF_NAME#v}"
+          fi
+          echo "Release version: $expected"
+          node .github/scripts/set-version.mjs "$expected" --check
+
   image:
-    name: Push image to GHCR
+    name: Push ${{ matrix.target }} image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      # One at a time. They share every layer below the role, so running them
+      # in parallel means four builds racing to populate the same cache and
+      # each compiling the Rust and the web bundle for itself.
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include:
+          # Unsuffixed, so `ghcr.io/…/gameblade` goes on meaning what it has
+          # always meant and every existing deployment keeps pulling it.
+          - target: standalone
+            suffix: ''
+          - target: coordinator
+            suffix: '-coordinator'
+          - target: node
+            suffix: '-node'
+          - target: relay
+            suffix: '-relay'
     steps:
       - uses: actions/checkout@v4
 
@@ -62,7 +107,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # One repository per role. Pulling `…/gameblade-coordinator` has
+          # already said what it is, so nothing has to say it again at run time.
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.suffix }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
@@ -76,6 +123,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: ${{ matrix.target }}
           # amd64 by default. There is no arm64 runner here, so that half is
           # built under QEMU — and better-sqlite3 has no musl prebuild, so an
           # emulated build compiles SQLite from source and takes ~15 minutes
@@ -85,13 +133,15 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
+          # Every role shares the same `runtime` stage, so the first job in the
+          # matrix compiles everything and the other three reuse it whole.
+          cache-from: type=gha,scope=image
           # min rather than max. max exports every intermediate layer of every
           # stage — including the Rust compiler's output — and the cache a
           # repository gets is finite, so a build that fills it evicts the very
           # layers the next one wanted. min keeps the final layers, which is
           # what a rebuild actually reuses.
-          cache-to: type=gha,mode=min
+          cache-to: type=gha,mode=min,scope=image
 
   desktop:
     name: Build Windows installers
@@ -104,9 +154,16 @@ jobs:
     # enough that doing it per push would dominate the budget for something most
     # pushes never ship.
     #
-    # `build_client` still forces it, for a release cut by hand from the
-    # dispatch form rather than from a tag.
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.build_client
+    # `build_client` forces it outside a release, for checking a client change
+    # without cutting one.
+    #
+    # There is no local path any more — the PowerShell build scripts are gone
+    # and releases come from here — so a release that skipped this would ship a
+    # server image with no client to talk to it.
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      inputs.build_client ||
+      (github.event_name == 'workflow_dispatch' && inputs.version != '')
     runs-on: windows-latest
     permissions:
       contents: write
@@ -194,11 +251,12 @@ jobs:
     # release pointing at it.
     if: >-
       !cancelled() &&
+      needs.version.result == 'success' &&
       needs.image.result == 'success' &&
       (needs.desktop.result == 'success' || needs.desktop.result == 'skipped') &&
       (startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' && inputs.version != ''))
-    needs: [image, desktop]
+    needs: [version, image, desktop]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -219,8 +277,7 @@ jobs:
           if [ -d installers ]; then
             find installers -type f -printf '%s\t%p\n' | sort
           else
-            echo "no installers in this run — build them with scripts/build-windows.ps1"
-            echo "and attach them to the release by hand"
+            echo "no installers in this run"
           fi
 
       - name: Resolve the release tag
@@ -265,7 +322,7 @@ jobs:
           if [ -d installers ]; then
             client='**Windows client** — download the `.exe` installer below. The `.msi` is there for deployment tooling; the `.exe` is what most people want.'
           else
-            client='**Windows client** — not built by this run. Build it with `scripts/build-windows.ps1` and attach the `.exe` to this release.'
+            client='**Windows client** — not in this run. Re-run **Publish** for this version with `build_client` ticked.'
           fi
           # Written with echo rather than a heredoc so the delimiter lines are
           # never at the mercy of this block scalar's indentation.
@@ -303,11 +360,23 @@ jobs:
           body: |
             ## Install
 
-            **Server** — pull the image and follow the quick start in the README:
+            **One machine** — everything in one container:
 
             ```
             docker pull ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.image_tag }}
             ```
+
+            **A coordinator and its nodes** — one image per role, so nothing has
+            to be told what it is:
+
+            ```
+            docker pull ${{ steps.tag.outputs.image }}-coordinator:${{ steps.tag.outputs.image_tag }}
+            docker pull ${{ steps.tag.outputs.image }}-node:${{ steps.tag.outputs.image_tag }}
+            docker pull ${{ steps.tag.outputs.image }}-relay:${{ steps.tag.outputs.image_tag }}
+            ```
+
+            Run the coordinator, then open a node's own page and point it at the
+            coordinator from there. Full walkthrough in `Docs.html`.
 
             Architectures in this build: `${{ inputs.platforms || 'linux/amd64' }}`.
 
