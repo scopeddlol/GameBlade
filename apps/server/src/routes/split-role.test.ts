@@ -332,6 +332,195 @@ describe('the split-role topology', () => {
     expect(app.gameblade.chunks.isGameChunked(gameId)).toBe(true);
   });
 
+  /* ---------------------------------------------------------------- relay */
+
+  it('publishes the coordinator key a relay needs, without authentication', async () => {
+    // A relay is meant to be running before anybody needs it, and it was not,
+    // because standing one up meant reading a field out of a JSON file on a
+    // different machine. It fetches this instead.
+    //
+    // Unauthenticated and safe to be: it is the public half. Every client is
+    // handed it already, it verifies signatures and cannot make one.
+    const { app } = await boot({ ROLE: 'coordinator' });
+
+    const published = await app.inject({ method: 'GET', url: '/api/mesh/coordinator-key' });
+    expect(published.statusCode).toBe(200);
+
+    const body = published.json() as { publicKey: string; algorithm: string; format: string };
+    expect(body.algorithm).toBe('ed25519');
+    expect(body.format).toBe('spki-base64url');
+    // A base64url SPKI-wrapped Ed25519 key is 44 characters, and never padded.
+    expect(body.publicKey).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+
+    // The same key a node is handed at enrolment, or the relay would be
+    // checking signatures against the wrong one.
+    const admin = await signIn(app);
+    const enrolment = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/enrolments',
+      headers: auth(admin),
+      payload: { label: 'A node', role: 'origin' },
+    });
+    const registered = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/register',
+      payload: {
+        enrolmentToken: (enrolment.json() as { token: string }).token,
+        publicKey: 'p'.repeat(43),
+        endpoints: [],
+      },
+    });
+    expect((registered.json() as { coordinatorPublicKey: string }).coordinatorPublicKey).toBe(
+      body.publicKey,
+    );
+  });
+
+  it('says on the health page when a coordinator has no relay address', async () => {
+    // Not a reason to refuse to start — most connections punch, and for those
+    // players this changes nothing. But the ones it does affect cannot
+    // download at all, and it reads to them as a broken archive rather than as
+    // their own network, so it is said somewhere an operator looks.
+    const { app } = await boot({ ROLE: 'coordinator' });
+    const admin = await signIn(app);
+
+    const report = await app.inject({
+      method: 'GET',
+      url: '/api/admin/health',
+      headers: auth(admin),
+    });
+    const findings = (report.json() as { findings: { id: string; severity: string }[] }).findings;
+    const relay = findings.find((finding) => finding.id === 'no-relay-endpoint');
+
+    expect(relay).toBeDefined();
+    expect(relay?.severity).toBe('warning');
+  });
+
+  it('says nothing about a relay once one is configured', async () => {
+    const { app } = await boot({
+      ROLE: 'coordinator',
+      RELAY_ENDPOINT: 'games.example.com:47821',
+    });
+    const admin = await signIn(app);
+
+    const report = await app.inject({
+      method: 'GET',
+      url: '/api/admin/health',
+      headers: auth(admin),
+    });
+    const findings = (report.json() as { findings: { id: string }[] }).findings;
+
+    expect(findings.map((finding) => finding.id)).not.toContain('no-relay-endpoint');
+  });
+
+  it('leaves a standalone server alone about relays', async () => {
+    // It has the files. A client that cannot reach a node downloads from it
+    // instead, so there is nothing here to warn about.
+    const { app } = await boot({ ROLE: 'standalone' });
+    const admin = await signIn(app);
+
+    const report = await app.inject({
+      method: 'GET',
+      url: '/api/admin/health',
+      headers: auth(admin),
+    });
+    const findings = (report.json() as { findings: { id: string }[] }).findings;
+
+    expect(findings.map((finding) => finding.id)).not.toContain('no-relay-endpoint');
+  });
+
+  /* ------------------------------------------------------ pairing a node */
+
+  it('makes a library for a node when it registers, named after it', async () => {
+    // Previously an operator had to create a library, give it a path that does
+    // not exist on this machine, and come back to assign it — three steps of
+    // ceremony around a decision with one sensible answer, during which the
+    // node reported into nothing and said so only in a log.
+    const { app } = await boot({ ROLE: 'coordinator' });
+    const admin = await signIn(app);
+    const db = app.gameblade.db;
+
+    expect(db.select().from(libraries).all()).toHaveLength(0);
+
+    const enrolment = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/enrolments',
+      headers: auth(admin),
+      payload: { label: 'Loft NAS', role: 'origin' },
+    });
+    const registered = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/register',
+      payload: {
+        enrolmentToken: (enrolment.json() as { token: string }).token,
+        publicKey: 'k'.repeat(43),
+        endpoints: [],
+      },
+    });
+    const nodeId = (registered.json() as { nodeId: string }).nodeId;
+
+    const made = db.select().from(libraries).all();
+    expect(made).toHaveLength(1);
+    expect(made[0]!.name).toBe('Loft NAS');
+
+    const node = db.select().from(meshNodes).where(eq(meshNodes.id, nodeId)).get();
+    expect(node?.libraryId).toBe(made[0]!.id);
+  });
+
+  it('sends a node to an existing library when the code said to', async () => {
+    // The migration case, and the reason this is decided on the code rather
+    // than afterwards: assigning it after the node registers is a race the
+    // operator loses. The node reports into its fresh library first, and the
+    // catalog every achievement and save rule hangs off is orphaned.
+    const { app } = await boot({ ROLE: 'coordinator' });
+    const admin = await signIn(app);
+    const db = app.gameblade.db;
+
+    const existing = await app.inject({
+      method: 'POST',
+      url: '/api/admin/libraries',
+      headers: auth(admin),
+      payload: { name: 'The archive as it was', path: '/libraries/original' },
+    });
+    const libraryId = (existing.json() as { id: string }).id;
+
+    const enrolment = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/enrolments',
+      headers: auth(admin),
+      payload: { label: 'Replacement NAS', role: 'origin', libraryId },
+    });
+    const registered = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/register',
+      payload: {
+        enrolmentToken: (enrolment.json() as { token: string }).token,
+        publicKey: 'j'.repeat(43),
+        endpoints: [],
+      },
+    });
+
+    const nodeId = (registered.json() as { nodeId: string }).nodeId;
+    const node = db.select().from(meshNodes).where(eq(meshNodes.id, nodeId)).get();
+
+    expect(node?.libraryId).toBe(libraryId);
+    // And nothing new was invented alongside it.
+    expect(db.select().from(libraries).all()).toHaveLength(1);
+  });
+
+  it('refuses a code pointed at a library that is not there', async () => {
+    const { app } = await boot({ ROLE: 'coordinator' });
+    const admin = await signIn(app);
+
+    const refused = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/enrolments',
+      headers: auth(admin),
+      payload: { label: 'Typo', role: 'origin', libraryId: 'lib_nonexistent' },
+    });
+
+    expect(refused.statusCode).toBe(404);
+  });
+
   /* --------------------------------------------------- what a node is told */
 
   it('tells a node about its own library and nobody else’s', async () => {
@@ -410,7 +599,21 @@ describe('the split-role topology', () => {
     });
     const node = registered.json() as { nodeId: string; nodeToken: string };
 
-    // Unassigned, a node is a mirror and syncs against everything.
+    // Registering gave it a library of its own, so it starts scoped to that —
+    // which is empty, because nothing has reported into it yet.
+    const ownLibrary = await app.inject({
+      method: 'GET',
+      url: '/api/mesh/catalog',
+      headers: {
+        authorization: `Bearer ${node.nodeToken}`,
+        'x-gameblade-node': node.nodeId,
+      },
+    });
+    expect((ownLibrary.json() as { games: unknown[] }).games).toHaveLength(0);
+
+    // Cleared, it is a mirror and syncs against everything on purpose.
+    db.update(meshNodes).set({ libraryId: null }).where(eq(meshNodes.id, node.nodeId)).run();
+
     const everything = await app.inject({
       method: 'GET',
       url: '/api/mesh/catalog',
@@ -421,7 +624,7 @@ describe('the split-role topology', () => {
     });
     expect((everything.json() as { games: unknown[] }).games).toHaveLength(2);
 
-    // Assigned, it is told only what it could possibly be holding.
+    // Pointed at a library, it is told only what it could possibly be holding.
     db.update(meshNodes)
       .set({ libraryId: mine.libraryId })
       .where(eq(meshNodes.id, node.nodeId))

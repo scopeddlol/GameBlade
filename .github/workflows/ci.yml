@@ -259,17 +259,31 @@ jobs:
           test "$(docker inspect -f '{{.State.Running}}' gameblade-node-ci)" = true
           echo "node is stable, not restarting"
 
-          # Relay: refuses to start without the coordinator key, and says which
-          # one. Captured rather than piped, because it exits non-zero on
-          # purpose and `pipefail` would read that as the step failing.
+          # Relay: with neither the coordinator's address nor its key it stops
+          # and names both ways to give it one. Captured rather than piped,
+          # because it exits non-zero on purpose and `pipefail` would read that
+          # as the step failing.
           relay_says=$(docker run --rm gameblade-relay:ci 2>&1 || true)
           echo "relay: $relay_says"
+          echo "$relay_says" | grep -q 'GAMEBLADE_SERVER'
           echo "$relay_says" | grep -q 'GAMEBLADE_COORDINATOR_KEY'
-          echo "relay refuses to start unconfigured, and names what is missing"
+          echo "relay refuses to start unconfigured, and names both ways to fix it"
+
+          # And with an address it waits for the coordinator rather than dying,
+          # which is the ordinary case: the two start together and this one
+          # routinely comes up first.
+          docker run -d --name gameblade-relay-ci \
+            -e GAMEBLADE_SERVER=http://127.0.0.1:9 gameblade-relay:ci
+          sleep 6
+          test "$(docker inspect -f '{{.State.Running}}' gameblade-relay-ci)" = true
+          docker logs gameblade-relay-ci 2>&1 | grep -q 'waiting for the coordinator'
+          echo "relay waits for a coordinator that is not up yet"
 
       - name: Clean up
         if: always()
-        run: docker rm -f gameblade-ci gameblade-coordinator-ci gameblade-node-ci 2>/dev/null || true
+        run: >-
+          docker rm -f gameblade-ci gameblade-coordinator-ci gameblade-node-ci
+          gameblade-relay-ci 2>/dev/null || true
 
   desktop:
     name: Build desktop client

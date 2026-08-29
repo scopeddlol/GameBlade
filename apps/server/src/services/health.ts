@@ -199,6 +199,33 @@ export class HealthService {
       });
     }
 
+    /*
+     * A coordinator with no relay address is one where some players cannot
+     * download at all.
+     *
+     * On one machine this would not be worth saying: a client that cannot
+     * reach a node falls back to the server and nobody notices. A coordinator
+     * holds no game files, so there is no fallback — a player behind a
+     * symmetric or carrier-grade NAT gets nothing, and it reads to them as a
+     * broken archive rather than as their own network.
+     *
+     * Said here rather than refused at boot, because a coordinator with no
+     * relay is still a working coordinator for everybody whose connection can
+     * be punched, which is most people. It is a gap to close, not a reason to
+     * be down.
+     */
+    if (!this.config.servesLocalFiles && !this.config.relayEndpoint) {
+      findings.push({
+        id: 'no-relay-endpoint',
+        severity: 'warning',
+        title: 'No relay address is set',
+        detail:
+          'Clients are never told a relay exists, so anyone whose network refuses a direct ' +
+          'connection to a node cannot download at all. Set RELAY_ENDPOINT to this host’s ' +
+          'public name and the relay’s port, e.g. games.example.com:47821.',
+      });
+    }
+
     if (this.countGames() === 0) {
       findings.push({
         id: 'empty-catalog',

@@ -165,9 +165,31 @@ export function startSchedules(app: FastifyInstance): () => void {
      */
     const WAITING_INTERVAL_MS = 10_000;
 
+    /*
+     * Asked once per pairing, before this node reads a single byte.
+     *
+     * Anything the coordinator already has hashes for is a game this node does
+     * not have to spend an hour on, and on a coordinator split off a standalone
+     * server that is the entire library. Guarded so a node that has already
+     * asked does not ask again on every report.
+     */
+    let adopted = false;
+    const adoptOnce = async () => {
+      if (adopted) return;
+      adopted = true;
+      try {
+        await reporter.adoptKnownHashes();
+      } catch (error) {
+        // Not fatal in any way: whatever this could not take, the local
+        // hashing sweep computes instead.
+        app.log.warn({ err: error }, 'could not take hashes from the coordinator');
+      }
+    };
+
     const publish = async (): Promise<number> => {
       try {
         if (!(await reporter.ensureRegistered())) return WAITING_INTERVAL_MS;
+        await adoptOnce();
 
         const games = reporter.collect().length;
         const ok = await reporter.report();
@@ -292,6 +314,24 @@ export function startSchedules(app: FastifyInstance): () => void {
   } else if (config.scanOnStart || config.scanIntervalMinutes > 0) {
     app.log.info(
       'this is a coordinator, so it holds no files to scan; scanning settings are ignored',
+    );
+  }
+
+  /*
+   * A coordinator with no relay address, said once, at boot.
+   *
+   * It is not a reason to refuse to start: most players' connections can be
+   * punched and for them this changes nothing. But for the ones behind a
+   * symmetric or carrier-grade NAT it is the difference between downloading
+   * and not, and a coordinator has no game files to fall back on — so it is
+   * worth a line here and a finding on the health page, rather than being
+   * found out by somebody who cannot install anything.
+   */
+  if (!config.servesLocalFiles && !config.relayEndpoint) {
+    app.log.warn(
+      'RELAY_ENDPOINT is not set, so clients are never told a relay exists. ' +
+        'Players whose network refuses a direct connection to a node will not be able to ' +
+        'download at all. Set it to this host’s public name and the relay’s port.',
     );
   }
 

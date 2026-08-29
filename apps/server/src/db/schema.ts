@@ -447,6 +447,17 @@ export const meshEnrollments = sqliteTable('mesh_enrollments', {
   expiresAt: text('expires_at').notNull(),
   usedAt: text('used_at'),
   nodeId: text('node_id').references(() => meshNodes.id, { onDelete: 'set null' }),
+  /**
+   * Where this node's catalog should land, decided before it ever registers.
+   *
+   * Normally null, and a node enrolling with this code gets a library of its
+   * own created for it. Set when the node is taking over a library that
+   * already exists — a standalone server being split apart, or hardware being
+   * replaced — because the alternative is a race: the node registers, gets a
+   * fresh library, reports into it, and the catalog everybody's achievements
+   * and saves hang off is orphaned before an operator can retarget it.
+   */
+  libraryId: text('library_id').references(() => libraries.id, { onDelete: 'set null' }),
 });
 
 /**

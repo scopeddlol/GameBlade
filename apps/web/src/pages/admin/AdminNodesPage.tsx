@@ -37,6 +37,8 @@ export function AdminNodesPage() {
   const queryClient = useQueryClient();
   const [label, setLabel] = useState('');
   const [role, setRole] = useState<'origin' | 'mirror'>('mirror');
+  /** Empty means "make one for it", which is what a new node wants. */
+  const [enrolLibraryId, setEnrolLibraryId] = useState('');
   const [issued, setIssued] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -49,11 +51,17 @@ export function AdminNodesPage() {
   });
 
   const enrolMutation = useMutation({
-    mutationFn: () => api.post<{ token: string }>('/mesh/enrolments', { label, role }),
+    mutationFn: () =>
+      api.post<{ token: string }>('/mesh/enrolments', {
+        label,
+        role,
+        libraryId: enrolLibraryId || null,
+      }),
     onSuccess: (result) => {
       // Shown once and never again: only its hash is stored.
       setIssued(result.token);
       setLabel('');
+      setEnrolLibraryId('');
       void queryClient.invalidateQueries({ queryKey: ['admin', 'mesh'] });
     },
   });
@@ -99,8 +107,9 @@ export function AdminNodesPage() {
         <h2 className="mb-1 text-sm font-semibold tracking-wide uppercase">Enrol a node</h2>
         <p className="text-ink-400 mb-4 text-xs">
           A node is a machine that holds game files and serves them straight to clients, so those
-          bytes never cross this server. Run the agent on it and give it this code; it registers
-          itself, and the code is spent the moment it does.
+          bytes never cross this server. Generate a code here, then open the node&rsquo;s own page
+          and paste it in along with this server&rsquo;s address. It registers itself, gets a
+          library of its own, and the code is spent the moment it does.
         </p>
 
         <form
@@ -131,10 +140,32 @@ export function AdminNodesPage() {
               <option value="origin">Origin</option>
             </select>
           </Field>
+          <Field label="Reports into" htmlFor="nodeLibrary">
+            <select
+              id="nodeLibrary"
+              className="gb-input w-auto"
+              value={enrolLibraryId}
+              onChange={(e) => setEnrolLibraryId(e.target.value)}
+            >
+              <option value="">A new library, named after this node</option>
+              {(librariesQuery.data ?? []).map((library) => (
+                <option key={library.id} value={library.id}>
+                  {library.name}
+                </option>
+              ))}
+            </select>
+          </Field>
           <button type="submit" className="gb-btn" disabled={enrolMutation.isPending}>
             Generate code
           </button>
         </form>
+
+        <p className="text-ink-400 mt-3 text-xs">
+          Pick an existing library only when this node is taking over one &mdash; replacing
+          hardware, or splitting a single-machine server apart. Choosing it here rather than after
+          the node registers is what stops the node reporting into a fresh library first and
+          orphaning everything attached to the old one.
+        </p>
 
         {issued ? (
           <div className="bg-ink-800 mt-4 rounded-lg p-3">

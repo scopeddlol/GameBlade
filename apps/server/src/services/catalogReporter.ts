@@ -1,9 +1,9 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import type { ReportedFile, ReportedGame } from '@gameblade/shared';
-import { eq } from 'drizzle-orm';
+import { MESH_CHUNK_BYTES, type ReportedFile, type ReportedGame } from '@gameblade/shared';
+import { eq, isNull } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { gameFileChunks, gameFiles, games } from '../db/schema.js';
+import { gameFileChunks, gameFiles, games, libraries } from '../db/schema.js';
 import type { Logger } from './metadata/service.js';
 
 /**
@@ -216,6 +216,134 @@ export class CatalogReporter {
   }
 
   /**
+   * Take the hashes the coordinator already has, instead of computing them.
+   *
+   * A node's first act after pairing is otherwise to read every byte of every
+   * game it holds, which on a real archive is hours during which nothing it
+   * has is servable. Most of that is often wasted: a coordinator split off a
+   * standalone server, or one that already had another node holding the same
+   * games, has the hashes already — and they are hashes of file *contents*,
+   * so a copy that matches is described by them exactly.
+   *
+   * Matched on relative path and then checked file by file on size. Anything
+   * that does not line up is left alone and hashed locally in the ordinary
+   * way, because adopting hashes for bytes this machine does not actually have
+   * would mean advertising a game and then failing every chunk of it.
+   *
+   * Returns how many games it could skip.
+   */
+  async adoptKnownHashes(): Promise<{ adopted: number; checked: number }> {
+    await this.loadState();
+    const coordinatorUrl = this.coordinatorUrl();
+    if (!coordinatorUrl || !this.state.nodeId || !this.state.nodeToken) {
+      return { adopted: 0, checked: 0 };
+    }
+
+    const headers = {
+      authorization: `Bearer ${this.state.nodeToken}`,
+      'x-gameblade-node': this.state.nodeId,
+    };
+
+    const listed = await fetch(`${coordinatorUrl}/api/mesh/catalog`, { headers });
+    if (!listed.ok) return { adopted: 0, checked: 0 };
+
+    const body = (await listed.json()) as {
+      games?: { gameId: string; relPath: string }[];
+    };
+    const known = body.games ?? [];
+    if (known.length === 0) return { adopted: 0, checked: 0 };
+
+    // Only games this node holds and has not hashed yet are worth asking about.
+    const mine = new Map(
+      this.db
+        .select({ id: games.id, relPath: games.relPath })
+        .from(games)
+        .where(isNull(games.missingAt))
+        .all()
+        .map((game) => [game.relPath, game.id]),
+    );
+
+    let adopted = 0;
+    let checked = 0;
+
+    for (const candidate of known) {
+      const localId = mine.get(candidate.relPath);
+      if (!localId) continue;
+      checked += 1;
+
+      const localFiles = this.db
+        .select()
+        .from(gameFiles)
+        .where(eq(gameFiles.gameId, localId))
+        .all();
+      if (localFiles.length === 0) continue;
+      // Already hashed here; nothing to take.
+      if (localFiles.every((file) => file.chunkBytes === MESH_CHUNK_BYTES)) continue;
+
+      const detail = await fetch(
+        `${coordinatorUrl}/api/mesh/catalog/${encodeURIComponent(candidate.gameId)}`,
+        { headers },
+      );
+      if (!detail.ok) continue;
+
+      const remote = (await detail.json()) as {
+        files?: {
+          path: string;
+          sizeBytes: number;
+          sha256: string | null;
+          chunks?: { index: number; sha256: string; sizeBytes: number }[];
+        }[];
+      };
+
+      const byPath = new Map((remote.files ?? []).map((file) => [file.path, file]));
+
+      // All or nothing per game: a half-adopted game is one the node would
+      // announce and then refuse pieces of.
+      const usable = localFiles.every((file) => {
+        const match = byPath.get(file.relPath);
+        return Boolean(match && match.sizeBytes === file.sizeBytes && match.chunks?.length);
+      });
+      if (!usable) continue;
+
+      this.db.transaction((tx) => {
+        for (const file of localFiles) {
+          const match = byPath.get(file.relPath)!;
+          tx.delete(gameFileChunks).where(eq(gameFileChunks.fileId, file.id)).run();
+          for (const piece of match.chunks ?? []) {
+            tx.insert(gameFileChunks)
+              .values({
+                fileId: file.id,
+                chunkIndex: piece.index,
+                sizeBytes: piece.sizeBytes,
+                sha256: piece.sha256,
+              })
+              .run();
+          }
+          tx.update(gameFiles)
+            .set({
+              sha256: match.sha256 ?? file.sha256,
+              chunkedAt: new Date().toISOString(),
+              chunkBytes: MESH_CHUNK_BYTES,
+            })
+            .where(eq(gameFiles.id, file.id))
+            .run();
+        }
+      });
+
+      adopted += 1;
+    }
+
+    if (adopted > 0) {
+      this.logger.info(
+        { adopted, checked },
+        'took chunk hashes the coordinator already had, instead of re-reading those games',
+      );
+    }
+
+    return { adopted, checked };
+  }
+
+  /**
    * Turn the local scan into the shape the coordinator accepts.
    *
    * No ids travel. The coordinator owns those and matches on relative path, so
@@ -225,6 +353,27 @@ export class CatalogReporter {
   collect(): ReportedGame[] {
     const rows = this.db.select().from(games).all();
     const out: ReportedGame[] = [];
+
+    /*
+     * A node's libraries all arrive in one library on the coordinator, so two
+     * of them holding the same relative path would collide there.
+     *
+     * That is not hypothetical: two roots, each with a `Hollow Knight` folder,
+     * are one row on the coordinator and each report would fight the other over
+     * what it contains. So a node with more than one root prefixes each path
+     * with the root it came from.
+     *
+     * A node with one root — which the node image configures, and which is
+     * almost every node — sends paths unchanged. Not for tidiness: changing the
+     * path of a game that has already been reported makes it a stranger, and
+     * the coordinator would add the whole catalog again and orphan every
+     * achievement, save rule and playtime record attached to the old rows.
+     */
+    const roots = this.db.select({ id: libraries.id, name: libraries.name }).from(libraries).all();
+    const prefixes =
+      roots.length > 1
+        ? new Map(roots.map((root) => [root.id, `${sanitiseSegment(root.name)}/`]))
+        : new Map<string, string>();
 
     for (const game of rows) {
       // A game the local scanner has flagged as gone is not something to
@@ -259,7 +408,7 @@ export class CatalogReporter {
       });
 
       out.push({
-        relPath: game.relPath,
+        relPath: `${prefixes.get(game.libraryId) ?? ''}${game.relPath}`,
         kind: game.kind,
         sizeBytes: game.sizeBytes,
         /*
@@ -315,4 +464,19 @@ export class CatalogReporter {
       .subarray(12)
       .toString('base64url');
   }
+}
+
+/**
+ * A library name reduced to something safe to put in a path.
+ *
+ * These become part of a relative path that is compared, stored and shown, so
+ * a slash or a run of dots in a library's name would change the shape of it
+ * rather than just its text.
+ */
+function sanitiseSegment(name: string): string {
+  const cleaned = name
+    .replace(/[\\/]+/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .trim();
+  return cleaned || 'library';
 }

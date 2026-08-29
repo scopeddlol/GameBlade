@@ -35,9 +35,17 @@ services:
       # ADMIN_USERNAME: admin
       # ADMIN_PASSWORD: change-me-to-something-long
 
-      # The relay's public address, if you run one. Coordinator host, relay
-      # port — this is what clients are told to dial.
-      # RELAY_ENDPOINT: games.example.com:47821
+      # Where clients are told to find the relay below. Your public hostname
+      # and the relay's port — not localhost, and not the container name: this
+      # value is handed to players' machines.
+      #
+      # The one line here you have to fill in. Left empty the coordinator still
+      # starts, and the relay below still runs, but no client is ever told it
+      # exists — so the players whose NAT defeats hole punching cannot download
+      # at all, and a coordinator holds no files to fall back on. It is said in
+      # the log at boot and on Admin -> Insights -> Health rather than being
+      # left to a player to discover.
+      RELAY_ENDPOINT: ${RELAY_ENDPOINT:-}
 
       # Metadata providers. Can also be set in Admin -> Settings.
       IGDB_CLIENT_ID: ${IGDB_CLIENT_ID:-}
@@ -58,21 +66,39 @@ services:
 
     security_opt:
       - 'no-new-privileges:true'
-# The relay, for clients whose NAT defeats hole punching. Optional: run it only
-# once `mesh-doctor` on a node says the connection is not punchable, or once
-# some players cannot download.
-#
-# It needs the coordinator's public key and nothing else — no database, no
-# credentials, no API. Read it from an enrolled node's data/node-state.json,
-# field `coordinatorKey`.
-#
-#  relay:
-#    image: ghcr.io/scopeddlol/gameblade-relay:latest
-#    container_name: gameblade-relay
-#    restart: unless-stopped
-#    environment:
-#      GAMEBLADE_COORDINATOR_KEY: '<base64url SPKI from node-state.json>'
-#    ports:
-#      # UDP, and not something a reverse proxy can carry. Open it on the host
-#      # firewall, and set RELAY_ENDPOINT above to this host and this port.
-#      - '47821:47821/udp'
+  # The path for clients whose NAT defeats hole punching.
+  #
+  # Not optional here, and that is the point. On one machine a client that
+  # cannot reach a node downloads from the server instead and nobody notices.
+  # A coordinator holds no game files, so there is no such fallback: without
+  # this, a player behind a symmetric or carrier-grade NAT cannot download
+  # anything, ever, and it looks like a broken archive rather than a network
+  # they are behind.
+  #
+  # It costs almost nothing to have running and unused. Only clients that
+  # already failed to connect directly are ever sent here, relayed bytes count
+  # against the same allowance as any others, and GAMEBLADE_RELAY_MAX caps how
+  # many can be in flight.
+  relay:
+    image: ghcr.io/scopeddlol/gameblade-relay:latest
+    container_name: gameblade-relay
+    restart: unless-stopped
+    depends_on:
+      - coordinator
+
+    environment:
+      # It fetches the coordinator's public key from here itself, waiting for
+      # it to come up. That key is all it is ever given: no database, no
+      # credentials, no API. It never terminates TLS and never learns which
+      # game is moving through it.
+      GAMEBLADE_SERVER: http://coordinator:8080
+      GAMEBLADE_RELAY_MAX: '256'
+
+    ports:
+      # UDP, and not something a reverse proxy can carry — Caddy has nothing to
+      # do with this. Open 47821/udp on the host firewall, and make sure
+      # RELAY_ENDPOINT above names this host and this port.
+      - '47821:47821/udp'
+
+    security_opt:
+      - 'no-new-privileges:true'

@@ -154,6 +154,93 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.3 - August 29, 2026
+
+0.6.2 made a coordinator and its nodes assemble. This is the release where
+pairing one is the only step there is, and where the mesh it exists for
+actually switches itself on.
+
+### The hashes were being thrown away
+
+A node reports its catalog within minutes of starting and then spends hours
+hashing. Ingest decided whether a game had changed by comparing its size, its
+file count and its modification time — none of which hashing touches. So every
+game came back "unchanged", the hashes were dropped, and the report that
+carried them was counted as a success.
+
+The result was a coordinator with a complete catalog and not one servable game,
+on any deployment that had not been a standalone server first. The node was
+online, heartbeating, reporting every five minutes and holding a fully hashed
+library, and the panel showed nothing wrong. It is the single reason the mesh
+appeared not to work.
+
+Ingest now also compares how much of a game is hashed, so work that happened
+since the last report is work that lands. The steady state is unaffected: a
+node reporting the same hashed library every five minutes still writes nothing.
+
+### A node makes its own library
+
+Enrolling one used to leave it idle. A node's catalog has to land in a library,
+a coordinator holds no files, so an operator had to create a library, give it a
+path that does not exist on that machine, and come back to assign it — three
+steps of ceremony around a decision with exactly one sensible answer, during
+which the node reported into nothing and said so only in a log.
+
+It gets one when it registers, named after it. Reports are refused until a node
+has a library, and now every node has one from the moment it exists.
+
+The exception is a node taking over a library that already exists — replacing
+hardware, or splitting a standalone server apart — and that is chosen on the
+enrolment code rather than afterwards. Doing it afterwards is a race the
+operator loses: the node reports into its fresh library first and the catalog
+every achievement, save rule and playtime record hangs off is orphaned.
+
+All of a node's own library roots report into that one library. A node with
+more than one root prefixes each game's path with the root it came from, so two
+roots that both hold `Hollow Knight` stay two games. A node with one root — the
+node image's configuration, and almost every node — reports paths unchanged,
+because changing the path of a game already reported makes it a stranger.
+
+### A node asks before it reads
+
+The first thing it does after pairing is ask the coordinator which of the games
+it holds are already hashed, and take those hashes rather than recomputing
+them. Hashes describe file contents, so a copy that matches is described by them
+exactly — and on a coordinator split off a standalone server, or one that
+already has another node holding the same games, that is the whole library and
+the hours disappear.
+
+Matched on relative path, checked file by file on size, adopted all-or-nothing
+per game. Anything that does not line up is hashed locally as before, because
+adopting hashes for bytes a machine does not have means advertising a game and
+then failing every chunk of it.
+
+### The relay stopped being optional
+
+On one machine, a client that cannot reach a node downloads from the server and
+nobody notices. A coordinator holds no game files, so there is no such
+fallback: without a relay, a player behind a symmetric or carrier-grade NAT
+cannot download anything at all, and it reads as a broken archive rather than
+as the network they are behind.
+
+It is a service in `docker-compose.coordinator.yml` now, not a commented-out
+block. What kept it optional was the setup: its one required value was the
+coordinator's public key, published to nodes at enrolment and nowhere else, so
+standing one up meant reading a field out of a JSON file on a different machine.
+The coordinator publishes that key at `/api/mesh/coordinator-key` — safe
+unauthenticated, being the public half everything already receives — and the
+relay fetches it, waiting for a coordinator that has not booted yet rather than
+dying because it came up first.
+
+`RELAY_ENDPOINT` is the one value that cannot be derived, because only you know
+your public hostname. Leaving it empty does not stop the coordinator — most
+players' connections punch through and for them it changes nothing — but it
+does mean the relay runs with nobody ever being sent to it. So it is a warning
+in the log at boot and a finding on **Admin → Insights → Health**, rather than
+something a player who cannot install anything finds out for you.
+
+---
+
 ## Version 0.6.2 - August 29, 2026
 
 The release where a coordinator and its nodes stop being a thing you assemble
