@@ -2168,75 +2168,6 @@ services:
             wins where it is set.
           </p>
 
-          <h3 id="staying-connected">Staying connected</h3>
-          <p>
-            A node and its coordinator are meant to stay joined for as long as both machines are
-            up, and everything between them is built to survive the other end going away.
-          </p>
-          <div class="scroller">
-            <table>
-              <thead><tr><th>What happens</th><th>What it does</th></tr></thead>
-              <tbody>
-                <tr>
-                  <td>The coordinator restarts, or the link drops</td>
-                  <td>
-                    Both halves retry. The agent's heartbeat and its held-open rendezvous poll
-                    reconnect on their own; the catalog report retries every ten seconds until it
-                    lands, then settles back to every five minutes.
-                  </td>
-                </tr>
-                <tr>
-                  <td>The node's public address changes</td>
-                  <td>
-                    Nothing. A node is known by its key rather than its address, and every
-                    heartbeat carries its current candidates &mdash; which is what makes a home
-                    connection a reasonable place to put one.
-                  </td>
-                </tr>
-                <tr>
-                  <td>The node's credential stops being accepted</td>
-                  <td>
-                    It registers again with the key it has always had, and is listed again within
-                    a heartbeat. No enrolment code is involved.
-                  </td>
-                </tr>
-                <tr>
-                  <td>Either half of the node crashes</td>
-                  <td>
-                    The container exits, and <code>restart: unless-stopped</code> brings both back
-                    together.
-                  </td>
-                </tr>
-                <tr>
-                  <td>The node is deleted from the panel</td>
-                  <td>
-                    It re-registers as a new node and needs its library assigning again. Blocking
-                    it, rather than deleting it, is the way to take one out of service.
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="new" data-since="0.6.2">
-            <p>
-              <strong>A rejected credential used to be permanent.</strong> The heartbeat logged
-              "refused" every thirty seconds for ever, the coordinator marked the node stale and
-              stopped handing it to clients, and the process sat there healthy serving nothing
-              until somebody noticed and restarted it. Both halves recover by themselves now: the
-              agent registers again with its key, and the server beside it rereads the credential
-              the agent just wrote.
-            </p>
-          </div>
-          <div class="warn">
-            <p>
-              <strong>A node that goes quiet for ninety seconds is marked stale</strong> and
-              withheld from new downloads while existing ones drain. That is a health signal
-              rather than a disconnection &mdash; it returns to online on the next heartbeat that
-              lands. Check <strong>Admin → Settings → Nodes</strong> for when each was last heard
-              from.
-            </p>
-          </div>
-
           <h3 id="deploy-state">4. The state file</h3>
           <p>
             <code>data/node-state.json</code> is the node's identity: an Ed25519 secret, the node
@@ -2473,6 +2404,75 @@ services:
                 </tr>
               </tbody>
             </table>
+          </div>
+
+          <h3 id="staying-connected">Staying connected</h3>
+          <p>
+            A node and its coordinator are meant to stay joined for as long as both machines are
+            up, and everything between them is built to survive the other end going away.
+          </p>
+          <div class="scroller">
+            <table>
+              <thead><tr><th>What happens</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>The coordinator restarts, or the link drops</td>
+                  <td>
+                    Both halves retry. The agent's heartbeat and its held-open rendezvous poll
+                    reconnect on their own; the catalog report retries every ten seconds until it
+                    lands, then settles back to every five minutes.
+                  </td>
+                </tr>
+                <tr>
+                  <td>The node's public address changes</td>
+                  <td>
+                    Nothing. A node is known by its key rather than its address, and every
+                    heartbeat carries its current candidates &mdash; which is what makes a home
+                    connection a reasonable place to put one.
+                  </td>
+                </tr>
+                <tr>
+                  <td>The node's credential stops being accepted</td>
+                  <td>
+                    It registers again with the key it has always had, and is listed again within
+                    a heartbeat. No enrolment code is involved.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Either half of the node crashes</td>
+                  <td>
+                    The container exits, and <code>restart: unless-stopped</code> brings both back
+                    together.
+                  </td>
+                </tr>
+                <tr>
+                  <td>The node is deleted from the panel</td>
+                  <td>
+                    It re-registers as a new node and needs its library assigning again. Blocking
+                    it, rather than deleting it, is the way to take one out of service.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="new" data-since="0.6.2">
+            <p>
+              <strong>A rejected credential used to be permanent.</strong> The heartbeat logged
+              "refused" every thirty seconds for ever, the coordinator marked the node stale and
+              stopped handing it to clients, and the process sat there healthy serving nothing
+              until somebody noticed and restarted it. Both halves recover by themselves now: the
+              agent registers again with its key, and the server beside it rereads the credential
+              the agent just wrote.
+            </p>
+          </div>
+          <div class="warn">
+            <p>
+              <strong>A node that goes quiet for ninety seconds is marked stale</strong> and
+              withheld from new downloads while existing ones drain. That is a health signal
+              rather than a disconnection &mdash; it returns to online on the next heartbeat that
+              lands. Check <strong>Admin → Settings → Nodes</strong> for when each was last heard
+              from.
+            </p>
           </div>
 
           <h3 id="deploy-trouble">When it does not</h3>

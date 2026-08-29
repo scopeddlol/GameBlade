@@ -122,12 +122,24 @@ async fn main() {
     // whole design is that somebody fills that in. Exiting here would take the
     // container down in a restart loop underneath the page they are typing
     // into.
-    let server_url = loop {
-        if let Some(url) = coordinator_url(&state_path) {
-            break url;
+    let server_url = {
+        let mut waited = 0u64;
+        loop {
+            if let Some(url) = coordinator_url(&state_path) {
+                break url;
+            }
+            // Said once, then once a minute. The poll is a small file read and
+            // wants to be frequent — somebody is at the setup page waiting for
+            // this to notice — but a node left unconfigured overnight should
+            // not write twenty thousand identical lines about it.
+            if waited % 20 == 0 {
+                println!(
+                    "  waiting: no coordinator set yet — set one on this node's page, or in GAMEBLADE_SERVER"
+                );
+            }
+            waited += 1;
+            tokio::time::sleep(UNCONFIGURED_POLL).await;
         }
-        println!("  waiting: no coordinator set yet — set one on this node's page, or in GAMEBLADE_SERVER");
-        tokio::time::sleep(UNCONFIGURED_POLL).await;
     };
 
     println!("  server:  {server_url}");
