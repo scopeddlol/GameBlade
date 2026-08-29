@@ -126,7 +126,13 @@ impl QueueEntry {
             // A path the client refuses to write is a path it would never have
             // downloaded either, so dropping it here costs nothing later.
             if let Ok(relative) = sanitise_relative_path(&file.path) {
-                files.push(relative.to_string_lossy().to_string());
+                // Stored with forward slashes whatever the platform separator
+                // is. This list is persisted to the queue file and read back
+                // to clean up after a cancelled download; Windows accepts
+                // either form when joining, so writing the one that does not
+                // depend on where the file was written keeps the queue
+                // readable and its assertions meaningful.
+                files.push(relative.to_string_lossy().replace('\\', "/"));
             }
         }
 
@@ -1110,10 +1116,16 @@ mod tests {
 
     #[tokio::test]
     async fn a_restored_queue_resumes_what_was_interrupted_and_keeps_what_was_paused() {
+        // Nanoseconds rather than a debug-printed SystemTime: that format
+        // contains colons on Windows, which cannot appear in a file name, so
+        // the directory was never created and the test failed at its setup.
         let dir = std::env::temp_dir().join(format!(
-            "gb-queue-{}-{:?}",
+            "gb-queue-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
 
