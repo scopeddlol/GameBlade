@@ -256,6 +256,67 @@ describe('CatalogIngestService', () => {
     expect(chunk?.sha256).toBe('b'.repeat(64));
   });
 
+  it('takes the hashes a node computed after it first reported the game', () => {
+    /*
+     * The whole mesh rests on this, and it was silently false.
+     *
+     * A node reports its catalog within minutes of starting and then spends
+     * hours hashing. Hashing changes nothing about a game that anybody was
+     * comparing — not its size, not its file count, not its modification time —
+     * so every game came back "unchanged" and the hashes it had just spent the
+     * afternoon computing were dropped on the floor. Nothing errored. The
+     * catalog was complete, the node was online and reporting, and not one game
+     * was ever servable from it.
+     */
+    ingest.ingest(nodeId, [reported()]);
+
+    const before = db.select().from(gameFiles).all();
+    expect(before).toHaveLength(1);
+    expect(before[0]!.chunkBytes).toBeNull();
+
+    // The same game, same everything, now hashed.
+    ingest.ingest(nodeId, [
+      reported({
+        files: [
+          {
+            relPath: 'game.bin',
+            sizeBytes: 1_024,
+            modifiedAt: '2026-01-01T00:00:00.000Z',
+            sha256: 'a'.repeat(64),
+            chunks: [{ index: 0, sha256: 'b'.repeat(64), sizeBytes: 1_024 }],
+          },
+        ],
+      }),
+    ]);
+
+    const after = db.select().from(gameFiles).all();
+    expect(after).toHaveLength(1);
+    expect(after[0]!.chunkBytes).toBe(MESH_CHUNK_BYTES);
+    expect(db.select().from(gameFileChunks).all()).toHaveLength(1);
+  });
+
+  it('still calls a hashed game unchanged when it reports again', () => {
+    // The other half: once the hashes are there, a node reporting the same
+    // library every five minutes must not rewrite every file row for ever.
+    const hashed = reported({
+      files: [
+        {
+          relPath: 'game.bin',
+          sizeBytes: 1_024,
+          modifiedAt: '2026-01-01T00:00:00.000Z',
+          sha256: 'a'.repeat(64),
+          chunks: [{ index: 0, sha256: 'b'.repeat(64), sizeBytes: 1_024 }],
+        },
+      ],
+    });
+
+    ingest.ingest(nodeId, [hashed]);
+    const settled = ingest.ingest(nodeId, [hashed]);
+
+    expect(settled.unchanged).toBe(1);
+    expect(settled.updated).toBe(0);
+  });
+
   it('replaces a game’s files rather than accumulating them', () => {
     ingest.ingest(nodeId, [reported()]);
     ingest.ingest(nodeId, [

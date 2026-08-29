@@ -58,6 +58,25 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
     return { nodeId: mesh.authenticate(id, token).id };
   }
 
+  /**
+   * The coordinator's public key, for a relay that has to check grants.
+   *
+   * Unauthenticated on purpose, and safe to be: it is the public half. Every
+   * client is already handed it, it verifies signatures and cannot make one,
+   * and a relay is given nothing else — no database, no credentials, no API.
+   *
+   * It exists because the alternative was a manual step that made the relay
+   * feel optional. The key was published to nodes at enrolment and nowhere
+   * else, so standing one up meant reading a field out of a JSON file on a
+   * different machine and pasting it into a compose file — for a component
+   * whose entire job is to be there before anybody needs it.
+   */
+  app.get('/mesh/coordinator-key', async () => ({
+    publicKey: downloadTokens.publicKeyBase64(),
+    algorithm: 'ed25519',
+    format: 'spki-base64url',
+  }));
+
   /* ------------------------------------------------------------ node-facing */
 
   /**
@@ -134,7 +153,12 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
       : isNull(games.missingAt);
 
     const rows = db
-      .select({ id: games.id, title: games.title, sizeBytes: games.sizeBytes })
+      .select({
+        id: games.id,
+        title: games.title,
+        relPath: games.relPath,
+        sizeBytes: games.sizeBytes,
+      })
       .from(games)
       .where(scoped)
       .all();
@@ -145,6 +169,10 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
         .map((game) => ({
           gameId: game.id,
           title: game.title,
+          // How a node recognises one of these as a game it holds. It knows
+          // its own catalog by relative path and nothing else — ids are the
+          // coordinator's, and it has never seen them.
+          relPath: game.relPath,
           sizeBytes: game.sizeBytes,
           contentHash: mesh.contentHashFor(game.id),
         }))
@@ -432,7 +460,12 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
     const body = meshEnrolmentSchema.parse(request.body);
 
     // Shown once. Only the hash is kept, so losing it means minting another.
-    return mesh.createEnrolment({ ...body, createdBy: context.user.id });
+    return mesh.createEnrolment({
+      label: body.label,
+      role: body.role,
+      libraryId: body.libraryId ?? null,
+      createdBy: context.user.id,
+    });
   });
 
   app.delete('/mesh/enrolments/:tokenHash', async (request) => {

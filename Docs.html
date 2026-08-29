@@ -33,7 +33,7 @@
 
           <div class="note">…</div>        an aside
           <div class="warn">…</div>        something that will bite
-          <div class="new" data-since="0.6.2">…</div>
+          <div class="new" data-since="0.6.3">…</div>
                                            changed in a named release; the
                                            badge reads the version out of
                                            data-since, so a note about an old
@@ -601,7 +601,7 @@
   <body>
     <header class="top">
       <button class="menu-toggle" id="menu-toggle" aria-expanded="false">Contents</button>
-      <span class="brand">GameBlade <span class="version">0.6.2</span></span>
+      <span class="brand">GameBlade <span class="version">0.6.3</span></span>
       <span class="spacer"></span>
       <a class="external" href="https://github.com/scopeddlol/GameBlade">GitHub</a>
       <a class="external" href="docs/API.md">API reference</a>
@@ -657,6 +657,37 @@
               <h4>Small</h4>
               <p>One Alpine container, SQLite, no external database or cache.</p>
             </div>
+          </div>
+
+          <div class="new" data-since="0.6.3">
+            <p>
+              <strong>Pairing a node is now the only step there is</strong>, and the mesh actually
+              turns on by itself:
+            </p>
+            <ul>
+              <li>
+                <strong>Hashes a node computed after it first reported were being dropped.</strong>
+                Hashing changes nothing a report compares — not size, not file count, not
+                modification time — so every game came back &ldquo;unchanged&rdquo; and the
+                afternoon's work went in the bin. A coordinator that had never been a standalone
+                server never had one eligible game, and nothing said so.
+              </li>
+              <li>
+                <strong>A node gets its library when it registers</strong>, named after it. No
+                creating one by hand, no path that does not exist, no coming back to assign it.
+                See <a href="#deploy-libraries">libraries</a>.
+              </li>
+              <li>
+                <strong>A node takes the hashes the coordinator already has</strong> instead of
+                re-reading terabytes to arrive at the same numbers. See
+                <a href="#deploy-hashing">hashing</a>.
+              </li>
+              <li>
+                <strong>The relay is part of the coordinator's compose file</strong> and fetches
+                its own key. It is not optional on this topology and no longer acts like it is.
+                See <a href="#relay">the relay</a>.
+              </li>
+            </ul>
           </div>
 
           <div class="new" data-since="0.6.2">
@@ -1418,52 +1449,63 @@ cp .env.example .env</code></pre>
           </p>
 
           <h4 id="relay-running">Running one</h4>
-          <p>
-            The relay is the same image with a different command, beside the coordinator, plus one
-            line on the coordinator telling clients it exists. Note the two halves of the address:
-            <code>RELAY_ENDPOINT</code> is what clients are told to dial, so it is the coordinator
-            host's <em>public</em> name and the relay's port &mdash; not <code>localhost</code>,
-            and not the port the container publishes it on if those differ.
-          </p>
-          <pre><code>services:
-  relay:
-    image: ghcr.io/scopeddlol/gameblade:latest
+          <div class="new" data-since="0.6.3">
+            <p>
+              <strong>Not optional on a coordinator, and no longer fiddly.</strong> It ships in
+              <code>docker-compose.coordinator.yml</code> as a second service, and it fetches the
+              coordinator's public key from the coordinator itself &mdash; waiting for it if it is
+              not up yet, which it usually is not, because the two start together.
+            </p>
+          </div>
+          <pre><code>  relay:
+    image: ghcr.io/scopeddlol/gameblade-relay:latest
     container_name: gameblade-relay
     restart: unless-stopped
-    entrypoint: ['/sbin/tini', '--']
-    command: ['gameblade-relay']
+    depends_on: [coordinator]
     environment:
-      GAMEBLADE_COORDINATOR_KEY: '&lt;base64url SPKI&gt;'
-      GAMEBLADE_RELAY_PORT: '47821'
+      GAMEBLADE_SERVER: http://coordinator:8080
       GAMEBLADE_RELAY_MAX: '256'
     ports:
       - '47821:47821/udp'</code></pre>
           <p>
-            Then on the coordinator: <code>RELAY_ENDPOINT: games.example.com:47821</code>, and open
-            <code>47821/udp</code> on the host firewall. The reverse proxy is not involved &mdash;
-            this is UDP and it is not HTTP.
+            The one thing you must supply is on the coordinator, not here:
+            <code>RELAY_ENDPOINT</code> is what clients are told to dial, so it is your
+            <em>public</em> hostname and the relay's port &mdash; not <code>localhost</code>, not
+            the container name, and not the internal port if the published one differs. The
+            shipped compose file refuses to start without it rather than letting you find out from
+            a player who cannot download.
+          </p>
+          <pre><code>RELAY_ENDPOINT=games.example.com:47821</code></pre>
+          <p>
+            Then open <code>47821/udp</code> on the host firewall. The reverse proxy is not
+            involved &mdash; this is UDP and it is not HTTP, so Caddy has nothing to do with it.
           </p>
 
-          <h4 id="relay-key">Finding the coordinator's public key</h4>
           <div class="warn">
             <p>
-              <strong>The panel does not display it as of 0.6.2</strong>, although the relay's own
-              usage text says to look on the Nodes page. It is handed to a node at enrolment, so
-              the place to read it is a node that has already enrolled &mdash; the
-              <code>coordinatorKey</code> field of that node's
-              <a href="#deploy-state"><code>data/node-state.json</code></a>.
+              <strong>Why it is required here and optional on one machine.</strong> On a standalone
+              server, a client that cannot reach a node downloads from the server instead and
+              nobody notices. A coordinator holds no game files, so there is no such fallback:
+              without a relay, a player behind a symmetric or carrier-grade NAT cannot download
+              anything at all, and it reads as a broken archive rather than as the network they
+              happen to be behind. It costs almost nothing to have running and unused &mdash; only
+              clients that already failed to connect directly are ever sent to it.
             </p>
           </div>
-          <pre><code># On a node whose agent has registered. A file written by 0.6.1 spells it
-# coordinator_key; either is read.
-python3 -c 'import json; s=json.load(open("data/node-state.json"));
-print(s.get("coordinatorKey") or s.get("coordinator_key"))'</code></pre>
+
+          <h4 id="relay-key">The coordinator's public key</h4>
           <p>
-            It is a public key: it verifies grants and cannot mint one, which is exactly why the
-            relay can be handed it and nothing else. The coordinator generates the pair on first
-            boot and keeps it in its own database, so it survives restarts and image updates and
-            changes only if that row is deleted &mdash; at which point every node and relay has to
-            be given the new one.
+            The relay fetches it and you never touch it. It is published, unauthenticated, at
+            <code>/api/mesh/coordinator-key</code> &mdash; safe to be, because it is the public
+            half: every client is handed it already, it verifies signatures and cannot make one,
+            and the relay is given nothing else. No database, no credentials, no API.
+          </p>
+          <p>
+            Setting <code>GAMEBLADE_COORDINATOR_KEY</code> directly still works, and is the answer
+            for a relay running somewhere that cannot reach the coordinator over HTTP. The pair is
+            generated on the coordinator's first boot and kept in its own database, so it survives
+            restarts and image updates, and changes only if that row is deleted &mdash; at which
+            point every node and relay picks the new one up on its next start.
           </p>
 
           <h3 id="node-page">Looking at a node</h3>
@@ -2012,6 +2054,10 @@ services:
 
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: '&lt;something long, used once&gt;'
+
+      # What clients are told to dial for the relay below: your public
+      # hostname and its port. The one line here you have to edit.
+      RELAY_ENDPOINT: games.example.com:47821
     volumes:
       - ./data:/data
     ports:
@@ -2019,11 +2065,26 @@ services:
       # network, drop this and let it reach `coordinator:8080` by name.
       - '127.0.0.1:8080:8080'
     security_opt:
-      - 'no-new-privileges:true'</code></pre>
+      - 'no-new-privileges:true'
+
+  # The path for clients whose NAT defeats hole punching. Not optional here:
+  # a coordinator holds no game files, so there is no plain download to fall
+  # back to and those players cannot install anything at all without it.
+  relay:
+    image: ghcr.io/scopeddlol/gameblade-relay:latest
+    container_name: gameblade-relay
+    restart: unless-stopped
+    depends_on: [coordinator]
+    environment:
+      # It fetches the coordinator's public key from here itself.
+      GAMEBLADE_SERVER: http://coordinator:8080
+    ports:
+      - '47821:47821/udp'</code></pre>
 
           <p>
             No <code>ROLE</code>, no library mounts, and nothing about scanning: the image is the
-            coordinator, it holds no files, and it will not scan.
+            coordinator, it holds no files, and it will not scan. Open <code>47821/udp</code> on
+            the VPS firewall for the relay; everything else goes through Caddy.
           </p>
 
           <pre><code>mkdir -p data
@@ -2059,46 +2120,59 @@ docker compose up -d</code></pre>
             a file for no benefit.
           </p>
 
-          <h3 id="deploy-libraries">2. One library per node</h3>
+          <h3 id="deploy-libraries">2. Libraries, which you do not have to make</h3>
+          <div class="new" data-since="0.6.3">
+            <p>
+              <strong>A node gets a library when it registers</strong>, named after the node, and
+              is assigned to it in the same breath. There is no step here for a new deployment
+              &mdash; skip to connecting the node.
+            </p>
+          </div>
           <p>
-            A node's catalog is folded into <em>the library assigned to that node</em>, matched by
-            relative path. Two things follow, and the second one is the one that catches people:
+            It is worth knowing what that library is, because two rules follow from it and one of
+            them decides whether a migration goes well.
           </p>
           <ul>
             <li>
-              <strong>A game already in that library keeps its id</strong>, and with it every
+              <strong>A game already in a node's library keeps its id</strong>, and with it every
               achievement, save rule, artwork match, favourite, collection entry and playtime
-              record. That is the guarantee that makes moving an existing install safe.
+              record. Reports are matched by relative path within the assigned library, so
+              reporting again updates rather than re-adds.
             </li>
             <li>
-              <strong>A complete report marks everything else in that library missing.</strong> A
-              node says "here is everything I hold"; anything in its library it did not mention is
-              taken to be gone. So two nodes sharing one library flag each other's games on every
-              report, for ever. <strong>One library per node.</strong> Always.
+              <strong>One library per node, always.</strong> A complete report marks everything
+              else in that library missing &mdash; a node says "here is everything I hold", and
+              anything it did not mention is taken to be gone. Two nodes sharing a library would
+              flag each other's games on every report, for ever. The automatic assignment gives
+              each node its own, so this only becomes possible if you point two of them at one by
+              hand.
             </li>
           </ul>
+          <p>
+            The path on a coordinator's library is a label. Nothing there ever reads through it,
+            which is why an automatic one is <code>/nodes/&lt;node id&gt;</code> and why you can
+            still create one by hand with any path you like.
+          </p>
 
+          <h4 id="deploy-libraries-several">A node with several libraries</h4>
           <p>
-            In <strong>Admin → Catalog → Libraries</strong>, add one per node. Nothing has to exist
-            on the coordinator for this: on a machine that reads its own files a library path is
-            checked at creation, because a library nobody can read is a scan that finds nothing for
-            a week and says so nowhere &mdash; but on a coordinator the games are on somebody
-            else's disk and the path is the label the catalog is filed under.
+            All of a node's own library roots report into its one library on the coordinator. A
+            node with more than one root prefixes each game's path with the root it came from, so
+            two roots that both contain <code>Hollow Knight</code> stay two games rather than
+            fighting over one row. A node with a single root &mdash; which is what the node image
+            configures, and what almost every node is &mdash; reports paths unchanged.
           </p>
-          <div class="scroller">
-            <table>
-              <thead><tr><th>Name</th><th>Path</th></tr></thead>
-              <tbody>
-                <tr><td>Node A</td><td><code>/libraries/node-a</code></td></tr>
-                <tr><td>Node B</td><td><code>/libraries/node-b</code></td></tr>
-              </tbody>
-            </table>
+
+          <div class="warn">
+            <p>
+              <strong>Taking over an existing library is decided on the code, not afterwards.</strong>
+              When a node is replacing hardware, or you are splitting a standalone server into a
+              coordinator and a node, pick that library under <strong>Reports into</strong> when
+              you generate the enrolment code. Assigning it after the node has registered is a race
+              you lose: the node reports into its new library first, and the catalog everything is
+              attached to is orphaned.
+            </p>
           </div>
-          <p>
-            Any two distinct paths do; they need not resemble the paths on the nodes, and matching
-            them is only a kindness to whoever reads this later. Each has to be unique, because two
-            libraries cannot share one path.
-          </p>
 
           <h3 id="deploy-nodes">3. Connecting a node</h3>
           <p>
@@ -2146,9 +2220,9 @@ services:
           </div>
 
           <p>
-            Repeat for the second node, with its own enrolment code, its own <code>data/</code>,
-            and its own library on the coordinator. Two nodes must never share a library &mdash;
-            see <a href="#deploy-libraries">one library per node</a> for what happens if they do.
+            Repeat for the second node with its own enrolment code and its own
+            <code>data/</code>. Each gets its own library automatically, which is what they must
+            have &mdash; see <a href="#deploy-libraries">libraries</a>.
           </p>
 
           <div class="note">
@@ -2212,6 +2286,23 @@ services:
             next catalog report carries the results up. There is nothing to run and nothing to
             enable.
           </p>
+
+          <div class="new" data-since="0.6.3">
+            <p>
+              <strong>It asks before it reads.</strong> The first thing a node does after pairing is
+              ask the coordinator which of the games it holds are already hashed, and take those
+              hashes rather than recomputing them. Hashes describe file contents, so a copy that
+              matches is described by them exactly &mdash; and on a coordinator split off a
+              standalone server, or one that already has another node holding the same games, that
+              is the entire library and the hours disappear.
+            </p>
+            <p>
+              Matched on relative path, then checked file by file on size, and adopted all-or-nothing
+              per game. Anything that does not line up is hashed locally in the ordinary way,
+              because adopting hashes for bytes this machine does not have would mean advertising a
+              game and then failing every chunk of it.
+            </p>
+          </div>
           <div class="scroller">
             <table>
               <thead><tr><th>It waits for</th><th>Because</th></tr></thead>
@@ -2325,11 +2416,11 @@ services:
               writing down for a node you do not live with.
             </li>
             <li>
-              <strong>Then decide about <a href="#relay">the relay</a>.</strong> With ports
-              forwarded and <code>mesh-doctor</code> content, most clients connect directly and the
-              relay is rarely asked for anything. Without them, on this topology, it is the only
-              thing standing between a player behind a hostile NAT and a game they cannot download
-              at all.
+              <strong><a href="#relay">The relay</a> is already running</strong>, because the
+              coordinator's compose file includes it. With ports forwarded and
+              <code>mesh-doctor</code> content it will rarely be asked for anything, which is the
+              point: it is there for the players whose NAT you cannot do anything about, and you
+              find out who those are by them being unable to download.
             </li>
           </ol>
 
@@ -2360,7 +2451,7 @@ services:
                 <tr>
                   <td>The coordinator is up and knows what it is</td>
                   <td><code>curl https://games.example.com/api/health</code></td>
-                  <td><code>{"status":"ok","version":"0.6.2","role":"coordinator"}</code></td>
+                  <td><code>{"status":"ok","version":"0.6.3","role":"coordinator"}</code></td>
                 </tr>
                 <tr>
                   <td>Each node is up and knows what it is</td>
@@ -3956,7 +4047,7 @@ git push origin main --tags</code></pre>
           <p>AGPL-3.0-only.</p>
           <footer class="page">
             <p>
-              GameBlade 0.6.2 · Documentation lives in <code>Docs.html</code> at the repository root
+              GameBlade 0.6.3 · Documentation lives in <code>Docs.html</code> at the repository root
               and is edited as ordinary HTML — the contents list on the left builds itself from the
               headings.
             </p>

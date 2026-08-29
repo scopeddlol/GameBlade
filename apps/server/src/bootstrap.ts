@@ -165,9 +165,31 @@ export function startSchedules(app: FastifyInstance): () => void {
      */
     const WAITING_INTERVAL_MS = 10_000;
 
+    /*
+     * Asked once per pairing, before this node reads a single byte.
+     *
+     * Anything the coordinator already has hashes for is a game this node does
+     * not have to spend an hour on, and on a coordinator split off a standalone
+     * server that is the entire library. Guarded so a node that has already
+     * asked does not ask again on every report.
+     */
+    let adopted = false;
+    const adoptOnce = async () => {
+      if (adopted) return;
+      adopted = true;
+      try {
+        await reporter.adoptKnownHashes();
+      } catch (error) {
+        // Not fatal in any way: whatever this could not take, the local
+        // hashing sweep computes instead.
+        app.log.warn({ err: error }, 'could not take hashes from the coordinator');
+      }
+    };
+
     const publish = async (): Promise<number> => {
       try {
         if (!(await reporter.ensureRegistered())) return WAITING_INTERVAL_MS;
+        await adoptOnce();
 
         const games = reporter.collect().length;
         const ok = await reporter.report();

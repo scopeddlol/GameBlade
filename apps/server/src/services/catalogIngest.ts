@@ -1,5 +1,5 @@
 import { MESH_CHUNK_BYTES, type ReportedGame, type ReportedFile } from '@gameblade/shared';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { gameFileChunks, gameFiles, games, libraries, meshNodes } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
@@ -96,6 +96,35 @@ export class CatalogIngestService {
         .map((game) => [game.relPath, game]),
     );
 
+    /*
+     * How many of each game's files this coordinator already has hashes for.
+     *
+     * Needed because hashing changes nothing else. A node reports its catalog
+     * within minutes of starting and then spends hours hashing, and every
+     * property the comparison below looks at — size, file count, modification
+     * time — is identical before and after. So every game came back
+     * "unchanged", the hashes were dropped, and the mesh never had a single
+     * eligible game on a coordinator that had not been a standalone server
+     * first. Nothing errored; the catalog was complete and none of it was
+     * servable.
+     *
+     * One grouped query rather than a lookup per game: a report is thousands
+     * of them.
+     */
+    const chunkedFiles = new Map(
+      this.db
+        .select({
+          gameId: gameFiles.gameId,
+          chunked: sql<number>`sum(case when ${gameFiles.chunkBytes} = ${MESH_CHUNK_BYTES} then 1 else 0 end)`,
+        })
+        .from(gameFiles)
+        .innerJoin(games, eq(games.id, gameFiles.gameId))
+        .where(eq(games.libraryId, library.id))
+        .groupBy(gameFiles.gameId)
+        .all()
+        .map((row) => [row.gameId, Number(row.chunked)]),
+    );
+
     const result: IngestResult = { added: 0, updated: 0, unchanged: 0, missing: 0 };
     const seen = new Set<string>();
     const now = new Date().toISOString();
@@ -121,11 +150,19 @@ export class CatalogIngestService {
       const current = existing.get(item.relPath);
 
       if (current) {
+        // What the node says it has hashed, against what is stored. Equal is
+        // the steady state — a node reporting the same library every five
+        // minutes must not rewrite every file row for ever — and different in
+        // either direction is work that has happened since the last report.
+        const reportedChunked = item.files.filter((file) => file.chunks?.length).length;
+        const storedChunked = chunkedFiles.get(current.id) ?? 0;
+
         const unchanged =
           current.sizeBytes === item.sizeBytes &&
           current.fileCount === item.files.length &&
           current.contentMtime === item.contentMtime &&
-          current.missingAt === null;
+          current.missingAt === null &&
+          reportedChunked === storedChunked;
 
         if (unchanged) {
           result.unchanged += 1;

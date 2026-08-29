@@ -9,13 +9,19 @@
 //! TLS, never sees a game file, and holds nothing but a table of which two
 //! sockets belong together.
 //!
-//!     GAMEBLADE_COORDINATOR_KEY   base64url SPKI, from Admin → Nodes (required)
+//!     GAMEBLADE_SERVER            https://games.example.com  (or the key below)
+//!     GAMEBLADE_COORDINATOR_KEY   base64url SPKI             (or the URL above)
 //!     GAMEBLADE_RELAY_PORT        47821  (default)
 //!     GAMEBLADE_RELAY_MAX         256    (concurrent sessions)
 //!
-//! It needs the coordinator's public key and nothing else — no database, no
-//! credentials, no API. Tickets are verified locally, which is what lets it be
-//! this small.
+//! Give it the coordinator's address and it fetches the key itself, waiting
+//! for the coordinator if it is not up yet — the two are usually started
+//! together and whichever comes second should not have to be restarted.
+//! Pasting the key in directly still works for a relay run somewhere that
+//! cannot reach the coordinator over HTTP.
+//!
+//! It needs that public key and nothing else — no database, no credentials, no
+//! API. Tickets are verified locally, which is what lets it be this small.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -24,16 +30,6 @@ use gameblade_mesh::relay::{Action, Relay, MAX_DATAGRAM};
 use gameblade_mesh::MESH_RELAY_DEFAULT_PORT;
 use tokio::net::UdpSocket;
 
-fn required(name: &str) -> String {
-    match std::env::var(name) {
-        Ok(value) if !value.trim().is_empty() => value,
-        _ => {
-            eprintln!("{name} must be set. See the comment at the top of this binary.");
-            std::process::exit(2);
-        }
-    }
-}
-
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -41,13 +37,88 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// How long to wait between attempts at a coordinator that is not up yet.
+const KEY_RETRY: Duration = Duration::from_secs(5);
+
+/// Ask the coordinator for its public key, waiting until it answers.
+///
+/// A relay and the coordinator it belongs to are started together, so the
+/// relay routinely comes up first. Exiting for want of an answer would put it
+/// in a restart loop until the other container finished booting, and the logs
+/// would blame the relay.
+async fn fetch_coordinator_key(server_url: &str) -> String {
+    #[derive(serde::Deserialize)]
+    struct Published {
+        #[serde(rename = "publicKey")]
+        public_key: String,
+    }
+
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .expect("an HTTP client with only a timeout set always builds");
+
+    loop {
+        let response = http
+            .get(format!("{server_url}/api/mesh/coordinator-key"))
+            .send()
+            .await;
+
+        match response {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<Published>().await {
+                    Ok(body) if !body.public_key.trim().is_empty() => return body.public_key,
+                    Ok(_) => eprintln!("the coordinator published an empty key; retrying"),
+                    Err(err) => eprintln!("could not read the coordinator's key: {err}"),
+                }
+            }
+            Ok(response) => eprintln!(
+                "the coordinator answered {} for its key; retrying",
+                response.status()
+            ),
+            Err(err) => eprintln!("waiting for the coordinator: {err}"),
+        }
+
+        tokio::time::sleep(KEY_RETRY).await;
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    let key = required("GAMEBLADE_COORDINATOR_KEY");
+    // The address is the easy way and the key is the escape hatch, so an
+    // operator supplies one or the other rather than looking a value up by
+    // hand for a component that should just be running.
+    println!("GameBlade relay");
+
+    let key = match std::env::var("GAMEBLADE_COORDINATOR_KEY") {
+        Ok(value) if !value.trim().is_empty() => {
+            println!("  key:         from the environment");
+            value
+        }
+        _ => {
+            let server_url = match std::env::var("GAMEBLADE_SERVER") {
+                Ok(value) if !value.trim().is_empty() => {
+                    value.trim().trim_end_matches('/').to_string()
+                }
+                _ => {
+                    eprintln!(
+                        "Set GAMEBLADE_SERVER to the coordinator's address, or \
+                         GAMEBLADE_COORDINATOR_KEY to its public key."
+                    );
+                    std::process::exit(2);
+                }
+            };
+            println!("  coordinator: {server_url}");
+            let fetched = fetch_coordinator_key(&server_url).await;
+            println!("  key:         taken from the coordinator");
+            fetched
+        }
+    };
+
     let coordinator = match coordinator_key_from_spki(&key) {
         Ok(key) => key,
         Err(err) => {
-            eprintln!("GAMEBLADE_COORDINATOR_KEY is not usable: {err}");
+            eprintln!("the coordinator's public key is not usable: {err}");
             std::process::exit(2);
         }
     };
@@ -70,9 +141,8 @@ async fn main() {
         }
     };
 
-    println!("GameBlade relay");
-    println!("  listening: 0.0.0.0:{port}/udp");
-    println!("  sessions:  up to {max_sessions}");
+    println!("  listening:   0.0.0.0:{port}/udp");
+    println!("  sessions:    up to {max_sessions}");
 
     let mut relay = Relay::new(coordinator, max_sessions);
     let mut buffer = vec![0u8; MAX_DATAGRAM];

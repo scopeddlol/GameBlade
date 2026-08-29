@@ -284,6 +284,16 @@ export type MeshReportInput = z.infer<typeof meshReportSchema>;
 export const meshEnrolmentSchema = z.object({
   label: z.string().trim().min(1).max(64),
   role: z.enum(['origin', 'mirror']),
+  /**
+   * An existing library for this node to take over.
+   *
+   * Omitted for a new node, which gets one created for it when it registers.
+   * Named here — before the node exists — when it is replacing a machine or
+   * splitting a standalone server apart, because assigning it afterwards is a
+   * race the operator loses: the node reports into its fresh library first,
+   * and the catalog everything is attached to is orphaned.
+   */
+  libraryId: z.string().trim().max(64).nullish(),
 });
 export type MeshEnrolmentInput = z.infer<typeof meshEnrolmentSchema>;
 

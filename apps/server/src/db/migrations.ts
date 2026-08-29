@@ -1166,4 +1166,21 @@ export const migrations: Migration[] = [
       ALTER TABLE mesh_nodes ADD COLUMN catalog_status TEXT;
     `,
   },
+  {
+    id: '0027_enrolment_library',
+    sql: /* sql */ `
+      -- Which library a code's node should report into, chosen at the moment
+      -- the code is generated rather than after the node has registered.
+      --
+      -- A node now gets a library created for it automatically, which removes
+      -- the step where an operator had to make one by hand and remember to
+      -- assign it. That is right for a new node and wrong for one taking over
+      -- a library that already exists: there, the fresh library is a race the
+      -- operator loses, because the node reports into it before anybody can
+      -- retarget, and every achievement, save rule and playtime record is left
+      -- hanging off a catalog nothing references. Naming the destination on
+      -- the code settles it before the node exists.
+      ALTER TABLE mesh_enrollments ADD COLUMN library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL;
+    `,
+  },
 ];

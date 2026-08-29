@@ -24,6 +24,9 @@ import { ApiError } from '../lib/errors.js';
 import { hashToken, newId, newToken, safeEqual } from '../lib/ids.js';
 import type { Logger } from './metadata/service.js';
 
+/** The handle drizzle hands a transaction body. */
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
 /** How long an unused enrolment code stays good for. */
 const ENROLMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -72,12 +75,27 @@ export class MeshService {
    * who loses the code generates another rather than recovering it — the same
    * posture as every other credential in this system.
    */
-  createEnrolment(options: { label: string; role: MeshNodeRole; createdBy: string }): {
+  createEnrolment(options: {
+    label: string;
+    role: MeshNodeRole;
+    createdBy: string;
+    /** An existing library to take over, instead of getting a new one. */
+    libraryId?: string | null;
+  }): {
     token: string;
     expiresAt: string;
   } {
     const token = newToken(24);
     const expiresAt = new Date(Date.now() + ENROLMENT_TTL_MS).toISOString();
+
+    if (options.libraryId) {
+      const library = this.db
+        .select({ id: libraries.id })
+        .from(libraries)
+        .where(eq(libraries.id, options.libraryId))
+        .get();
+      if (!library) throw ApiError.notFound('That library does not exist');
+    }
 
     this.db
       .insert(meshEnrollments)
@@ -86,11 +104,40 @@ export class MeshService {
         label: options.label,
         role: options.role,
         createdBy: options.createdBy,
+        libraryId: options.libraryId ?? null,
         expiresAt,
       })
       .run();
 
     return { token, expiresAt };
+  }
+
+  /**
+   * The library a newly enrolled node reports into.
+   *
+   * Made here rather than asked of an operator. A node's catalog has to land
+   * somewhere and a coordinator holds no files, so "create a library, give it a
+   * path that does not exist on this machine, then come back and assign it"
+   * was three steps of ceremony around a decision with one sensible answer —
+   * and until all three were done the node reported into nothing and said so
+   * only in a log.
+   *
+   * The path is synthetic and derived from the node id, because it is a label:
+   * nothing on a coordinator ever reads through it, it only has to be unique
+   * and to say what it belongs to when somebody reads the libraries list.
+   */
+  private libraryForNewNode(tx: Tx, nodeId: string, label: string): string {
+    const libraryId = newId('lib');
+    tx.insert(libraries)
+      .values({
+        id: libraryId,
+        name: label,
+        path: `/nodes/${nodeId}`,
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      })
+      .run();
+    return libraryId;
   }
 
   listEnrolments() {
@@ -172,6 +219,11 @@ export class MeshService {
     const now = new Date().toISOString();
 
     this.db.transaction((tx) => {
+      // The code said where to report, or this node gets somewhere of its own.
+      // Either way it is decided here, so a node is never enrolled and idle
+      // waiting for somebody to finish setting it up.
+      const libraryId = enrolment.libraryId ?? this.libraryForNewNode(tx, nodeId, enrolment.label);
+
       tx.insert(meshNodes)
         .values({
           id: nodeId,
@@ -181,6 +233,7 @@ export class MeshService {
           publicKey: input.publicKey,
           tokenHash: hashToken(nodeToken),
           agentVersion: input.agentVersion ?? null,
+          libraryId,
           lastSeenAt: now,
         })
         .run();

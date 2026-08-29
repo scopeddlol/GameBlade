@@ -193,24 +193,37 @@ describe('a node joining a coordinator', () => {
 
       /* ------------------------------------------------------- the catalog */
 
-      // Refused until a library is assigned, on purpose: guessing would add the
-      // whole catalog again as new games.
-      expect(await reporter.report()).toBe(false);
-
-      coordinator.gameblade.db
-        .update(meshNodes)
-        .set({ libraryId })
+      // A library was made for this node when it registered, so there is no
+      // step between enrolling and reporting. Nobody had to create one, name a
+      // path that does not exist on this machine, and come back to assign it.
+      const assigned = coordinator.gameblade.db
+        .select()
+        .from(meshNodes)
         .where(eq(meshNodes.id, state.nodeId!))
-        .run();
+        .get();
+      expect(assigned?.libraryId).toBeTruthy();
+
+      const theirs = coordinator.gameblade.db
+        .select()
+        .from(libraries)
+        .where(eq(libraries.id, assigned!.libraryId!))
+        .get();
+      expect(theirs?.name).toBe('Home archive');
 
       expect(await reporter.report()).toBe(true);
 
       const onCoordinator = coordinator.gameblade.db
         .select()
         .from(games)
-        .where(eq(games.libraryId, libraryId))
+        .where(eq(games.libraryId, assigned!.libraryId!))
         .all();
       expect(onCoordinator.map((g) => g.relPath)).toEqual(['Hollow Knight']);
+
+      // And the library made by hand in beforeAll is untouched: an automatic
+      // one is a new library, never somebody else's.
+      expect(
+        coordinator.gameblade.db.select().from(games).where(eq(games.libraryId, libraryId)).all(),
+      ).toHaveLength(0);
 
       // The page has stopped asking and started reporting.
       const after = await node.inject({ method: 'GET', url: '/' });
@@ -244,7 +257,7 @@ describe('a node joining a coordinator', () => {
       const withTheEmptyOne = coordinator.gameblade.db
         .select()
         .from(games)
-        .where(eq(games.libraryId, libraryId))
+        .where(eq(games.libraryId, assigned!.libraryId!))
         .all();
       expect(withTheEmptyOne.map((g) => g.relPath).sort()).toEqual([
         'An Empty Folder',
