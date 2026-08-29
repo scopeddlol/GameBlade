@@ -243,8 +243,7 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
 
     if enrolment.is_empty() {
         return Err(MeshError::Refused(
-            "no enrolment code: paste one from Admin → Nodes into this node's setup page"
-                .into(),
+            "no enrolment code: paste one from Admin → Nodes into this node's setup page".into(),
         ));
     }
 
