@@ -77,16 +77,29 @@ describe('a node joining a coordinator', () => {
       csrf: (setup.json() as { csrfToken: string }).csrfToken,
     };
 
-    // A library for the node to report into. The path need not exist on a
-    // coordinator; it is the label the catalog is filed under.
-    const created = await coordinator.inject({
-      method: 'POST',
-      url: '/api/admin/libraries',
-      headers: auth(),
-      payload: { name: 'Home archive', path: '/libraries/home' },
-    });
-    expect(created.statusCode).toBe(201);
-    libraryId = (created.json() as { id: string }).id;
+    /*
+     * A library that already exists on this coordinator, written directly.
+     *
+     * Not through the API: a coordinator holds no game files and refuses to be
+     * given a folder, because it has nothing to read one from. A row like this
+     * arrives one of two ways in reality — a standalone server's database
+     * copied across, or a node's own enrolment making one — and this stands in
+     * for the first, so the assertions below can prove an enrolling node makes
+     * its *own* rather than adopting somebody else's.
+     */
+    libraryId = newId('lib');
+    coordinator.gameblade.db
+      .insert(libraries)
+      .values({
+        id: libraryId,
+        name: 'Somebody else’s archive',
+        path: '/libraries/original',
+        enabled: true,
+        createdAt: new Date().toISOString(),
+        lastScanAt: null,
+        lastScanStatus: null,
+      })
+      .run();
   });
 
   afterAll(async () => {
@@ -219,8 +232,8 @@ describe('a node joining a coordinator', () => {
         .all();
       expect(onCoordinator.map((g) => g.relPath)).toEqual(['Hollow Knight']);
 
-      // And the library made by hand in beforeAll is untouched: an automatic
-      // one is a new library, never somebody else's.
+      // And the library that was already there is untouched: an automatic one
+      // is a new library, never somebody else's.
       expect(
         coordinator.gameblade.db.select().from(games).where(eq(games.libraryId, libraryId)).all(),
       ).toHaveLength(0);

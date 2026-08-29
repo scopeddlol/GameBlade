@@ -10,7 +10,7 @@
 //! the node serves instead of from a compose file:
 //!
 //!     GAMEBLADE_SERVER      https://games.example.com   (or from the state file)
-//!     GAMEBLADE_LIBRARY     /library                     (default, read-only)
+//!     GAMEBLADE_LIBRARY     /library                     (or read off the mounts)
 //!     GAMEBLADE_ENROLMENT   <code from Admin → Nodes>    (or from the state file)
 //!     GAMEBLADE_STATE       /data/node-state.json        (default)
 //!     GAMEBLADE_PORT        47820                        (default; 0 for any)
@@ -34,8 +34,8 @@ use gameblade_mesh::diagnostics::DEFAULT_STUN_SERVERS;
 use gameblade_mesh::node::NodeServer;
 use gameblade_mesh::transport::MeshEndpoint;
 use gameblade_mesh::{
-    MeshError, MeshResult, DEFAULT_LIBRARY_ROOT, DEFAULT_STATE_PATH, MESH_DEFAULT_PORT,
-    UNCONFIGURED_POLL,
+    library_roots, MeshError, MeshResult, DEFAULT_STATE_PATH, MESH_DEFAULT_PORT,
+    MULTI_LIBRARY_ROOT, UNCONFIGURED_POLL,
 };
 use serde::Deserialize;
 use tokio::sync::RwLock;
@@ -91,9 +91,11 @@ fn coordinator_url(state_path: &std::path::Path) -> Option<String> {
 
 #[tokio::main]
 async fn main() {
-    let library_root = PathBuf::from(
-        optional("GAMEBLADE_LIBRARY").unwrap_or_else(|| DEFAULT_LIBRARY_ROOT.to_string()),
-    );
+    // Several, because a node can hold several disks. Declared with
+    // GAMEBLADE_LIBRARY, or read off the mounts when it is not — the same two
+    // places the server half beside this process looks, so both halves agree
+    // about what this machine holds without either being configured twice.
+    let library_roots = library_roots(optional("GAMEBLADE_LIBRARY").as_deref());
     let state_path = PathBuf::from(
         optional("GAMEBLADE_STATE").unwrap_or_else(|| DEFAULT_STATE_PATH.to_string()),
     );
@@ -102,17 +104,23 @@ async fn main() {
         .unwrap_or(MESH_DEFAULT_PORT);
 
     println!("GameBlade node agent");
-    println!("  library: {}", library_root.display());
+    if library_roots.is_empty() {
+        println!("  library: (none found)");
+    } else {
+        for root in &library_roots {
+            println!("  library: {}", root.display());
+        }
+    }
     println!("  state:   {}", state_path.display());
 
-    if !library_root.is_dir() {
+    if library_roots.is_empty() {
         // Not fatal, and deliberately so: the library is a volume mount, and a
         // compose file whose mount is wrong is fixed by editing the compose
         // file — which is a great deal easier to do against a node that is
         // running and saying what is wrong than against one in a crash loop.
         eprintln!(
-            "  warning: {} is not a directory. Mount the games there; nothing can be served until you do.",
-            library_root.display()
+            "  warning: nothing is mounted at /library, and {MULTI_LIBRARY_ROOT} is empty. \
+             Mount the games at one of those, read-only; nothing can be served until you do."
         );
     }
 
@@ -171,7 +179,7 @@ async fn main() {
         println!("  seen as: (could not determine — clients may not reach this node)");
     }
 
-    run(agent, server_url, library_root, state_path).await;
+    run(agent, server_url, library_roots, state_path).await;
 }
 
 async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> MeshResult<Agent> {
@@ -235,7 +243,7 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
 
     if enrolment.is_empty() {
         return Err(MeshError::Refused(
-            "no enrolment code: paste one from Admin → Settings → Nodes into this node's setup page"
+            "no enrolment code: paste one from Admin → Nodes into this node's setup page"
                 .into(),
         ));
     }
@@ -331,7 +339,7 @@ fn credential_rejected(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN
 }
 
-async fn run(agent: Agent, server_url: String, library_root: PathBuf, state_path: PathBuf) {
+async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, state_path: PathBuf) {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(40))
         .build()
@@ -457,7 +465,7 @@ async fn run(agent: Agent, server_url: String, library_root: PathBuf, state_path
             &server_url,
             &node_id,
             &node_token.read().await.clone(),
-            &library_root,
+            &library_roots,
             &index,
         )
         .await;
@@ -616,7 +624,7 @@ async fn refresh(
     server_url: &str,
     node_id: &str,
     node_token: &str,
-    library_root: &std::path::Path,
+    library_roots: &[PathBuf],
     index: &Arc<RwLock<LibraryIndex>>,
 ) {
     let listed = http
@@ -674,7 +682,7 @@ async fn refresh(
             continue;
         };
 
-        rebuilt.offer(library_root, &game);
+        rebuilt.offer_from_roots(library_roots, &game);
     }
 
     let held = rebuilt.len();

@@ -1,24 +1,34 @@
 import { createHash } from 'node:crypto';
 import {
+  MESH_CHUNK_BYTES,
   MESH_HEARTBEAT_TIMEOUT_SECONDS,
   MESH_MAX_SOURCES_PER_GAME,
   MESH_PUNCH_TTL_SECONDS,
+  MESH_TUNNEL_IDLE_SECONDS,
+  type MeshAnalytics,
+  type MeshDailyPoint,
   type MeshPunchRequest,
   type MeshEndpoint,
   type MeshNodeInfo,
   type MeshNodeRole,
+  type MeshNodeStats,
   type MeshSource,
+  type MeshTunnel,
+  type MeshTunnelMap,
 } from '@gameblade/shared';
-import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import {
+  downloadEvents,
   gameFiles,
+  games,
   libraries,
   meshEnrollments,
   meshNodeEndpoints,
   meshNodeGames,
   meshNodes,
   meshTransfers,
+  users,
 } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { hashToken, newId, newToken, safeEqual } from '../lib/ids.js';
@@ -528,6 +538,10 @@ export class MeshService {
    * punched. The coordinator knows about both, so it tells the node first.
    */
   requestPunch(nodeId: string, request: MeshPunchRequest): void {
+    for (const tunnel of this.live.values()) {
+      if (tunnel.nodeId === nodeId && tunnel.userId === request.userId) tunnel.punches += 1;
+    }
+
     const queued = this.punches.get(nodeId) ?? [];
 
     // Bounded, because this is reachable by any signed-in account asking to
@@ -596,7 +610,14 @@ export class MeshService {
   /* ---------------------------------------------------------------- reporting */
 
   /** Remember that a grant was issued, so its report can be matched to it. */
-  recordGrant(input: { nonce: string; nodeId: string; userId: string; gameId: string }): void {
+  recordGrant(input: {
+    nonce: string;
+    nodeId: string;
+    userId: string;
+    gameId: string;
+    /** Where the client said it could be reached, for the tunnel map. */
+    clientAddress?: string | null;
+  }): void {
     this.db
       .insert(meshTransfers)
       .values({
@@ -606,6 +627,44 @@ export class MeshService {
         gameId: input.gameId,
       })
       .run();
+
+    this.live.set(input.nonce, {
+      nonce: input.nonce,
+      nodeId: input.nodeId,
+      userId: input.userId,
+      gameId: input.gameId,
+      via: 'direct',
+      openedAt: Date.now(),
+      lastReportAt: null,
+      previousReportAt: null,
+      bytesServed: 0,
+      previousBytes: 0,
+      clientNetwork: network(input.clientAddress ?? null),
+      punches: 0,
+    });
+    this.pruneLive();
+  }
+
+  /**
+   * Note that a tunnel went to the relay after failing to connect directly.
+   *
+   * The same tunnel, not a second one: it is the same account fetching the same
+   * game from the same node, and drawing it twice would say the mesh is doing
+   * more work than it is. What changes is the route, which is exactly the thing
+   * an operator watching the map wants to see — a fleet whose tunnels are all
+   * relayed is a fleet paying the coordinator's bandwidth bill after all.
+   */
+  noteRelayed(nodeId: string, userId: string, gameId: string): void {
+    this.relaySessions.push(Date.now());
+    // Bounded, and only ever the last day is read.
+    const cutoff = Date.now() - 24 * 3_600_000;
+    this.relaySessions = this.relaySessions.filter((at) => at >= cutoff).slice(-4_096);
+
+    for (const tunnel of this.live.values()) {
+      if (tunnel.nodeId === nodeId && tunnel.userId === userId && tunnel.gameId === gameId) {
+        tunnel.via = 'relay';
+      }
+    }
   }
 
   /**
@@ -644,6 +703,14 @@ export class MeshService {
         .where(eq(meshNodes.id, input.nodeId))
         .run();
     });
+
+    const tunnel = this.live.get(input.nonce);
+    if (tunnel) {
+      tunnel.previousBytes = tunnel.bytesServed;
+      tunnel.previousReportAt = tunnel.lastReportAt;
+      tunnel.bytesServed = bytes;
+      tunnel.lastReportAt = Date.now();
+    }
   }
 
   /**
@@ -662,7 +729,481 @@ export class MeshService {
     return Number(row?.bytes ?? 0);
   }
 
+  /* ---------------------------------------------------------------- tunnels */
+
+  /**
+   * Every tunnel this coordinator currently believes is open.
+   *
+   * In memory and deliberately so. A tunnel exists for minutes, is worthless
+   * once it closes, and the only durable thing about it — how many bytes it
+   * moved — is already a row in `mesh_transfers`. Writing the live view to disk
+   * would be the busiest thing on this server in service of data nobody reads
+   * twice, and losing it on a restart costs a map that fills itself in again
+   * within one heartbeat.
+   */
+  private readonly live = new Map<string, LiveTunnel>();
+
+  /** When the relay was asked to carry a transfer, for the last day. */
+  private relaySessions: number[] = [];
+
+  /**
+   * Drop tunnels nothing has been heard about, and cap the rest.
+   *
+   * The cap is what stops a busy evening turning this into a leak: the map
+   * shows what is happening now, and a hundred tunnels is already more than
+   * anybody reads off a diagram.
+   */
+  private pruneLive(): void {
+    const cutoff = Date.now() - MESH_TUNNEL_IDLE_SECONDS * 1000;
+    for (const [nonce, tunnel] of this.live) {
+      if ((tunnel.lastReportAt ?? tunnel.openedAt) < cutoff) this.live.delete(nonce);
+    }
+
+    const CAP = 256;
+    if (this.live.size <= CAP) return;
+    const oldest = [...this.live.entries()]
+      .sort((a, b) => (a[1].lastReportAt ?? a[1].openedAt) - (b[1].lastReportAt ?? b[1].openedAt))
+      .slice(0, this.live.size - CAP);
+    for (const [nonce] of oldest) this.live.delete(nonce);
+  }
+
+  /**
+   * The map: the nodes, the relay, and the tunnels currently strung between
+   * them.
+   *
+   * Everything here is the coordinator's belief rather than a measurement. A
+   * direct transfer never crosses this machine, so what it knows is what the
+   * node last said on its heartbeat — and the map carries the timestamp so it
+   * can say "twelve seconds ago" instead of implying it is watching the wire.
+   */
+  tunnelMap(options: { relay: string | null; label: string }): MeshTunnelMap {
+    this.pruneLive();
+
+    const nodes = this.db.select().from(meshNodes).all();
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const endpoints = this.endpointsFor(nodes.map((node) => node.id));
+
+    const counts = new Map<string, number>();
+    for (const row of this.db
+      .select({ nodeId: meshNodeGames.nodeId, count: sql<number>`count(*)` })
+      .from(meshNodeGames)
+      .groupBy(meshNodeGames.nodeId)
+      .all()) {
+      counts.set(row.nodeId, Number(row.count));
+    }
+
+    const names = this.namesFor(
+      [...this.live.values()].map((tunnel) => tunnel.userId),
+      [...this.live.values()].map((tunnel) => tunnel.gameId),
+    );
+
+    const tunnels: MeshTunnel[] = [];
+    for (const tunnel of this.live.values()) {
+      const node = byId.get(tunnel.nodeId);
+      if (!node) continue;
+
+      const elapsed =
+        tunnel.lastReportAt && tunnel.previousReportAt
+          ? (tunnel.lastReportAt - tunnel.previousReportAt) / 1000
+          : 0;
+      const moved = tunnel.bytesServed - tunnel.previousBytes;
+
+      tunnels.push({
+        id: tunnel.nonce,
+        nodeId: tunnel.nodeId,
+        nodeLabel: node.label,
+        nodeRole: node.role,
+        userId: tunnel.userId,
+        username: names.users.get(tunnel.userId) ?? null,
+        gameId: tunnel.gameId,
+        gameTitle: names.games.get(tunnel.gameId) ?? null,
+        via: tunnel.via,
+        state: tunnelState(tunnel),
+        openedAt: new Date(tunnel.openedAt).toISOString(),
+        lastReportAt: tunnel.lastReportAt ? new Date(tunnel.lastReportAt).toISOString() : null,
+        bytesServed: tunnel.bytesServed,
+        bytesPerSecond: elapsed > 0 && moved > 0 ? Math.round(moved / elapsed) : null,
+        clientNetwork: tunnel.clientNetwork,
+        punches: tunnel.punches,
+      });
+    }
+
+    // Busiest first: a map with thirty tunnels on it is read from the top.
+    tunnels.sort((a, b) => (b.bytesPerSecond ?? 0) - (a.bytesPerSecond ?? 0));
+
+    return {
+      generatedAt: new Date().toISOString(),
+      coordinator: { label: options.label, relay: options.relay },
+      nodes: nodes.map((node) => ({
+        id: node.id,
+        label: node.label,
+        role: node.role,
+        status: node.status,
+        address: preferredAddress(endpoints.get(node.id) ?? []),
+        lastSeenAt: node.lastSeenAt,
+        gameCount: counts.get(node.id) ?? 0,
+        bytesServed: node.bytesServed,
+      })),
+      tunnels,
+    };
+  }
+
+  /** Usernames and game titles for the ids a map is about to draw. */
+  private namesFor(userIds: string[], gameIds: string[]) {
+    const uniqueUsers = [...new Set(userIds.filter(Boolean))];
+    const uniqueGames = [...new Set(gameIds.filter(Boolean))];
+
+    const userNames = new Map<string, string>();
+    if (uniqueUsers.length > 0) {
+      for (const row of this.db
+        .select({ id: users.id, username: users.username })
+        .from(users)
+        .where(inArray(users.id, uniqueUsers))
+        .all()) {
+        userNames.set(row.id, row.username);
+      }
+    }
+
+    const gameNames = new Map<string, string>();
+    if (uniqueGames.length > 0) {
+      for (const row of this.db
+        .select({ id: games.id, title: games.title })
+        .from(games)
+        .where(inArray(games.id, uniqueGames))
+        .all()) {
+        gameNames.set(row.id, row.title);
+      }
+    }
+
+    return { users: userNames, games: gameNames };
+  }
+
+  /* -------------------------------------------------------------- analytics */
+
+  /**
+   * The fleet, summarised, with enough history to see whether it is working.
+   *
+   * The question this exists to answer is not "are the nodes up" — the list
+   * says that — but "is the mesh actually carrying the traffic". A coordinator
+   * on a small VPS is why any of this exists, so the share of delivered bytes
+   * that never touched it is the headline, and everything else is there to
+   * explain that number when it is disappointing: games nothing holds, games
+   * one node holds, nodes that stopped reporting.
+   */
+  analytics(options: { days: number; relay: string | null }): MeshAnalytics {
+    const days = Math.min(90, Math.max(1, Math.floor(options.days)));
+    const since = (ago: number) => new Date(Date.now() - ago).toISOString();
+    const day = 24 * 3_600_000;
+
+    const nodes = this.db.select().from(meshNodes).all();
+    const countStatus = (status: string) => nodes.filter((node) => node.status === status).length;
+
+    const meshBytes = (from: string) =>
+      Number(
+        this.db
+          .select({ bytes: sql<number>`coalesce(sum(${meshTransfers.bytesServed}), 0)` })
+          .from(meshTransfers)
+          .where(gte(meshTransfers.issuedAt, from))
+          .get()?.bytes ?? 0,
+      );
+
+    const originBytes = (from: string) =>
+      Number(
+        this.db
+          .select({ bytes: sql<number>`coalesce(sum(${downloadEvents.bytesSent}), 0)` })
+          .from(downloadEvents)
+          .where(gte(downloadEvents.startedAt, from))
+          .get()?.bytes ?? 0,
+      );
+
+    const lifetime = Number(
+      this.db
+        .select({ bytes: sql<number>`coalesce(sum(${meshNodes.bytesServed}), 0)` })
+        .from(meshNodes)
+        .get()?.bytes ?? 0,
+    );
+
+    const mesh7d = meshBytes(since(7 * day));
+    const origin7d = originBytes(since(7 * day));
+    const delivered = mesh7d + origin7d;
+
+    /*
+     * Coverage, counted from what nodes are announcing right now.
+     *
+     * Only online nodes count. A game held solely by a node that went offline
+     * yesterday is, as far as any player is concerned, a game the coordinator
+     * has to serve — and saying otherwise on this page is how an operator
+     * discovers the problem from a bandwidth bill instead.
+     */
+    const catalogGames = Number(
+      this.db
+        .select({ n: sql<number>`count(*)` })
+        .from(games)
+        .where(isNull(games.missingAt))
+        .get()?.n ?? 0,
+    );
+
+    const holders = this.db
+      .select({ gameId: meshNodeGames.gameId, holders: sql<number>`count(*)` })
+      .from(meshNodeGames)
+      .innerJoin(meshNodes, eq(meshNodes.id, meshNodeGames.nodeId))
+      .innerJoin(games, eq(games.id, meshNodeGames.gameId))
+      .where(and(eq(meshNodes.status, 'online'), isNull(games.missingAt)))
+      .groupBy(meshNodeGames.gameId)
+      .all();
+
+    const covered = holders.length;
+    const singleSource = holders.filter((row) => Number(row.holders) === 1).length;
+
+    const history: MeshDailyPoint[] = [];
+    const meshByDay = new Map(
+      this.db
+        .select({
+          date: sql<string>`substr(${meshTransfers.issuedAt}, 1, 10)`,
+          bytes: sql<number>`coalesce(sum(${meshTransfers.bytesServed}), 0)`,
+          transfers: sql<number>`count(*)`,
+        })
+        .from(meshTransfers)
+        .where(gte(meshTransfers.issuedAt, since(days * day)))
+        .groupBy(sql`substr(${meshTransfers.issuedAt}, 1, 10)`)
+        .all()
+        .map((row) => [row.date, row]),
+    );
+
+    const originByDay = new Map(
+      this.db
+        .select({
+          date: sql<string>`substr(${downloadEvents.startedAt}, 1, 10)`,
+          bytes: sql<number>`coalesce(sum(${downloadEvents.bytesSent}), 0)`,
+        })
+        .from(downloadEvents)
+        .where(gte(downloadEvents.startedAt, since(days * day)))
+        .groupBy(sql`substr(${downloadEvents.startedAt}, 1, 10)`)
+        .all()
+        .map((row) => [row.date, row]),
+    );
+
+    // Every day in the window, including the quiet ones. A series that omits
+    // them draws a busy Tuesday next to a busy Friday and hides the weekend.
+    for (let index = days - 1; index >= 0; index -= 1) {
+      const date = new Date(Date.now() - index * day).toISOString().slice(0, 10);
+      history.push({
+        date,
+        meshBytes: Number(meshByDay.get(date)?.bytes ?? 0),
+        originBytes: Number(originByDay.get(date)?.bytes ?? 0),
+        transfers: Number(meshByDay.get(date)?.transfers ?? 0),
+      });
+    }
+
+    const topNodes = this.db
+      .select({
+        nodeId: meshTransfers.nodeId,
+        label: meshNodes.label,
+        bytes: sql<number>`coalesce(sum(${meshTransfers.bytesServed}), 0)`,
+      })
+      .from(meshTransfers)
+      .innerJoin(meshNodes, eq(meshNodes.id, meshTransfers.nodeId))
+      .where(gte(meshTransfers.issuedAt, since(7 * day)))
+      .groupBy(meshTransfers.nodeId, meshNodes.label)
+      .orderBy(sql`sum(${meshTransfers.bytesServed}) desc`)
+      .limit(8)
+      .all()
+      .map((row) => ({ nodeId: row.nodeId, label: row.label, bytes: Number(row.bytes) }))
+      .filter((row) => row.bytes > 0);
+
+    const topGames = this.db
+      .select({
+        gameId: meshTransfers.gameId,
+        title: games.title,
+        bytes: sql<number>`coalesce(sum(${meshTransfers.bytesServed}), 0)`,
+      })
+      .from(meshTransfers)
+      .innerJoin(games, eq(games.id, meshTransfers.gameId))
+      .where(gte(meshTransfers.issuedAt, since(7 * day)))
+      .groupBy(meshTransfers.gameId, games.title)
+      .orderBy(sql`sum(${meshTransfers.bytesServed}) desc`)
+      .limit(8)
+      .all()
+      .map((row) => ({ gameId: row.gameId ?? '', title: row.title, bytes: Number(row.bytes) }))
+      .filter((row) => row.bytes > 0);
+
+    this.pruneLive();
+    const relayCutoff = Date.now() - day;
+
+    return {
+      generatedAt: new Date().toISOString(),
+      days,
+      nodes: {
+        total: nodes.length,
+        online: countStatus('online'),
+        stale: countStatus('stale'),
+        blocked: countStatus('blocked'),
+        pending: countStatus('pending'),
+        operator: nodes.filter((node) => node.role !== 'peer').length,
+        peers: nodes.filter((node) => node.role === 'peer').length,
+      },
+      bytes: {
+        meshLifetime: lifetime,
+        mesh24h: meshBytes(since(day)),
+        mesh7d,
+        origin24h: originBytes(since(day)),
+        origin7d,
+        meshShare: delivered > 0 ? mesh7d / delivered : 0,
+      },
+      coverage: {
+        games: catalogGames,
+        covered,
+        singleSource,
+        uncovered: Math.max(0, catalogGames - covered),
+      },
+      relay: {
+        configured: options.relay !== null,
+        address: options.relay,
+        sessions24h: this.relaySessions.filter((at) => at >= relayCutoff).length,
+        activeSessions: [...this.live.values()].filter((tunnel) => tunnel.via === 'relay').length,
+      },
+      history,
+      topNodes,
+      topGames,
+    };
+  }
+
   /* ------------------------------------------------------------ administration */
+
+  /**
+   * Every node with the numbers an operator actually monitors it by.
+   *
+   * A superset of `listNodes`, and separate from it because the two answer
+   * different questions: that one is "who can serve this game", asked on the
+   * path of every download and kept cheap for that reason; this one is "how is
+   * the fleet doing", asked by one person with a page open.
+   */
+  listNodeStats(): MeshNodeStats[] {
+    const base = this.listNodes();
+    const rows = this.db.select().from(meshNodes).all();
+    const byId = new Map(rows.map((node) => [node.id, node]));
+
+    const day = 24 * 3_600_000;
+    const since = (ago: number) => new Date(Date.now() - ago).toISOString();
+
+    const window = (from: string) =>
+      new Map(
+        this.db
+          .select({
+            nodeId: meshTransfers.nodeId,
+            bytes: sql<number>`coalesce(sum(${meshTransfers.bytesServed}), 0)`,
+            transfers: sql<number>`count(*)`,
+            players: sql<number>`count(distinct ${meshTransfers.userId})`,
+            last: sql<string | null>`max(${meshTransfers.reportedAt})`,
+          })
+          .from(meshTransfers)
+          .where(gte(meshTransfers.issuedAt, from))
+          .groupBy(meshTransfers.nodeId)
+          .all()
+          .map((row) => [row.nodeId, row]),
+      );
+
+    const recent = window(since(day));
+    const weekly = window(since(7 * day));
+
+    const libraryNames = new Map(
+      this.db
+        .select({ id: libraries.id, name: libraries.name })
+        .from(libraries)
+        .all()
+        .map((row) => [row.id, row.name]),
+    );
+
+    // Games in each node's library, and how many of those carry chunk hashes.
+    // The gap between the two is the answer to "why is this node holding two
+    // thousand games and serving none of them".
+    const libraryTotals = new Map(
+      this.db
+        .select({ libraryId: games.libraryId, n: sql<number>`count(*)` })
+        .from(games)
+        .where(isNull(games.missingAt))
+        .groupBy(games.libraryId)
+        .all()
+        .map((row) => [row.libraryId, Number(row.n)]),
+    );
+
+    /*
+     * Games every one of whose files is hashed on the current grid.
+     *
+     * Grouped per game first and counted per library second, because the
+     * condition is about a whole game: one unhashed file makes the game
+     * unservable, and a per-library count of hashed *files* would sit at 99%
+     * while nothing at all could be fetched.
+     */
+    const complete = this.db
+      .select({ gameId: games.id, libraryId: games.libraryId })
+      .from(games)
+      .innerJoin(gameFiles, eq(gameFiles.gameId, games.id))
+      .where(isNull(games.missingAt))
+      .groupBy(games.id)
+      .having(
+        sql`sum(case when ${gameFiles.chunkBytes} = ${MESH_CHUNK_BYTES} then 0 else 1 end) = 0`,
+      )
+      .as('complete');
+
+    const libraryServable = new Map(
+      this.db
+        .select({ libraryId: complete.libraryId, n: sql<number>`count(*)` })
+        .from(complete)
+        .groupBy(complete.libraryId)
+        .all()
+        .map((row) => [row.libraryId, Number(row.n)]),
+    );
+
+    const owners = new Map(
+      this.db
+        .select({ id: users.id, username: users.username })
+        .from(users)
+        .where(
+          inArray(
+            users.id,
+            rows.map((node) => node.ownerId).filter((id): id is string => Boolean(id)),
+          ),
+        )
+        .all()
+        .map((row) => [row.id, row.username]),
+    );
+
+    this.pruneLive();
+    const activeByNode = new Map<string, number>();
+    for (const tunnel of this.live.values()) {
+      activeByNode.set(tunnel.nodeId, (activeByNode.get(tunnel.nodeId) ?? 0) + 1);
+    }
+
+    return base.map((node) => {
+      const row = byId.get(node.id);
+      const today = recent.get(node.id);
+      const week = weekly.get(node.id);
+      const libraryId = row?.libraryId ?? null;
+
+      return {
+        ...node,
+        agentVersion: row?.agentVersion ?? null,
+        createdAt: row?.createdAt ?? new Date(0).toISOString(),
+        libraryId,
+        libraryName: libraryId ? (libraryNames.get(libraryId) ?? null) : null,
+        catalogReportedAt: row?.catalogReportedAt ?? null,
+        catalogStatus: row?.catalogStatus ?? null,
+        libraryGames: libraryId ? (libraryTotals.get(libraryId) ?? 0) : 0,
+        servableGames: libraryId ? (libraryServable.get(libraryId) ?? 0) : 0,
+        bytesServed24h: Number(today?.bytes ?? 0),
+        bytesServed7d: Number(week?.bytes ?? 0),
+        transfers24h: Number(today?.transfers ?? 0),
+        activeTransfers: activeByNode.get(node.id) ?? 0,
+        players7d: Number(week?.players ?? 0),
+        lastTransferAt: week?.last ?? null,
+        ownerUsername: row?.ownerId ? (owners.get(row.ownerId) ?? null) : null,
+        secondsSinceSeen: node.lastSeenAt
+          ? Math.max(0, Math.round((Date.now() - Date.parse(node.lastSeenAt)) / 1000))
+          : null,
+      };
+    });
+  }
 
   listNodes(): MeshNodeInfo[] {
     const rows = this.db.select().from(meshNodes).orderBy(desc(meshNodes.createdAt)).all();
@@ -849,4 +1390,77 @@ export class MeshService {
       );
     }
   }
+}
+
+/**
+ * One tunnel as this coordinator tracks it, in memory.
+ *
+ * Times are epoch milliseconds rather than ISO strings: every one of them is
+ * compared or subtracted, and parsing a string back on each pass of a map that
+ * refreshes every couple of seconds is work for nothing.
+ */
+interface LiveTunnel {
+  nonce: string;
+  nodeId: string;
+  userId: string;
+  gameId: string;
+  via: 'direct' | 'relay';
+  openedAt: number;
+  lastReportAt: number | null;
+  previousReportAt: number | null;
+  bytesServed: number;
+  previousBytes: number;
+  clientNetwork: string | null;
+  punches: number;
+}
+
+/**
+ * What a tunnel is doing, from the little the coordinator can see.
+ *
+ * `connecting` is a grant issued and nothing reported yet — the handshake is
+ * either in progress or it failed, and from here those look the same for the
+ * first half-minute. `transferring` is bytes having moved since the previous
+ * report. `idle` is a tunnel that reported once and has not since: a paused
+ * download, a finished one, or a client that vanished.
+ */
+function tunnelState(tunnel: LiveTunnel): MeshTunnel['state'] {
+  if (tunnel.lastReportAt === null) return 'connecting';
+  if (tunnel.bytesServed > tunnel.previousBytes) return 'transferring';
+  return 'idle';
+}
+
+/**
+ * An address reduced to the network it is on.
+ *
+ * A tunnel map is left open on a screen, and a player's full address is not
+ * something to put on one. Two octets of an IPv4 address, or the first three
+ * groups of an IPv6 one, is enough to tell two players apart and to see that
+ * somebody is on the same LAN as the node they are pulling from — which is the
+ * only thing the map uses it for.
+ */
+function network(address: string | null): string | null {
+  if (!address) return null;
+
+  if (address.includes(':')) {
+    const groups = address.split(':').filter(Boolean).slice(0, 3);
+    return groups.length > 0 ? `${groups.join(':')}::/48` : null;
+  }
+
+  const octets = address.split('.');
+  if (octets.length !== 4) return null;
+  return `${octets[0]}.${octets[1]}.x.x`;
+}
+
+/**
+ * The address worth putting on a node's marker.
+ *
+ * The observed one first: it is what the coordinator saw the node arrive from,
+ * so it is the one that means something to somebody looking at a map from
+ * outside the LAN. A local address is better than nothing when there is no
+ * other.
+ */
+function preferredAddress(endpoints: MeshEndpoint[]): string | null {
+  const observed = endpoints.find((endpoint) => endpoint.kind === 'observed');
+  const chosen = observed ?? endpoints[0];
+  return chosen ? `${chosen.address}:${chosen.port}` : null;
 }

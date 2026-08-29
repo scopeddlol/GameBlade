@@ -80,7 +80,7 @@ export class CatalogIngestService {
       throw new ApiError(
         409,
         'library_not_assigned',
-        'This node has no library assigned. Assign one in Admin → Settings → Nodes before it reports a catalog.',
+        'This node has no library assigned. Assign one in Admin → Nodes before it reports a catalog.',
       );
     }
 

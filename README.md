@@ -69,6 +69,19 @@ and invite people from **Admin → Players → Invites**.
 Anything at the top level of a library root is one game — a directory or an
 archive. Nested folders are that game's files, not separate games.
 
+A node can hold more than one library. Mount each drive under `/libraries` in
+the node's compose file and the directory name becomes the library's name:
+
+```yaml
+volumes:
+  - /mnt/3TB:/libraries/3TB:ro
+  - /mnt/E:/libraries/E:ro
+```
+
+`/library` still works for a single one, and both forms can be used together.
+What does not work is two drives mounted at the same path — Docker keeps one of
+them and the other is silently never read.
+
 ---
 
 ## Where to get it

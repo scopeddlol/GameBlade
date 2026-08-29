@@ -61,19 +61,74 @@ export async function bootstrap(app: FastifyInstance): Promise<void> {
   }
 }
 
-async function seedLibraries(app: FastifyInstance): Promise<void> {
+/** What one pass over the configured roots did. */
+export interface LibrarySyncResult {
+  /** Roots that became libraries on this pass. */
+  added: string[];
+  /** Libraries whose mount came back and which are scanned again. */
+  restored: string[];
+  /** Libraries whose mount is gone; kept, but skipped by the scanner. */
+  unmounted: string[];
+  /** Every root currently configured, whether or not it is readable. */
+  configured: string[];
+}
+
+/**
+ * Bring the library table in line with what is actually mounted.
+ *
+ * Run at boot, and again whenever an operator asks a node to look — because a
+ * drive appearing is a thing that happens after the container started, and
+ * telling somebody to restart a node to have a mount noticed is a poor answer
+ * when the node is right there with a page open.
+ *
+ * Additive in the direction that matters. A root that has gone is *disabled*,
+ * never deleted: deleting it would take the catalog with it, and a mount that
+ * failed on this boot is far more often a mount that will be back than a drive
+ * anybody meant to remove. Disabled means the scanner skips it, which is what
+ * stops one unmounted drive flagging its entire catalog as missing.
+ */
+export async function syncLibraryRoots(app: FastifyInstance): Promise<LibrarySyncResult> {
   const { config, db } = app.gameblade;
+  const result: LibrarySyncResult = {
+    added: [],
+    restored: [],
+    unmounted: [],
+    configured: config.libraryPaths,
+  };
+
+  const readable = async (candidate: string): Promise<boolean> => {
+    const info = await stat(candidate).catch(() => null);
+    return Boolean(info?.isDirectory());
+  };
 
   for (const libraryPath of config.libraryPaths) {
     const resolved = path.resolve(libraryPath);
+    const present = await readable(resolved);
     const existing = db.select().from(libraries).where(eq(libraries.path, resolved)).get();
-    if (existing) continue;
 
-    const info = await stat(resolved).catch(() => null);
-    if (!info?.isDirectory()) {
+    if (existing) {
+      if (present && !existing.enabled) {
+        db.update(libraries).set({ enabled: true }).where(eq(libraries.id, existing.id)).run();
+        result.restored.push(resolved);
+        app.log.info({ path: resolved }, 'library mount is back; scanning it again');
+      } else if (!present && existing.enabled) {
+        db.update(libraries).set({ enabled: false }).where(eq(libraries.id, existing.id)).run();
+        result.unmounted.push(resolved);
+        app.log.warn(
+          { path: resolved },
+          'library mount has gone; skipping it rather than flagging its whole catalog missing',
+        );
+      } else if (!present) {
+        result.unmounted.push(resolved);
+      }
+      continue;
+    }
+
+    if (!present) {
+      result.unmounted.push(resolved);
       app.log.warn(
         { path: resolved },
-        'LIBRARY_PATHS entry is not a readable directory inside the container — check the volume mount',
+        'configured library is not a readable directory inside the container — check the volume mount',
       );
       continue;
     }
@@ -89,8 +144,18 @@ async function seedLibraries(app: FastifyInstance): Promise<void> {
         lastScanStatus: null,
       })
       .run();
-    app.log.info({ path: resolved }, 'registered library from LIBRARY_PATHS');
+    result.added.push(resolved);
+    app.log.info(
+      { path: resolved, discovered: config.libraryPathsDiscovered },
+      'registered a library root',
+    );
   }
+
+  return result;
+}
+
+async function seedLibraries(app: FastifyInstance): Promise<void> {
+  await syncLibraryRoots(app);
 }
 
 /** Retention for feed rows and read notifications, in days. */
@@ -256,27 +321,19 @@ export function startSchedules(app: FastifyInstance): () => void {
    * is reported by the next publish and survives every one after that.
    */
   if (config.reportsCatalogUpstream && config.autoChunkHash) {
-    let hashing = false;
-    const hashSweep = async () => {
-      if (hashing || scanner.isRunning) return;
-      hashing = true;
-      try {
-        const result = await chunks.hashUnhashed(() => scanner.isRunning);
-        if (result.hashed > 0 || result.failed > 0) {
-          app.log.info(result, 'hashed games so they can be served from this node');
-        }
-      } catch (error) {
-        app.log.warn({ err: error }, 'chunk hashing sweep failed');
-      } finally {
-        hashing = false;
-      }
+    // The service owns the run, so this timer only ever asks. An operator who
+    // started one from the node's page is already sweeping, and this returns
+    // false rather than starting a second pass over the same disk.
+    const hashSweep = () => {
+      if (scanner.isRunning) return;
+      chunks.startSweep(() => scanner.isRunning);
     };
 
-    const firstSweep = setTimeout(() => void hashSweep(), 30_000);
+    const firstSweep = setTimeout(hashSweep, 30_000);
     firstSweep.unref();
     timers.push(firstSweep);
 
-    const repeatSweep = setInterval(() => void hashSweep(), 10 * 60_000);
+    const repeatSweep = setInterval(hashSweep, 10 * 60_000);
     repeatSweep.unref();
     timers.push(repeatSweep);
   }

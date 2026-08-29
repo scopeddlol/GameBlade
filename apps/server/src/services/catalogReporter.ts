@@ -253,14 +253,17 @@ export class CatalogReporter {
     const known = body.games ?? [];
     if (known.length === 0) return { adopted: 0, checked: 0 };
 
-    // Only games this node holds and has not hashed yet are worth asking about.
+    // Only games this node holds and has not hashed yet are worth asking about,
+    // keyed the way the coordinator knows them — prefixed for every library
+    // but the first, exactly as `collect` reports them.
+    const prefixes = this.pathPrefixes();
     const mine = new Map(
       this.db
-        .select({ id: games.id, relPath: games.relPath })
+        .select({ id: games.id, relPath: games.relPath, libraryId: games.libraryId })
         .from(games)
         .where(isNull(games.missingAt))
         .all()
-        .map((game) => [game.relPath, game.id]),
+        .map((game) => [`${prefixes.get(game.libraryId) ?? ''}${game.relPath}`, game.id]),
     );
 
     let adopted = 0;
@@ -344,6 +347,39 @@ export class CatalogReporter {
   }
 
   /**
+   * What each of this node's libraries prefixes its paths with, upstream.
+   *
+   * A node's libraries all arrive in *one* library on the coordinator, so two
+   * roots each holding a `Hollow Knight` folder would be one row there and
+   * each report would fight the other over what it contains. Prefixing the
+   * path with the library's name settles it.
+   *
+   * The oldest library is deliberately left unprefixed. Changing the path of a
+   * game that has already been reported makes it a stranger: the coordinator
+   * would add the whole catalog again as new games and orphan every
+   * achievement, save rule, artwork match and playtime record attached to the
+   * originals. A node has always had one root, so that root's paths must keep
+   * the shape they were first reported in — mounting a second drive is then a
+   * thing that adds games rather than one that re-adds all of them.
+   *
+   * Ordered by creation and then by path, so the answer does not depend on the
+   * order SQLite happens to return rows in.
+   */
+  private pathPrefixes(): Map<string, string> {
+    const roots = this.db
+      .select({ id: libraries.id, name: libraries.name })
+      .from(libraries)
+      .orderBy(libraries.createdAt, libraries.path)
+      .all();
+
+    const prefixes = new Map<string, string>();
+    for (const root of roots.slice(1)) {
+      prefixes.set(root.id, `${sanitiseSegment(root.name)}/`);
+    }
+    return prefixes;
+  }
+
+  /**
    * Turn the local scan into the shape the coordinator accepts.
    *
    * No ids travel. The coordinator owns those and matches on relative path, so
@@ -353,27 +389,7 @@ export class CatalogReporter {
   collect(): ReportedGame[] {
     const rows = this.db.select().from(games).all();
     const out: ReportedGame[] = [];
-
-    /*
-     * A node's libraries all arrive in one library on the coordinator, so two
-     * of them holding the same relative path would collide there.
-     *
-     * That is not hypothetical: two roots, each with a `Hollow Knight` folder,
-     * are one row on the coordinator and each report would fight the other over
-     * what it contains. So a node with more than one root prefixes each path
-     * with the root it came from.
-     *
-     * A node with one root — which the node image configures, and which is
-     * almost every node — sends paths unchanged. Not for tidiness: changing the
-     * path of a game that has already been reported makes it a stranger, and
-     * the coordinator would add the whole catalog again and orphan every
-     * achievement, save rule and playtime record attached to the old rows.
-     */
-    const roots = this.db.select({ id: libraries.id, name: libraries.name }).from(libraries).all();
-    const prefixes =
-      roots.length > 1
-        ? new Map(roots.map((root) => [root.id, `${sanitiseSegment(root.name)}/`]))
-        : new Map<string, string>();
+    const prefixes = this.pathPrefixes();
 
     for (const game of rows) {
       // A game the local scanner has flagged as gone is not something to

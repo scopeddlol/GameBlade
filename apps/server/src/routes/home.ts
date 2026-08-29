@@ -26,7 +26,7 @@ function readLandingBlocks(stored: unknown): LandingBlock[] {
 }
 
 export async function homeRoutes(app: FastifyInstance): Promise<void> {
-  const { catalog, db, settings, auth, installer } = app.gameblade;
+  const { catalog, config, db, settings, auth, installer } = app.gameblade;
 
   /**
    * Everything the Home tab renders, in one request.
@@ -65,6 +65,9 @@ export async function homeRoutes(app: FastifyInstance): Promise<void> {
 
     const body: PublicServerInfo = {
       serverName: current.serverName,
+      // Already public on /api/health, and the panel needs it before its first
+      // authenticated request to know which sections apply.
+      role: config.role,
       tagline: current.tagline,
       allowSelfRegistration: current.allowSelfRegistration,
       isConfigured: auth.countUsers() > 0,

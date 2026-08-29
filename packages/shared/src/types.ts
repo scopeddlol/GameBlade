@@ -353,8 +353,21 @@ export interface ClientInstallerInfo {
 }
 
 /** The unauthenticated payload the landing page and sign-in screen read. */
+/**
+ * What a deployment is: everything in one process, the half that holds the
+ * database and the panel, or the half that holds the game files.
+ *
+ * Public because the panel has to know before it can draw itself — a
+ * coordinator has no disk, so offering it a library folder to add or a scan to
+ * start is offering an action that cannot work and, in the case of the scan,
+ * one that used to flag its whole catalog as missing.
+ */
+export type ServerRole = 'standalone' | 'coordinator' | 'node';
+
 export interface PublicServerInfo {
   serverName: string;
+  /** What this deployment is; decides which admin sections make sense. */
+  role: ServerRole;
   tagline: string;
   allowSelfRegistration: boolean;
   /** False until the first administrator exists, which unlocks the setup flow. */

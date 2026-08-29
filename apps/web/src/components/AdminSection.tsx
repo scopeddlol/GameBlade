@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { useCallback } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { useServerRole } from '../hooks/useServerRole.js';
 import { api } from '../lib/api.js';
 import { sectionFor, type Prefetch } from './adminNav.js';
 
@@ -46,7 +47,7 @@ export function usePrefetch(): (hints: Prefetch[] | undefined) => void {
 export function AdminSection() {
   const location = useLocation();
   const prefetch = usePrefetch();
-  const section = sectionFor(location.pathname);
+  const section = sectionFor(location.pathname, useServerRole());
 
   if (!section) return <Outlet />;
 

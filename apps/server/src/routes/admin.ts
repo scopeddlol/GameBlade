@@ -303,14 +303,36 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
+   * Refuse anything that assumes this machine has the game files on it.
+   *
+   * A coordinator has no disk to scan and no folder to add. Both of those used
+   * to be offered anyway, and one of them was destructive: a library row on a
+   * coordinator is the label a node's catalog is filed under, so scanning it
+   * walked a path that either does not exist or is empty — and an empty library
+   * root reads as a library whose games have all been deleted, which flagged
+   * the entire catalog its nodes had just reported as missing.
+   *
+   * The panel no longer shows either control on a coordinator. This is the same
+   * rule enforced where it cannot be routed around, because a bookmark, an API
+   * key or a stale tab is enough to reach a route the navigation has stopped
+   * linking to.
+   */
+  function assertHasLocalFiles(what: string): void {
+    if (config.servesLocalFiles) return;
+    throw new ApiError(
+      409,
+      'no_local_files',
+      `This is a coordinator: it holds no game files, so ${what}. Its libraries are ` +
+        'created for its nodes when they enrol, and each node scans its own disk.',
+    );
+  }
+
+  /**
    * Whether a library path has to exist on this machine.
    *
    * On a standalone server it does, and checking at creation is far better
-   * than silently scanning nothing for a week. On a coordinator it cannot:
-   * the games are on somebody else's disk, the path is the label a node's
-   * catalog is filed under, and requiring it to be present here meant a
-   * coordinator could not create the library its nodes had to report into —
-   * so the topology could not be assembled at all.
+   * than silently scanning nothing for a week. On a coordinator the question
+   * never arises: creating one is refused above.
    */
   async function assertUsableLibraryPath(resolved: string): Promise<void> {
     if (!config.servesLocalFiles) return;
@@ -324,6 +346,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   }
 
   app.post('/admin/libraries', async (request, reply) => {
+    assertHasLocalFiles('there is nothing here to add a folder from');
     const input = createLibrarySchema.parse(request.body);
     const resolved = path.resolve(input.path);
 
@@ -377,6 +400,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   // ---- Scanning ----
 
   app.post('/admin/scan', async (request, reply) => {
+    assertHasLocalFiles('there is nothing here to scan');
     const input = scanRequestSchema.parse(request.body ?? {});
     if (scanner.isRunning) {
       return reply.code(409).send({

@@ -6,6 +6,7 @@ import { AdminSection } from './components/AdminSection.js';
 import { ADMIN_REDIRECTS } from './components/adminNav.js';
 import { Layout } from './components/Layout.js';
 import { PageLoader } from './components/ui.js';
+import { useServerRole } from './hooks/useServerRole.js';
 import { useSession } from './hooks/useSession.js';
 import { useApplyTheme } from './hooks/useTheme.js';
 import { api } from './lib/api.js';
@@ -24,6 +25,9 @@ import { AdminFeaturedPage } from './pages/admin/AdminFeaturedPage.js';
 import { AdminInvitesPage } from './pages/admin/AdminInvitesPage.js';
 import { AdminLibrariesPage } from './pages/admin/AdminLibrariesPage.js';
 import { AdminNodesPage } from './pages/admin/AdminNodesPage.js';
+import { AdminNodeAnalyticsPage } from './pages/admin/AdminNodeAnalyticsPage.js';
+import { AdminNodeEnrolmentPage } from './pages/admin/AdminNodeEnrolmentPage.js';
+import { AdminNodeMapPage } from './pages/admin/AdminNodeMapPage.js';
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage.js';
 import { AdminRequestsPage } from './pages/admin/AdminRequestsPage.js';
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage.js';
@@ -90,6 +94,8 @@ function useServerTheme() {
 
 export function App() {
   useServerTheme();
+  const role = useServerRole();
+
   return (
     <Routes>
       <Route path="/" element={<LandingPage />} />
@@ -126,7 +132,21 @@ export function App() {
             <Route path="achievements" element={<AdminAchievementsPage />} />
             <Route path="featured" element={<AdminFeaturedPage />} />
             <Route path="save-paths" element={<AdminSavePathsPage />} />
-            <Route path="libraries" element={<AdminLibrariesPage />} />
+            {/* A coordinator holds no game files, so there is no folder to add
+                and no disk to scan — and scanning an absent one used to flag
+                its nodes' entire catalog as missing. The server refuses those
+                routes on a coordinator too; this is so a bookmark lands
+                somewhere useful rather than on a page of dead buttons. */}
+            <Route
+              path="libraries"
+              element={
+                role === 'coordinator' ? (
+                  <Navigate to="/admin/nodes" replace />
+                ) : (
+                  <AdminLibrariesPage />
+                )
+              }
+            />
           </Route>
 
           <Route path="players">
@@ -147,11 +167,20 @@ export function App() {
             <Route path="client" element={<AdminClientPage />} />
           </Route>
 
+          {/* Nodes was a tab inside Settings, which put "is my archive being
+              served" next to the Discord token. It is the thing an operator
+              checks, so it is a section. */}
+          <Route path="nodes">
+            <Route index element={<AdminNodesPage />} />
+            <Route path="map" element={<AdminNodeMapPage />} />
+            <Route path="analytics" element={<AdminNodeAnalyticsPage />} />
+            <Route path="enrolment" element={<AdminNodeEnrolmentPage />} />
+          </Route>
+
           <Route path="settings">
             <Route index element={<AdminSettingsPage />} />
             <Route path="discord" element={<AdminDiscordPage />} />
             <Route path="api" element={<AdminApiPage />} />
-            <Route path="nodes" element={<AdminNodesPage />} />
           </Route>
         </Route>
 

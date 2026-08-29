@@ -306,3 +306,175 @@ export const MESH_ALPN = 'gameblade-mesh/1';
 
 /** Default UDP port a node listens on when nothing else is configured. */
 export const MESH_DEFAULT_PORT = 47_820;
+
+/* --------------------------------------------------------- administration */
+
+/**
+ * Everything the panel shows about one node.
+ *
+ * Separate from `MeshNodeInfo`, which is what a *client* is told when it asks
+ * where a game can be found — a public list of addresses and keys. This is the
+ * operator's view, and it carries things no client has any business seeing:
+ * which library the node reports into, how much it has moved for whom, and how
+ * far through hashing its own catalog it is.
+ */
+export interface MeshNodeStats extends MeshNodeInfo {
+  /** The agent build this node last registered with, if it said. */
+  agentVersion: string | null;
+  createdAt: string;
+  /** Which library this node's catalog reports land in, and its name. */
+  libraryId: string | null;
+  libraryName: string | null;
+  /** When the node last reported a catalog, and how that went. */
+  catalogReportedAt: string | null;
+  catalogStatus: string | null;
+  /** Games in the library this node reports into, whatever it is announcing. */
+  libraryGames: number;
+  /** Of those, how many have chunk hashes and so could be served at all. */
+  servableGames: number;
+  /** Bytes this node has served in the last day and the last week. */
+  bytesServed24h: number;
+  bytesServed7d: number;
+  /** Grants issued against this node in the last day, and how many delivered. */
+  transfers24h: number;
+  activeTransfers: number;
+  /** Distinct accounts this node has served in the last week. */
+  players7d: number;
+  /** When this node last reported serving anything. */
+  lastTransferAt: string | null;
+  /** Set for a peer node: whose client it is. */
+  ownerUsername: string | null;
+  /** Seconds since this node was last heard from; null if never. */
+  secondsSinceSeen: number | null;
+}
+
+/** One day of the fleet's history. */
+export interface MeshDailyPoint {
+  /** ISO date, `YYYY-MM-DD`. */
+  date: string;
+  /** Bytes nodes served that day. */
+  meshBytes: number;
+  /** Bytes the coordinator itself served that day, for comparison. */
+  originBytes: number;
+  transfers: number;
+}
+
+/**
+ * The whole mesh at a glance, plus enough history to see a trend.
+ *
+ * The number that matters most is `meshShare`: the mesh exists to keep game
+ * bytes off the coordinator's connection, and the only honest measure of
+ * whether it is working is what fraction of delivered bytes never touched it.
+ */
+export interface MeshAnalytics {
+  generatedAt: string;
+  days: number;
+  nodes: {
+    total: number;
+    online: number;
+    stale: number;
+    blocked: number;
+    pending: number;
+    /** Nodes an operator runs, as opposed to players' clients seeding. */
+    operator: number;
+    peers: number;
+  };
+  bytes: {
+    meshLifetime: number;
+    mesh24h: number;
+    mesh7d: number;
+    origin24h: number;
+    origin7d: number;
+    /** Fraction of the last week's delivered bytes that came from nodes, 0–1. */
+    meshShare: number;
+  };
+  coverage: {
+    /** Games in the catalog that are not flagged missing. */
+    games: number;
+    /** Games at least one online node is currently announcing. */
+    covered: number;
+    /** Games exactly one online node is announcing — a drive failure away from gone. */
+    singleSource: number;
+    /** Games no online node has, which every download therefore costs the coordinator. */
+    uncovered: number;
+  };
+  /** Whether a relay is configured, and what it has been asked to carry. */
+  relay: {
+    configured: boolean;
+    address: string | null;
+    sessions24h: number;
+    activeSessions: number;
+  };
+  history: MeshDailyPoint[];
+  /** Which nodes moved the most this week, most first. */
+  topNodes: { nodeId: string; label: string; bytes: number }[];
+  /** Which games moved the most over the mesh this week, most first. */
+  topGames: { gameId: string; title: string; bytes: number }[];
+}
+
+/**
+ * One connection the coordinator currently believes is open.
+ *
+ * "Believes" is exact and worth keeping: a direct transfer never touches this
+ * server, so what is known about it is what the node last reported — which is
+ * on its heartbeat, so up to half a minute old. That is far better than the
+ * alternative (nothing at all), and the map says how old rather than pretending
+ * to be live.
+ */
+export interface MeshTunnel {
+  /** The grant's nonce: one tunnel, from the moment permission was issued. */
+  id: string;
+  nodeId: string;
+  nodeLabel: string;
+  nodeRole: MeshNodeRole;
+  userId: string | null;
+  username: string | null;
+  gameId: string | null;
+  gameTitle: string | null;
+  /** Direct is node-to-client; relayed goes through the coordinator's relay. */
+  via: 'direct' | 'relay';
+  state: 'connecting' | 'transferring' | 'idle';
+  openedAt: string;
+  lastReportAt: string | null;
+  bytesServed: number;
+  /** Bytes per second between the last two reports, when there were two. */
+  bytesPerSecond: number | null;
+  /**
+   * The client's address, reduced to a network.
+   *
+   * A tunnel map is watched by an operator, not by the person on the other end
+   * of it, and a player's full address is not something to put on a screen that
+   * is left open. The first two octets are enough to tell two players apart and
+   * to see that somebody is on the same LAN.
+   */
+  clientNetwork: string | null;
+  /** How many punch instructions this tunnel has needed. */
+  punches: number;
+}
+
+/** What the map draws: the nodes, the relay, and every tunnel between them. */
+export interface MeshTunnelMap {
+  generatedAt: string;
+  coordinator: { label: string; relay: string | null };
+  nodes: {
+    id: string;
+    label: string;
+    role: MeshNodeRole;
+    status: MeshNodeStatus;
+    /** Best guess at where this node is reachable, for a label on the map. */
+    address: string | null;
+    lastSeenAt: string | null;
+    gameCount: number;
+    bytesServed: number;
+  }[];
+  tunnels: MeshTunnel[];
+}
+
+/**
+ * How long a tunnel stays on the map after its last sign of life.
+ *
+ * Longer than a heartbeat interval by a wide margin, because a node reports
+ * transfers on its heartbeat: anything shorter would blink every tunnel out
+ * between reports and back in again.
+ */
+export const MESH_TUNNEL_IDLE_SECONDS = 300;

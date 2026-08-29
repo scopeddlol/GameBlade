@@ -1,9 +1,10 @@
 import type { ScanProgress } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Image as ImageIcon, Megaphone, RefreshCw } from 'lucide-react';
+import { Image as ImageIcon, Megaphone, RefreshCw, Server } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge, Field, FormError, Spinner, SectionSkeleton } from '../../components/ui.js';
+import { useServerRole } from '../../hooks/useServerRole.js';
 import { api, ApiRequestError } from '../../lib/api.js';
 import { formatBytes, formatRelative } from '../../lib/format.js';
 
@@ -21,6 +22,10 @@ interface AdminStats {
 
 export function AdminOverviewPage() {
   const queryClient = useQueryClient();
+  // A coordinator holds no game files. Scanning one used to walk a path that is
+  // not there and read the empty result as "every game has been deleted",
+  // flagging the whole catalog its nodes had just reported.
+  const scansOwnDisk = useServerRole() !== 'coordinator';
 
   const statsQuery = useQuery({
     queryKey: ['admin', 'stats'],
@@ -68,15 +73,22 @@ export function AdminOverviewPage() {
           Fetch missing artwork
         </button>
 
-        <button
-          type="button"
-          className="gb-btn-primary"
-          onClick={() => scanMutation.mutate()}
-          disabled={scanning}
-        >
-          {scanning ? <Spinner className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
-          {scanning ? 'Scanning…' : 'Scan libraries'}
-        </button>
+        {scansOwnDisk ? (
+          <button
+            type="button"
+            className="gb-btn-primary"
+            onClick={() => scanMutation.mutate()}
+            disabled={scanning}
+          >
+            {scanning ? <Spinner className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
+            {scanning ? 'Scanning…' : 'Scan libraries'}
+          </button>
+        ) : (
+          <Link to="/admin/nodes" className="gb-btn-primary">
+            <Server className="h-4 w-4" aria-hidden />
+            Nodes
+          </Link>
+        )}
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -104,7 +116,10 @@ export function AdminOverviewPage() {
           {stats && stats.missing > 0 ? (
             <Badge tone="warning">{stats.missing} missing from disk</Badge>
           ) : null}
-          <span className="text-ink-400">{stats?.libraries ?? 0} library folders</span>
+          <span className="text-ink-400">
+            {stats?.libraries ?? 0}{' '}
+            {scansOwnDisk ? 'library folders' : 'libraries reported by nodes'}
+          </span>
         </div>
 
         {stats?.scan.finishedAt && !scanning ? (
