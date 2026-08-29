@@ -101,8 +101,18 @@ jobs:
   # which are the ones most likely to catch a change that compiles and does not
   # work.
   mesh:
-    name: Test the mesh crate
-    runs-on: ubuntu-latest
+    name: Test the mesh crate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows as well as Linux, because the two disagree about sockets in a
+        # way this crate is exactly the wrong place to find out about late.
+        # `IPV6_V6ONLY` defaults off on Linux and on on Windows, so a `[::]`
+        # bind is dual-stack on one and IPv6-only on the other — and the client
+        # that seeds to other players runs on Windows only. A Linux-only gate
+        # passed every test while that path could not receive an IPv4 packet.
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -114,17 +124,24 @@ jobs:
         with:
           workspaces: crates/gameblade-mesh
 
-      - name: Format, lint and test
+      # Only once: they check the source, not the platform, and running them
+      # twice only means being told the same thing twice.
+      - name: Format and lint
+        if: matrix.os == 'ubuntu-latest'
         working-directory: crates/gameblade-mesh
         run: |
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
-          cargo test
+
+      - name: Test
+        working-directory: crates/gameblade-mesh
+        run: cargo test
 
       # The binaries are what a node and a relay actually run, and a feature
       # only dev-dependencies provide has silently broken this before while
       # every test still passed.
       - name: Build the binaries
+        if: matrix.os == 'ubuntu-latest'
         working-directory: crates/gameblade-mesh
         run: cargo build --release --bins
 

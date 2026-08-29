@@ -17,6 +17,8 @@
 //! which key it means, and that is a stronger statement than a CA could make.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+
+use socket2::{Domain, Protocol, Socket, Type};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -268,7 +270,7 @@ impl MeshEndpoint {
         // Dual-stack where the OS allows it: if both ends have IPv6, a direct
         // connection needs no traversal at all.
         let address = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
-        match Self::bind(identity.clone(), address, true, false) {
+        match Self::bind_dual_stack(identity.clone(), address) {
             Ok(endpoint) => Ok(endpoint),
             Err(_) => Self::bind(
                 identity,
@@ -277,6 +279,29 @@ impl MeshEndpoint {
                 false,
             ),
         }
+    }
+
+    /// Bind `[::]` so that it also answers IPv4, and refuse it if it will not.
+    ///
+    /// `IPV6_V6ONLY` is off by default on Linux and **on** by default on
+    /// Windows, so the same `[::]` bind is dual-stack on one and IPv6-only on
+    /// the other. That difference is invisible until something dials the node
+    /// over IPv4 — which is nearly everything — and then it is total: packets
+    /// arrive at the host and the socket never sees them. A player seeding
+    /// from a Windows machine was unreachable for exactly this reason, and it
+    /// is not the kind of failure anybody reports, because it looks like a
+    /// peer that simply never had anything to offer.
+    ///
+    /// The option is set before the bind, which is the only point at which the
+    /// OS will accept it. If clearing it fails, this fails too rather than
+    /// returning a socket half the internet cannot reach: the caller's fallback
+    /// is an IPv4 socket, which is worth far more than an IPv6-only one.
+    fn bind_dual_stack(identity: NodeIdentity, address: SocketAddr) -> MeshResult<Self> {
+        let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+        socket.set_only_v6(false)?;
+        socket.bind(&address.into())?;
+
+        Self::build(identity, UdpSocket::from(socket), true, None)
     }
 
     /// Bind a node endpoint and learn its external address on the way.
