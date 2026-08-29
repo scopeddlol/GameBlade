@@ -1,12 +1,12 @@
 {
   "name": "gameblade",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "Self-hosted game preservation platform: a Docker server with an admin panel, and a Windows desktop client with cloud saves, achievements and friends.",
   "license": "AGPL-3.0-only",
   "packageManager": "pnpm@10.33.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22 <24"
   },
   "scripts": {
     "dev": "pnpm --parallel --filter \"./apps/server\" --filter \"./apps/web\" dev",
