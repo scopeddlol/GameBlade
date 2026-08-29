@@ -750,7 +750,7 @@
               stopped being one machine:
             </p>
             <ul>
-              <li><a href="#roles">Three roles from one image</a> &mdash; standalone, coordinator, node. <code>standalone</code> is still the default and behaves exactly as before.</li>
+              <li><a href="#roles">Three roles from one image</a> &mdash; standalone, coordinator, node, chosen with <code>ROLE</code>. 0.6.2 gave each its own image instead; a standalone server behaves exactly as it always has either way.</li>
               <li><a href="#mesh">Clients download straight from the machine holding the files</a>, over QUIC, verified a chunk at a time.</li>
               <li><a href="#relay">A relay</a> for clients that cannot reach a node directly.</li>
               <li><a href="#player-sharing">Players can serve pieces to each other</a>, off by default at both ends.</li>
@@ -1262,11 +1262,11 @@ cp .env.example .env</code></pre>
         </section>
 
         <section id="roles">
-          <h2>Three roles, one image</h2>
+          <h2>The roles</h2>
           <p>
-            GameBlade ships as one image that can be any of three things. Which one it is comes
-            from <code>ROLE</code>, and the default has not changed &mdash; an existing install
-            that upgrades keeps behaving exactly as it did.
+            GameBlade is one build published as four images. Which one you pull is which thing you
+            get; nothing has to be configured to make an image be what its name says, and an
+            existing install that upgrades keeps behaving exactly as it did.
           </p>
 
           <div class="scroller">
