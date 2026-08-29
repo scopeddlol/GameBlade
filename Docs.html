@@ -33,7 +33,11 @@
 
           <div class="note">…</div>        an aside
           <div class="warn">…</div>        something that will bite
-          <div class="new">…</div>         new in this version
+          <div class="new" data-since="0.6.1">…</div>
+                                           changed in a named release; the
+                                           badge reads the version out of
+                                           data-since, so a note about an old
+                                           change keeps saying so
           <table>…</table>                 styled automatically
           <pre><code>…</code></pre>        gets a copy button
 
@@ -470,9 +474,18 @@
         content: 'Watch out';
         color: var(--warn);
       }
+      /*
+         The version is data, not a hard-coded string. Every `.new` block
+         carries `data-since`, so a note about a 0.5.3 change says 0.5.3 —
+         which is what it used to get wrong, having been written once and
+         then relabelled by every release that touched this file.
+      */
       .new::before {
-        content: 'New in 0.6.1';
+        content: 'New in ' attr(data-since);
         color: var(--new);
+      }
+      .new:not([data-since])::before {
+        content: 'New';
       }
 
       .cards {
@@ -646,7 +659,7 @@
             </div>
           </div>
 
-          <div class="new">
+          <div class="new" data-since="0.6.1">
             <p>
               <strong>What&rsquo;s new in 0.6.1.</strong> A short release, and all of it is the
               0.6 infrastructure being made to work rather than anything added on top:
@@ -683,6 +696,14 @@
                 <a href="#development">development</a>.
               </li>
             </ul>
+            <p>
+              <strong>Setting one up.</strong> If you are building the split topology rather than
+              reading about it, <a href="#deploy">a coordinator and two nodes, in production</a> is
+              the whole build in order &mdash; Caddy in front, the nodes on a LAN, their status
+              pages reachable from outside &mdash; including
+              <a href="#deploy-gaps">the four things that are unfinished in 0.6.1</a> and what to
+              do about each. A <code>standalone</code> server is unaffected by all four.
+            </p>
             <p>
               <strong>And in 0.6.0, if you are coming from 0.5.</strong> This is where GameBlade
               stopped being one machine:
@@ -758,8 +779,14 @@
 
           <h3 id="where-to-get-it">Where to get it</h3>
           <p>
-            Both halves are published together by CI — an image without a matching client leaves you
-            nothing to connect with.
+            The two halves are published by different routes, and it is worth knowing which. The
+            server image is built and pushed by CI on every release. The Windows client is built on
+            demand &mdash; by CI when the client's own code changed or when a workflow is run by
+            hand, and otherwise
+            <a href="#windows-build">on a Windows machine with the build script</a> &mdash; and is
+            attached to the release afterwards. Keep the two at the same version: a client and a
+            coordinator that disagree about the catalog they exchange is the failure this is
+            structured to avoid.
           </p>
           <div class="scroller">
             <table>
@@ -844,9 +871,30 @@ cp .env.example .env</code></pre>
         <section id="configuration">
           <h2>Configuration</h2>
           <p>
-            Everything is optional except a library path. Values set in the admin UI take precedence
-            over environment variables, so you can seed credentials via compose and change them
-            later without touching the stack.
+            Everything is read from the environment at boot. Nothing here is required except a
+            library path on an instance that has one &mdash; and, on a node, the coordinator to
+            report to. Values set in the admin UI take precedence over the environment, so
+            credentials can be seeded from compose and changed later without touching the stack.
+          </p>
+
+          <div class="note">
+            <p>
+              <strong><code>LIBRARY_PATH</code> and <code>LIBRARY_PATHS</code> are two different
+              things</strong>, and the quick start uses the first while everything below documents
+              the second. <code>LIBRARY_PATH</code> and <code>HTTP_PORT</code> live in
+              <code>.env</code> and are read by <em>Compose</em>, to decide what to mount and what
+              to publish on the host. <code>LIBRARY_PATHS</code> is read by the <em>server</em>,
+              and names roots <strong>inside the container</strong> — which is why it is
+              <code>/library</code> in every example here regardless of where the games actually
+              are. Nothing in this section is a Compose variable.
+            </p>
+          </div>
+
+          <h3 id="config-core">The server</h3>
+          <p>
+            One image, three roles, one set of variables. Which of them mean anything depends on
+            <code>ROLE</code>: a coordinator ignores the library and the scanner, a node ignores
+            everything to do with the panel, providers, quotas and Discord.
           </p>
 
           <div class="scroller">
@@ -859,28 +907,140 @@ cp .env.example .env</code></pre>
                 </tr>
               </thead>
               <tbody>
-                <tr><td><code>LIBRARY_PATHS</code></td><td>—</td><td>Comma-separated library roots <strong>inside the container</strong></td></tr>
-                <tr><td><code>DATA_DIR</code></td><td><code>/data</code></td><td>Database, artwork, uploads, cloud saves, client installer</td></tr>
-                <tr><td><code>PORT</code> / <code>HOST</code></td><td><code>8080</code> / <code>0.0.0.0</code></td><td>Listen address</td></tr>
-                <tr><td><code>BASE_PATH</code></td><td>—</td><td>Sub-path to host under, e.g. <code>/gameblade</code></td></tr>
-                <tr><td><code>TRUST_PROXY</code></td><td><code>false</code></td><td><code>true</code>, a hop count, or a CIDR list</td></tr>
-                <tr><td><code>SECURE_COOKIES</code></td><td><code>auto</code></td><td><code>auto</code> follows <code>X-Forwarded-Proto</code></td></tr>
-                <tr><td><code>ADMIN_USERNAME</code> / <code>ADMIN_PASSWORD</code></td><td>—</td><td>Creates the first admin, only while no users exist</td></tr>
-                <tr><td><code>ALLOW_SELF_REGISTRATION</code></td><td><code>false</code></td><td>Invite-only when false</td></tr>
-                <tr><td><code>IGDB_CLIENT_ID</code> / <code>IGDB_CLIENT_SECRET</code></td><td>—</td><td>Twitch application credentials</td></tr>
+                <tr><td colspan="3"><strong>Role</strong></td></tr>
+                <tr><td><code>ROLE</code></td><td><code>standalone</code></td><td><code>standalone</code>, <code>coordinator</code> or <code>node</code>. See <a href="#roles">Three roles, one image</a>.</td></tr>
+                <tr><td><code>COORDINATOR_URL</code></td><td>—</td><td>Where a node reports its catalog. <strong>Required when <code>ROLE=node</code></strong>; ignored otherwise. No trailing slash needed — one is stripped.</td></tr>
+                <tr><td><code>ENROLMENT_TOKEN</code></td><td>—</td><td>The one-time code from <strong>Admin → Settings → Nodes</strong>. Spent on first registration; safe to remove afterwards.</td></tr>
+                <tr><td><code>RELAY_ENDPOINT</code></td><td>—</td><td>The relay's public address as <code>host:port</code>, handed to clients by a coordinator. Set on the <em>coordinator</em>, not on the relay. A value with no port is refused rather than half-accepted.</td></tr>
+
+                <tr><td colspan="3"><strong>Storage and listening</strong></td></tr>
+                <tr><td><code>LIBRARY_PATHS</code></td><td>—</td><td>Comma- or semicolon-separated library roots <strong>inside the container</strong>. Registered automatically on first start.</td></tr>
+                <tr><td><code>DATA_DIR</code></td><td><code>/data</code></td><td>Database, artwork, uploads, cloud saves, client installer, and a node's <code>node-state.json</code></td></tr>
+                <tr><td><code>PORT</code> / <code>HOST</code></td><td><code>8080</code> / <code>0.0.0.0</code></td><td>Listen address inside the container</td></tr>
+                <tr><td><code>TZ</code></td><td><code>Etc/UTC</code></td><td>Container timezone; what timestamps in the panel are rendered against</td></tr>
+                <tr><td><code>LOG_LEVEL</code></td><td><code>info</code></td><td><code>fatal</code>, <code>error</code>, <code>warn</code>, <code>info</code>, <code>debug</code>, <code>trace</code>, <code>silent</code></td></tr>
+
+                <tr><td colspan="3"><strong>Reverse proxy</strong></td></tr>
+                <tr><td><code>TRUST_PROXY</code></td><td><code>false</code></td><td><code>true</code>, a hop count, or a comma-separated list of addresses/CIDRs. See <a href="#proxy">behind a reverse proxy</a>.</td></tr>
+                <tr><td><code>BASE_PATH</code></td><td>—</td><td>Sub-path to host under, e.g. <code>/gameblade</code>. <code>/gameblade/</code> and <code>gameblade</code> normalise to the same thing.</td></tr>
+                <tr><td><code>SECURE_COOKIES</code></td><td><code>auto</code></td><td><code>auto</code> follows <code>X-Forwarded-Proto</code>; <code>true</code>/<code>false</code> force it</td></tr>
+                <tr><td><code>CORS_ORIGINS</code></td><td>—</td><td>Accepted and parsed, but nothing reads it as of 0.6.1 — no CORS headers are sent either way. Listed here so it is not mistaken for a setting that is failing.</td></tr>
+
+                <tr><td colspan="3"><strong>Accounts</strong></td></tr>
+                <tr><td><code>ADMIN_USERNAME</code> / <code>ADMIN_PASSWORD</code></td><td>—</td><td>Creates the first admin, and only while the database has no accounts. Both must be set or neither applies.</td></tr>
+                <tr><td><code>ALLOW_SELF_REGISTRATION</code></td><td><code>false</code></td><td>Invite-only when false. Accepts <code>1</code>, <code>true</code>, <code>yes</code>, <code>on</code>.</td></tr>
+
+                <tr><td colspan="3"><strong>Metadata providers</strong></td></tr>
+                <tr><td><code>IGDB_CLIENT_ID</code> / <code>IGDB_CLIENT_SECRET</code></td><td>—</td><td>Twitch application credentials; both needed or neither is used</td></tr>
                 <tr><td><code>STEAMGRIDDB_API_KEY</code></td><td>—</td><td>SteamGridDB API key</td></tr>
                 <tr><td><code>STEAM_API_KEY</code></td><td>—</td><td>Reads published achievement schemas; no player data</td></tr>
-                <tr><td><code>CLIENT_DOWNLOAD_URL</code></td><td>—</td><td>Download-button fallback when no installer is uploaded</td></tr>
-                <tr><td><code>MEDIA_QUOTA_MB</code></td><td><code>20480</code></td><td>Per-account ceiling for avatars, screenshots, clips and message attachments</td></tr>
-                <tr><td><code>SAVE_QUOTA_MB</code></td><td><code>10240</code></td><td>Per-account ceiling for cloud saves</td></tr>
-                <tr><td><code>SCAN_ON_START</code></td><td><code>true</code></td><td>Scan shortly after boot</td></tr>
-                <tr><td><code>SCAN_INTERVAL_MINUTES</code></td><td><code>360</code></td><td>Scheduled rescan interval; <code>0</code> disables</td></tr>
-                <tr><td><code>LOG_LEVEL</code></td><td><code>info</code></td><td><code>fatal</code> … <code>trace</code></td></tr>
-                <tr><td><code>SESSION_SECRET</code></td><td>generated</td><td>Download-token signing key; set only for multiple replicas</td></tr>
+
+                <tr><td colspan="3"><strong>Client and quotas</strong></td></tr>
+                <tr><td><code>CLIENT_DOWNLOAD_URL</code></td><td>—</td><td>Download-button fallback when no installer has been uploaded</td></tr>
+                <tr><td><code>MEDIA_QUOTA_MB</code></td><td><code>20480</code></td><td>Per-account ceiling for avatars, screenshots, clips and message attachments. <code>0</code> disables.</td></tr>
+                <tr><td><code>SAVE_QUOTA_MB</code></td><td><code>10240</code></td><td>Per-account ceiling for cloud saves. <code>0</code> disables.</td></tr>
+
+                <tr><td colspan="3"><strong>Scanning</strong></td></tr>
+                <tr><td><code>SCAN_ON_START</code></td><td><code>true</code></td><td>Scan a few seconds after boot</td></tr>
+                <tr><td><code>SCAN_INTERVAL_MINUTES</code></td><td><code>360</code></td><td>Scheduled rescan interval, up to 10080 (a week); <code>0</code> disables</td></tr>
+                <tr><td><code>SCAN_CONCURRENCY</code></td><td><code>4</code></td><td>How many entries are inspected at once, 1&ndash;32. Lower it on a spinning disk or a network share.</td></tr>
+
+                <tr><td colspan="3"><strong>Advanced</strong></td></tr>
+                <tr><td><code>RATE_LIMIT_MAX</code></td><td><code>300</code></td><td>Requests per window per client, minimum 10</td></tr>
+                <tr><td><code>RATE_LIMIT_WINDOW_MINUTES</code></td><td><code>1</code></td><td>Length of that window</td></tr>
+                <tr><td><code>SESSION_SECRET</code></td><td>generated</td><td>Signing key for download tokens and mesh grants. Generated and persisted on first boot; set it explicitly only if you run several replicas of one instance.</td></tr>
+                <tr><td><code>NODE_ENV</code></td><td><code>production</code></td><td>Leave it alone outside development</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="warn">
+            <p>
+              <strong><code>SCAN_ON_START</code> and <code>SCAN_INTERVAL_MINUTES</code> are not
+              gated by the role.</strong> A coordinator with those at their defaults will scan the
+              library paths registered in its database &mdash; and a coordinator holds no game
+              files, so if one of those paths exists and is empty, the scan finds nothing there and
+              flags every game a node reported as missing. Set both to off on a coordinator:
+              <code>SCAN_ON_START=false</code> and <code>SCAN_INTERVAL_MINUTES=0</code>. A path that
+              does not exist at all is skipped harmlessly; an empty one is not.
+            </p>
+          </div>
+
+          <h3 id="config-agent">The mesh agent</h3>
+          <p>
+            The agent is a separate process from the server &mdash; a second container out of the
+            same image, running <code>gameblade-node</code> &mdash; and it reads its own variables
+            rather than the server's. It is what actually serves game bytes to clients over QUIC.
+          </p>
+
+          <div class="scroller">
+            <table>
+              <thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td><code>GAMEBLADE_SERVER</code></td><td>—</td><td><strong>Required.</strong> The coordinator's base URL. Same value as the server's <code>COORDINATOR_URL</code>.</td></tr>
+                <tr><td><code>GAMEBLADE_LIBRARY</code></td><td>—</td><td><strong>Required.</strong> The library root inside this container, read-only. Must exist at start or the agent exits.</td></tr>
+                <tr><td><code>GAMEBLADE_ENROLMENT</code></td><td>—</td><td>The one-time code, on first run. The agent owns this node's keypair, so it is the process that has to enrol first.</td></tr>
+                <tr><td><code>GAMEBLADE_STATE</code></td><td><code>/data/node-state.json</code></td><td>Where the identity lives. Shared with the server process beside it &mdash; point both at the same file.</td></tr>
+                <tr><td><code>GAMEBLADE_PORT</code></td><td><code>47820</code></td><td>UDP port to serve on. <code>0</code> takes any free port, which makes the node unreachable from outside its NAT, so pin it if you are forwarding.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="note">
+            <p>
+              <strong>The state file is the node.</strong> <code>node-state.json</code> holds the
+              Ed25519 secret this machine is known by. Lose it and the node enrols again as a
+              stranger, abandoning everything the coordinator knew about what it holds. It is the
+              one file in a node's <code>data/</code> worth backing up; everything else there is a
+              rescan away.
+            </p>
+          </div>
+
+          <h3 id="config-relay">The relay</h3>
+          <div class="scroller">
+            <table>
+              <thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td><code>GAMEBLADE_COORDINATOR_KEY</code></td><td>—</td><td><strong>Required.</strong> The coordinator's public key, base64url SPKI. See <a href="#relay-key">finding it</a>.</td></tr>
+                <tr><td><code>GAMEBLADE_RELAY_PORT</code></td><td><code>47821</code></td><td>UDP port to listen on</td></tr>
+                <tr><td><code>GAMEBLADE_RELAY_MAX</code></td><td><code>256</code></td><td>Concurrent relayed sessions. The ceiling that stops the fallback becoming the main road.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 id="config-ports">Ports, and which of them matter</h3>
+          <div class="scroller">
+            <table>
+              <thead><tr><th>Port</th><th>Where</th><th>Forwarded?</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><code>8080/tcp</code></td>
+                  <td>Coordinator or standalone HTTP</td>
+                  <td>Behind the reverse proxy. Publish it on the host only for direct or LAN access.</td>
+                </tr>
+                <tr>
+                  <td><code>8080/tcp</code></td>
+                  <td>A node's <a href="#node-page">own status page</a></td>
+                  <td>LAN or tunnel only. It is unauthenticated — never straight onto the internet.</td>
+                </tr>
+                <tr>
+                  <td><code>47820/udp</code></td>
+                  <td>Mesh agent on a node</td>
+                  <td>
+                    Optional but the single best thing you can do for download reliability. Forward
+                    it at the router to the node's LAN address.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>47821/udp</code></td>
+                  <td>Relay, beside the coordinator</td>
+                  <td>Open on the host firewall. A reverse proxy cannot carry it — it is UDP, and the relay is not HTTP.</td>
+                </tr>
               </tbody>
             </table>
           </div>
         </section>
+
 
         <section id="proxy">
           <h2>Running behind a reverse proxy</h2>
@@ -911,6 +1071,90 @@ cp .env.example .env</code></pre>
             <p>Do <strong>not</strong> strip the prefix at the proxy — GameBlade expects the full path.</p>
           </div>
 
+          <h3 id="proxy-what-matters">What every proxy in front of this has to get right</h3>
+          <p>
+            Four things, and they are the same four whichever proxy it is. Everything after this
+            section is those four spelled out in one syntax or another.
+          </p>
+          <ul>
+            <li>
+              <strong>Pass the forwarded headers, and set <code>TRUST_PROXY=true</code> so they are
+              believed.</strong> Both halves, or client addresses are wrong in a way that is
+              invisible until rate limiting buckets every player together.
+            </li>
+            <li>
+              <strong>Do not buffer responses, and do not compress them.</strong> A download is
+              already-compressed bytes, so buffering adds latency and memory pressure and
+              compression adds CPU for nothing. GameBlade says so on every download response with
+              <code>Cache-Control: no-transform</code> and <code>X-Accel-Buffering: no</code>.
+            </li>
+            <li>
+              <strong>Allow long responses and large bodies.</strong> A multi-gigabyte transfer can
+              run for hours, and an uploaded client installer can be 1 GB. GameBlade applies no
+              request timeout of its own and no body ceiling beyond the per-kind limits; make sure
+              the proxy does not either.
+            </li>
+            <li>
+              <strong>Let the WebSocket through.</strong> Presence, activity, notifications and new
+              messages arrive on <code>/api/realtime</code>. Losing it costs freshness rather than
+              correctness — everything it carries is also readable over REST — but a client that
+              never gets it feels dead.
+            </li>
+          </ul>
+
+          <h3 id="proxy-caddy">Caddy</h3>
+          <p>
+            Caddy needs the least said to it of any of them: it streams by default, applies no
+            timeouts by default, imposes no request-body ceiling by default, and proxies WebSockets
+            transparently. The whole file is this:
+          </p>
+
+          <pre><code>games.example.com {
+        # Compress the panel and the API, and nothing else. Without a match,
+        # `encode` would also compress game data — already-compressed bytes,
+        # so it costs CPU on both ends and saves nothing.
+        encode {
+                zstd
+                gzip
+                match {
+                        header Content-Type text/*
+                        header Content-Type application/json*
+                        header Content-Type application/javascript*
+                        header Content-Type image/svg+xml*
+                }
+        }
+
+        # Caddy sets X-Forwarded-For, -Proto and -Host itself. Pair it with
+        # TRUST_PROXY=true on the container and nothing else is needed:
+        # WebSockets, ranged requests and hours-long downloads all just pass.
+        reverse_proxy 127.0.0.1:8080
+}</code></pre>
+
+          <p>
+            If the container is on a Docker network Caddy can see, use its service name instead of
+            <code>127.0.0.1</code> and drop the published port from compose entirely, so nothing is
+            reachable on the host at all.
+          </p>
+
+          <div class="note">
+            <p>
+              <strong>Do not add <code>request_body max_size</code>.</strong> Caddy has no body
+              limit unless you set one, and the smallest thing that would break is a screenshot.
+              The uploads that matter are the client installer (up to 1&nbsp;GB), clips
+              (512&nbsp;MB) and save archives (512&nbsp;MB). If your Caddyfile already sets one
+              globally, exempt this site.
+            </p>
+          </div>
+
+          <div class="warn">
+            <p>
+              <strong>Caddy cannot carry the mesh or the relay.</strong> Both are UDP, and neither
+              is HTTP — a reverse proxy has nothing to do with either. A forwarded UDP port goes
+              through the firewall and the router, not through Caddy. See
+              <a href="#config-ports">ports</a>.
+            </p>
+          </div>
+
           <h3 id="proxy-pangolin">Pangolin</h3>
           <p>
             Pangolin tunnels traffic over WireGuard and terminates it in Traefik, so the container
@@ -933,7 +1177,45 @@ cp .env.example .env</code></pre>
           </ul>
           <p>
             Tunnel throughput is the usual bottleneck on a large download. That is precisely what
-            <a href="#downloads">the desktop client's downloader</a> is for.
+            <a href="#downloads">the desktop client's downloader</a> &mdash; and, past that,
+            <a href="#mesh">the mesh</a> &mdash; exist for.
+          </p>
+
+          <h4 id="proxy-pangolin-nodes">Pangolin in front of a node's status page</h4>
+          <p>
+            A different job from the one above, and worth separating. The coordinator is a public
+            service with its own accounts; a node's page is an unauthenticated internal readout you
+            want to be able to look at from a phone without being at home. Pangolin is a good fit
+            for the second precisely because the resource itself carries no authentication:
+          </p>
+          <ul>
+            <li>
+              <strong>Put Pangolin's own authentication in front of it.</strong> The page has
+              nothing worth stealing on it &mdash; counts, paths already in your compose file, and
+              whether the coordinator answered &mdash; but it describes your infrastructure, and
+              there is no sign-in behind it to fall back on. Whatever Pangolin offers, use it.
+            </li>
+            <li>
+              <strong>Point the resource at the node's HTTP port</strong>, either through an agent
+              running on the node's own host targeting <code>localhost:8080</code>, or at the
+              node's LAN address from elsewhere on the network.
+            </li>
+            <li>
+              <strong>Do not set <code>BASE_PATH</code> for this.</strong> Give each node its own
+              hostname rather than a sub-path. A node's HTTP surface is three routes and a
+              catch-all, and the catch-all answers with the same page, so a sub-path buys nothing
+              and costs a rewrite that can go wrong quietly.
+            </li>
+            <li>
+              <strong>Nothing about the mesh goes through it.</strong> Game bytes never touch a
+              node's HTTP port; they leave the agent beside it over UDP. Tunnelling this page has
+              no effect on download speed in either direction.
+            </li>
+          </ul>
+          <p>
+            Keeping the page reachable over the LAN at the same time is the compose file's
+            business, not the proxy's &mdash; see <a href="#deploy-node-ui">reaching a node's page
+            two ways</a>.
           </p>
         </section>
 
@@ -995,9 +1277,12 @@ cp .env.example .env</code></pre>
               the original stays where it is and stays whole.
             </li>
             <li>
-              <strong>Start the coordinator</strong> with <code>ROLE=coordinator</code> and check
+              <strong>Start the coordinator</strong> with <code>ROLE=coordinator</code>,
+              <code>SCAN_ON_START=false</code> and <code>SCAN_INTERVAL_MINUTES=0</code>, and check
               it while the old instance is still the live one: sign in, browse the catalog, open a
-              save, read a message.
+              save, read a message. The scanning switches matter because they are not gated by the
+              role &mdash; the copied database still lists the old host's library paths, and a
+              coordinator that can read one and finds it empty will flag every game in it.
             </li>
             <li>
               <strong>Enrol the node</strong> that holds the games, and
@@ -1009,6 +1294,12 @@ cp .env.example .env</code></pre>
               right. If anything is wrong, point it back &mdash; the old instance is untouched.
             </li>
           </ol>
+          <p>
+            One advantage worth knowing about: a coordinator migrated from a standalone server
+            inherits the chunk hashes that server computed, so
+            <a href="#deploy-hashing">hashing a node's library</a> is a step you have already
+            done. A coordinator built from nothing has not.
+          </p>
 
           <div class="warn">
             <p>
@@ -1062,6 +1353,55 @@ cp .env.example .env</code></pre>
             without the relay ever being asked.
           </p>
 
+          <h4 id="relay-running">Running one</h4>
+          <p>
+            The relay is the same image with a different command, beside the coordinator, plus one
+            line on the coordinator telling clients it exists. Note the two halves of the address:
+            <code>RELAY_ENDPOINT</code> is what clients are told to dial, so it is the coordinator
+            host's <em>public</em> name and the relay's port &mdash; not <code>localhost</code>,
+            and not the port the container publishes it on if those differ.
+          </p>
+          <pre><code>services:
+  relay:
+    image: ghcr.io/scopeddlol/gameblade:latest
+    container_name: gameblade-relay
+    restart: unless-stopped
+    entrypoint: ['/sbin/tini', '--']
+    command: ['gameblade-relay']
+    environment:
+      GAMEBLADE_COORDINATOR_KEY: '&lt;base64url SPKI&gt;'
+      GAMEBLADE_RELAY_PORT: '47821'
+      GAMEBLADE_RELAY_MAX: '256'
+    ports:
+      - '47821:47821/udp'</code></pre>
+          <p>
+            Then on the coordinator: <code>RELAY_ENDPOINT: games.example.com:47821</code>, and open
+            <code>47821/udp</code> on the host firewall. The reverse proxy is not involved &mdash;
+            this is UDP and it is not HTTP.
+          </p>
+
+          <h4 id="relay-key">Finding the coordinator's public key</h4>
+          <div class="warn">
+            <p>
+              <strong>The panel does not display it as of 0.6.1</strong>, although the relay's own
+              usage text says to look on the Nodes page. It is handed to a node at enrolment, so
+              the place to read it is a node that has already enrolled &mdash; it is in that node's
+              <code>data/node-state.json</code>. The mesh agent writes that file with snake_case
+              keys, so the field is <code>coordinator_key</code>; see
+              <a href="#deploy-state">the state file</a>.
+            </p>
+          </div>
+          <pre><code># On a node whose agent has registered:
+python3 -c 'import json; s=json.load(open("data/node-state.json"));
+print(s.get("coordinator_key") or s.get("coordinatorKey"))'</code></pre>
+          <p>
+            It is a public key: it verifies grants and cannot mint one, which is exactly why the
+            relay can be handed it and nothing else. The coordinator generates the pair on first
+            boot and keeps it in its own database, so it survives restarts and image updates and
+            changes only if that row is deleted &mdash; at which point every node and relay has to
+            be given the new one.
+          </p>
+
           <h3 id="node-page">Looking at a node</h3>
           <p>
             A node serves one page, about itself, on its HTTP port. It is not the admin panel and
@@ -1094,10 +1434,37 @@ cp .env.example .env</code></pre>
               </tbody>
             </table>
           </div>
+          <p>A node's entire HTTP surface is four things:</p>
+          <div class="scroller">
+            <table>
+              <thead><tr><th>Route</th><th></th></tr></thead>
+              <tbody>
+                <tr><td><code>/</code></td><td>The page above</td></tr>
+                <tr><td><code>/api/node/status</code></td><td>The same thing as JSON, for a dashboard or a script</td></tr>
+                <tr>
+                  <td><code>/api/health</code></td>
+                  <td>
+                    <code>{ status, version, role }</code>. It names the role, so a monitoring
+                    check can tell three otherwise identical containers apart. Anything else under
+                    <code>/api</code> is a JSON 404 saying so.
+                  </td>
+                </tr>
+                <tr>
+                  <td>everything else</td>
+                  <td>
+                    The page again, with a 404 status. Somebody who lands here is looking for the
+                    admin panel, and the page says where it actually is &mdash; more use than a
+                    blank 404.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <p>
-            The same thing as JSON is at <code>/api/node/status</code>, and
-            <code>/api/health</code> now names the role, so a monitoring check can tell three
-            otherwise identical containers apart.
+            The JSON carries what the page renders: the coordinator it reports to and whether it
+            enrolled, its node id, whether the agent's key exists yet, each library with its game
+            count and last scan, hashed files out of total, whether a scan is running, and the last
+            report attempt with its reason if it failed.
           </p>
           <div class="warn">
             <p>
@@ -1106,8 +1473,9 @@ cp .env.example .env</code></pre>
               file, and whether the coordinator answered. There is no game data on it, no
               credentials, no key, and nothing on a node that a request can change. It is still
               about your infrastructure, so <code>docker-compose.node.yml</code> publishes it on
-              <code>127.0.0.1</code>; reach it over an SSH tunnel, or drop that prefix if the host
-              is somewhere only you can get to.
+              <code>127.0.0.1</code>. To reach it from elsewhere, put something in front that
+              authenticates &mdash; <a href="#deploy-node-ui">a tunnel, and the LAN</a> covers
+              doing both at once.
             </p>
           </div>
         </section>
@@ -1147,31 +1515,124 @@ cp .env.example .env</code></pre>
             enrolling one an operational decision rather than a security one.
           </p>
 
-          <h3>Turning it on</h3>
+          <h3 id="mesh-on">Turning it on</h3>
           <ol>
             <li>
-              <strong>Hash the games.</strong> A game is only eligible once every one of its files
-              has per-chunk hashes: without them a client cannot check a piece that came from
-              somewhere else, so it will not accept one. Use
-              <strong>Admin → Catalog → Games → Compute chunk hashes</strong>. It reads every byte
-              once and produces the whole-file checksums at the same time.
+              <strong>Hash the games</strong>, on whichever machine holds the files. A game is only
+              eligible once every one of its files has per-chunk hashes: without them a client
+              cannot check a piece that came from somewhere else, so it will not accept one. The
+              pass reads every byte once and produces the whole-file checksums at the same time,
+              which makes <a href="#checksums">the checksum pass</a> redundant. It is
+              <a href="#hashing">an API call, not a button</a>.
             </li>
             <li>
-              <strong>Enrol the node.</strong> <strong>Admin → Settings → Nodes</strong> generates a
-              one-time code. It is shown once and stored only as a hash; it expires in 24 hours and
-              is spent the moment a node registers with it.
+              <strong>Enrol the node.</strong> <strong>Admin → Settings → Nodes</strong> takes a
+              name and a role and generates a one-time code. It is shown once and stored only as a
+              hash; it expires in 24 hours and is spent the moment a node registers with it.
             </li>
             <li>
-              <strong>Run the agent</strong> on the machine holding the files, and give it the code.
-              It registers, receives its own credential, and starts announcing what it holds.
+              <strong>Run the agent</strong> on the machine holding the files, and give it the code
+              as <code>GAMEBLADE_ENROLMENT</code>. It registers, receives its own credential, and
+              starts announcing what it holds.
             </li>
             <li>
-              <strong>Switch the mesh on</strong> in <strong>Admin → Settings → Bandwidth</strong>.
+              <strong>Assign it a library</strong> back on the Nodes page, if it is a
+              <code>ROLE=node</code> server reporting a catalog rather than a mirror syncing one.
+              Reports are refused until you do. See <a href="#deploy-libraries">one library per
+              node</a> for why this matters more than it looks.
+            </li>
+            <li>
+              <strong>Switch the mesh on</strong> under <strong>Admin → Settings → Server</strong>,
+              in the <strong>Bandwidth</strong> card: <em>Let clients download from mesh nodes</em>.
               Until this is on, nodes may register and sync but no client is ever pointed at one —
               so a node can be enrolled and left to fill up first, and turning it on is a switch
               rather than a migration.
             </li>
           </ol>
+
+          <h3 id="hashing">Computing chunk hashes</h3>
+          <div class="warn">
+            <p>
+              <strong>There is no button for this in the panel as of 0.6.1.</strong> The routes
+              exist and work; nothing in the admin UI calls them yet. Anywhere this manual used to
+              say <em>Admin → Catalog → Games → Compute chunk hashes</em>, it was describing a
+              control that has never been there.
+            </p>
+          </div>
+          <p>
+            Three passes over a game's bytes, each answering a different question. All three are
+            admin-only, run in the background, and refuse to start while another is running.
+          </p>
+          <div class="scroller">
+            <table>
+              <thead><tr><th>Call</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><code>POST /api/games/&lt;id&gt;/chunks</code></td>
+                  <td>
+                    Per-chunk SHA-256 at 8 MiB, plus the whole-file hash. This is the one the mesh
+                    needs. Progress at <code>GET /api/games/chunks/progress</code>. Pass
+                    <code>{"force": true}</code> to redo a game that already has them.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>POST /api/games/&lt;id&gt;/checksums</code></td>
+                  <td>
+                    Whole-file SHA-256 only, so the client can verify a completed download.
+                    Progress at <code>GET /api/games/checksums/progress</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>POST /api/admin/games/&lt;id&gt;/verify</code></td>
+                  <td>
+                    Re-hashes what was hashed before and records whether each file still matches.
+                    Findings surface on <a href="#health">Health</a>. Progress at
+                    <code>GET /api/admin/verify/progress</code>.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            The cleanest way to call them by hand is a device token, which is a bearer credential
+            and therefore carries no CSRF requirement:
+          </p>
+          <pre><code># Sign in as an administrator. Naming a device asks for a bearer token
+# rather than a browser session.
+TOKEN=$(curl -sS -X POST https://games.example.com/api/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"…","deviceName":"hashing-cli"}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+
+# Every game, one at a time. `limit` caps at 200, so page through a larger
+# catalog with `offset`. The route refuses while another pass is running, so
+# waiting between them is the point rather than an inefficiency.
+curl -sS -H "authorization: Bearer $TOKEN" \
+  'https://games.example.com/api/games?limit=200&amp;offset=0' \
+  | python3 -c 'import json,sys; [print(g["id"]) for g in json.load(sys.stdin)["items"]]' \
+  | while read -r id; do
+      curl -sS -X POST -H "authorization: Bearer $TOKEN" \
+        "https://games.example.com/api/games/$id/chunks"
+
+      # Progress reports a state, not a boolean: idle, hashing or error.
+      # Wait while it is hashing; idle and error both end the wait.
+      while curl -sS -H "authorization: Bearer $TOKEN" \
+        https://games.example.com/api/games/chunks/progress \
+        | grep -q '"state":"hashing"'; do sleep 10; done
+    done</code></pre>
+          <p>
+            Revoke the device afterwards from <strong>Settings → Devices</strong> in the client, or
+            leave it — it is a token like any other and is listed like any other.
+          </p>
+          <div class="warn">
+            <p>
+              <strong>A <code>ROLE=node</code> server has no API to call this on.</strong> It
+              registers a liveness probe and its own status page and nothing else, deliberately —
+              so on a coordinator/node split there is no way, in 0.6.1, to hash the games from the
+              machine that holds them. <a href="#deploy-hashing">Hashing a node's library</a> has
+              the procedure that does work.
+            </p>
+          </div>
 
           <div class="warn">
             <p>
@@ -1206,8 +1667,9 @@ cp .env.example .env</code></pre>
             <strong>Let players share what they have downloaded</strong> is a separate switch, also
             off by default, and deliberately not implied by the one above. The first shares machines
             you run; this one turns players into distributors of each other's downloads, using their
-            upload bandwidth. Each player must also opt in on their own client, and neither switch
-            turns the other on.
+            upload bandwidth. Each player must also opt in on their own client &mdash;
+            <strong>Settings → Privacy → Share my downloads with other players</strong>, off until
+            they say otherwise &mdash; and neither switch turns the other on.
           </p>
           <p>
             A sharing client serves only games it has fully installed, only to accounts holding a
@@ -1269,6 +1731,711 @@ cp .env.example .env</code></pre>
             sources and can never be removed from it, which is what keeps the mesh an optimisation
             rather than something to depend on.
           </p>
+        </section>
+
+        <section id="deploy">
+          <h2>A coordinator and two nodes, in production</h2>
+          <p class="lede">
+            One coordinator behind Caddy, two nodes on your own network holding the games, and
+            their status pages reachable both over the LAN and from outside through Pangolin. This
+            is the whole build, in order, with the things that will bite marked.
+          </p>
+
+          <div class="warn">
+            <p>
+              <strong>Read <a href="#deploy-gaps">what does not work yet</a> before you build
+              this.</strong> The split-role topology is new in 0.6, and four things in the path
+              from a fresh coordinator to a client downloading a game are unfinished in 0.6.1. All
+              four have a way round them and all four are below &mdash; but finding them at step
+              nine is a bad afternoon, and none of them is your network.
+            </p>
+          </div>
+
+          <h3 id="deploy-shape">What runs where</h3>
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr><th>Host</th><th>Containers</th><th>Reachable as</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>The coordinator</strong><br />a small VPS</td>
+                  <td>
+                    <code>gameblade</code> (<code>ROLE=coordinator</code>), Caddy, and optionally
+                    <code>gameblade-relay</code>
+                  </td>
+                  <td>
+                    <code>https://games.example.com</code> for everyone, plus
+                    <code>47821/udp</code> for the relay if you run one
+                  </td>
+                </tr>
+                <tr>
+                  <td><strong>Node A</strong><br />on your LAN</td>
+                  <td>
+                    <code>gameblade-node-a</code> (<code>ROLE=node</code>) and
+                    <code>gameblade-mesh-a</code> (the agent)
+                  </td>
+                  <td>
+                    <code>http://192.168.1.20:8080</code> on the LAN, a Pangolin hostname from
+                    outside, and <code>47820/udp</code> forwarded at the router
+                  </td>
+                </tr>
+                <tr>
+                  <td><strong>Node B</strong><br />on your LAN</td>
+                  <td>the same pair, its own <code>data/</code> and its own library</td>
+                  <td>
+                    <code>http://192.168.1.21:8080</code>, its own Pangolin hostname, and
+                    <code>47822/udp</code> forwarded
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p>Three flows, and it is worth being clear which is which:</p>
+          <ul>
+            <li>
+              <strong>Everything a player does except downloading</strong> goes to the coordinator
+              over HTTPS through Caddy. Kilobytes.
+            </li>
+            <li>
+              <strong>Each node tells the coordinator what it holds</strong>, outbound over the
+              same HTTPS, every five minutes. Also kilobytes.
+            </li>
+            <li>
+              <strong>Game bytes go client &harr; node directly</strong>, over QUIC on UDP,
+              touching neither Caddy nor the VPS. This is the entire reason for the split, and it
+              is also the part with the most ways to fail &mdash; hence
+              <a href="#nat-check"><code>mesh-doctor</code></a> before you commit.
+            </li>
+          </ul>
+
+          <div class="warn">
+            <p>
+              <strong>A coordinator holds no game files, so there is no HTTP fallback.</strong> On
+              a standalone server, a client that cannot reach a node just downloads from the origin
+              and nobody notices. Here the origin has nothing on disk. If the mesh cannot serve a
+              game, that game cannot be downloaded at all. Forwarding the UDP ports &mdash; or
+              running <a href="#relay">the relay</a> &mdash; is not an optimisation in this
+              topology; it is the download path.
+            </p>
+          </div>
+
+          <h3 id="deploy-gaps">What does not work yet in 0.6.1</h3>
+          <p>
+            Stated plainly, with what to do instead. None of these affects a
+            <code>standalone</code> server, which is why they survived a release.
+          </p>
+
+          <div class="scroller">
+            <table>
+              <thead><tr><th>What happens</th><th>Why</th><th>What to do</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>
+                    A node never enrols. Its page says so, and its log repeats
+                    <em>waiting for the mesh agent to generate this node's key</em> for ever.
+                  </td>
+                  <td>
+                    The two processes on a node share one state file and disagree about how to
+                    spell its contents: the agent writes <code>secret_key</code>, the server reads
+                    <code>secretKey</code>.
+                  </td>
+                  <td><a href="#deploy-state">Write both spellings into the file once</a>.</td>
+                </tr>
+                <tr>
+                  <td>
+                    No game is ever offered from a node, whatever the mesh switch says.
+                  </td>
+                  <td>
+                    A game needs per-chunk hashes to be mesh-eligible, and a
+                    <code>ROLE=node</code> server has no API to compute them on.
+                  </td>
+                  <td><a href="#deploy-hashing">Hash them with the role temporarily flipped</a>.</td>
+                </tr>
+                <tr>
+                  <td>
+                    You cannot assign a node its library, because the coordinator will not let you
+                    create one.
+                  </td>
+                  <td>
+                    Creating a library checks that the path is a readable directory
+                    <em>inside the coordinator's container</em>, and a coordinator mounts no
+                    library.
+                  </td>
+                  <td><a href="#deploy-libraries">Mount empty placeholder directories</a>.</td>
+                </tr>
+                <tr>
+                  <td>
+                    Everything a node reported is flagged missing a few minutes after it reports.
+                  </td>
+                  <td>
+                    Scanning is not gated by role, so a coordinator scans those placeholder
+                    directories, finds them empty, and concludes the games are gone.
+                  </td>
+                  <td>
+                    <code>SCAN_ON_START=false</code> and <code>SCAN_INTERVAL_MINUTES=0</code> on
+                    the coordinator. Not optional.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="note">
+            <p>
+              <strong>If none of that appeals</strong>, the topology that works today with nothing
+              worked around is a <code>standalone</code> server on the machine that holds the
+              biggest library &mdash; it keeps its HTTP download path, so nothing can strand a
+              player &mdash; with the second machine enrolled as a <code>mirror</code> node. The
+              mirror syncs against the origin's catalog rather than reporting one of its own, so
+              none of the four rows above applies to it. You lose the small-VPS front door and keep
+              everything else.
+            </p>
+          </div>
+
+          <h3 id="deploy-coordinator">1. The coordinator</h3>
+          <p>
+            On the VPS. <code>data/</code> is the only thing here that cannot be recreated, so it
+            is the only thing to back up &mdash; and it is small, because no game files pass
+            through this host.
+          </p>
+
+          <pre><code># docker-compose.yml on the coordinator
+services:
+  gameblade:
+    image: ghcr.io/scopeddlol/gameblade:latest
+    container_name: gameblade-coordinator
+    restart: unless-stopped
+    environment:
+      ROLE: coordinator
+      DATA_DIR: /data
+      TZ: Europe/London
+
+      # Caddy terminates TLS and forwards X-Forwarded-*. Without this every
+      # request looks like Caddy and rate limiting buckets every player as one.
+      TRUST_PROXY: 'true'
+      SECURE_COOKIES: auto
+
+      # A coordinator has no library, and scanning is NOT gated by the role.
+      # Left at their defaults these would scan the placeholder directories
+      # below, find them empty, and flag every game the nodes reported.
+      SCAN_ON_START: 'false'
+      SCAN_INTERVAL_MINUTES: '0'
+
+      # Only if you run the relay. Public host, relay port.
+      # RELAY_ENDPOINT: games.example.com:47821
+
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: '&lt;something long, used once&gt;'
+      ALLOW_SELF_REGISTRATION: 'false'
+
+      IGDB_CLIENT_ID: ''
+      IGDB_CLIENT_SECRET: ''
+      STEAMGRIDDB_API_KEY: ''
+      STEAM_API_KEY: ''
+    volumes:
+      - ./data:/data
+      # Placeholders, not libraries. Empty directories that exist only so the
+      # coordinator will accept them as library paths — see below.
+      - ./libraries/node-a:/libraries/node-a
+      - ./libraries/node-b:/libraries/node-b
+    ports:
+      # Bound to loopback: Caddy is on this host and nothing else needs it.
+      # If Caddy is in Docker on a shared network, drop this block entirely
+      # and let it reach `gameblade:8080` by service name.
+      - '127.0.0.1:8080:8080'
+    security_opt:
+      - 'no-new-privileges:true'</code></pre>
+
+          <pre><code>mkdir -p data libraries/node-a libraries/node-b
+sudo chown -R 1000:1000 ./data
+docker compose up -d</code></pre>
+
+          <div class="warn">
+            <p>
+              <strong>Do not put <code>LIBRARY_PATHS</code> on a coordinator.</strong> It would
+              register those placeholders as libraries at boot with names you did not choose. Add
+              them by hand in the panel instead, where you can name them after the node that will
+              report into each.
+            </p>
+          </div>
+
+          <p>Then the Caddyfile, which is the short part:</p>
+
+          <pre><code>games.example.com {
+        encode {
+                zstd
+                gzip
+                match {
+                        header Content-Type text/*
+                        header Content-Type application/json*
+                        header Content-Type application/javascript*
+                        header Content-Type image/svg+xml*
+                }
+        }
+
+        reverse_proxy 127.0.0.1:8080
+}</code></pre>
+
+          <p>
+            Nothing else: Caddy streams rather than buffers, sets no timeouts, imposes no body
+            ceiling, and carries <code>/api/realtime</code> without being asked. See
+            <a href="#proxy-caddy">Caddy</a> for why each of those matters and what to check if
+            your Caddyfile already sets global options.
+          </p>
+          <p>
+            Open <code>https://games.example.com</code>, sign in with the bootstrap administrator,
+            and then remove <code>ADMIN_USERNAME</code> and <code>ADMIN_PASSWORD</code> from
+            compose &mdash; they only apply while the database has no accounts, so leaving them is
+            a password sitting in a file for no benefit.
+          </p>
+
+          <h3 id="deploy-libraries">2. One library per node</h3>
+          <p>
+            A node's catalog is folded into <em>the library assigned to that node</em>, matched by
+            relative path. Two things follow, and the second one is the one that catches people:
+          </p>
+          <ul>
+            <li>
+              <strong>A game already in that library keeps its id</strong>, and with it every
+              achievement, save rule, artwork match, favourite, collection entry and playtime
+              record. That is the guarantee that makes moving an existing install safe.
+            </li>
+            <li>
+              <strong>A complete report marks everything else in that library missing.</strong> A
+              node says "here is everything I hold"; anything in its library it did not mention is
+              taken to be gone. So two nodes sharing one library flag each other's games on every
+              report, for ever. <strong>One library per node.</strong> Always.
+            </li>
+          </ul>
+
+          <p>
+            In <strong>Admin → Catalog → Libraries</strong>, add two, pointing at the placeholder
+            directories from the compose file above:
+          </p>
+          <div class="scroller">
+            <table>
+              <thead><tr><th>Name</th><th>Path</th></tr></thead>
+              <tbody>
+                <tr><td>Node A</td><td><code>/libraries/node-a</code></td></tr>
+                <tr><td>Node B</td><td><code>/libraries/node-b</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            The paths are labels here and nothing more &mdash; the coordinator never reads a byte
+            through them, and they do not have to resemble the paths on the nodes. They have to
+            <em>exist</em> only because the create-library route checks, which is the right check
+            on a standalone server and a nuisance on this one.
+          </p>
+          <div class="warn">
+            <p>
+              This is exactly why <code>SCAN_ON_START</code> and
+              <code>SCAN_INTERVAL_MINUTES</code> are off on the coordinator. An empty directory
+              that a scan can read is worse than one that does not exist: a missing path fails the
+              walk and is skipped, an empty one succeeds and reports zero games.
+            </p>
+          </div>
+
+          <h3 id="deploy-nodes">3. The nodes</h3>
+          <p>
+            Two containers per node, out of the same image. The server scans local disk and reports
+            upward; the agent serves bytes to clients. They share <code>data/</code> so they agree
+            about which node they are.
+          </p>
+          <p>
+            Generate <strong>one enrolment code per node</strong> in
+            <strong>Admin → Settings → Nodes</strong> &mdash; name, role <code>origin</code>, then
+            <em>Generate code</em>. It is shown once, expires in 24 hours, and is spent on first
+            registration.
+          </p>
+
+          <pre><code># docker-compose.yml on node A (192.168.1.20)
+services:
+  server:
+    image: ghcr.io/scopeddlol/gameblade:latest
+    container_name: gameblade-node-a
+    restart: unless-stopped
+    environment:
+      ROLE: node
+      DATA_DIR: /data
+      LIBRARY_PATHS: /library
+      COORDINATOR_URL: https://games.example.com
+      ENROLMENT_TOKEN: '&lt;the code&gt;'
+      SCAN_ON_START: 'true'
+      SCAN_INTERVAL_MINUTES: '360'
+      TZ: Europe/London
+    volumes:
+      - ./data:/data
+      - /srv/games-a:/library:ro
+    ports:
+      # The status page. Bound to this host's LAN address rather than
+      # 127.0.0.1, so it is reachable from the network and from nowhere else.
+      - '192.168.1.20:8080:8080'
+
+  mesh:
+    image: ghcr.io/scopeddlol/gameblade:latest
+    container_name: gameblade-mesh-a
+    restart: unless-stopped
+    entrypoint: ['/sbin/tini', '--']
+    command: ['gameblade-node']
+    environment:
+      GAMEBLADE_SERVER: https://games.example.com
+      GAMEBLADE_LIBRARY: /library
+      GAMEBLADE_STATE: /data/node-state.json
+      GAMEBLADE_PORT: '47820'
+      # The SAME code as above. The agent owns this node's keypair, so it is
+      # the process that has to register first — and the shipped compose file
+      # does not set this, which is why an untouched copy never enrols.
+      GAMEBLADE_ENROLMENT: '&lt;the code&gt;'
+    volumes:
+      - ./data:/data
+      - /srv/games-a:/library:ro
+    ports:
+      - '47820:47820/udp'</code></pre>
+
+          <p>
+            Node B is the same file with four things changed: the container names, the LAN address
+            it publishes its page on, its library path on the host, and its own enrolment code. If
+            both nodes happen to be on <em>one</em> host, also give it different ports &mdash;
+            <code>8081</code> for the page and <code>47822/udp</code> for the agent, matching
+            <code>GAMEBLADE_PORT</code> &mdash; and keep its <code>data/</code> in its own
+            directory.
+          </p>
+
+          <div class="note">
+            <p>
+              <strong>Both services get the same code, and that is fine.</strong> A node is
+              identified by its public key, and both processes derive the same key from the shared
+              state file. Whichever registers second is recognised as the node that already exists,
+              so the code is not checked again and nothing is duplicated. Remove both once the node
+              is enrolled.
+            </p>
+          </div>
+
+          <p>
+            Back in <strong>Admin → Settings → Nodes</strong>, assign each node the library you
+            made for it. Reports are refused until you do, with a message saying exactly that.
+          </p>
+
+          <h3 id="deploy-state">4. The state file, and the one edit it needs</h3>
+          <p>
+            <code>data/node-state.json</code> is the node's identity: an Ed25519 secret, the node
+            id and token the coordinator issued, and the coordinator's public key. Both processes
+            read it, and the intent is that the agent generates the key and the server picks it up.
+          </p>
+          <div class="warn">
+            <p>
+              <strong>They spell it differently in 0.6.1.</strong> The agent writes
+              <code>secret_key</code>, <code>node_id</code>, <code>node_token</code> and
+              <code>coordinator_key</code>; the server looks for <code>secretKey</code>,
+              <code>nodeId</code>, <code>nodeToken</code> and <code>coordinatorKey</code>. So the
+              server never sees a key, never enrols, and never reports a catalog &mdash; while the
+              agent, beside it, is enrolled and serving quite happily. The node's page shows this
+              as enrolled-but-never-reported.
+            </p>
+          </div>
+          <p>
+            The fix, until it is fixed properly, is to give the file both spellings. Let the agent
+            start and register first, then:
+          </p>
+          <pre><code>docker compose up -d mesh
+# Wait for "node:" in its output, which means it has registered.
+docker compose logs -f mesh
+
+docker compose stop server
+python3 - &lt;&lt;'PY'
+import json, pathlib
+path = pathlib.Path('data/node-state.json')
+state = json.loads(path.read_text())
+pairs = {
+    'secret_key': 'secretKey',
+    'node_id': 'nodeId',
+    'node_token': 'nodeToken',
+    'coordinator_key': 'coordinatorKey',
+}
+for snake, camel in pairs.items():
+    if snake in state and camel not in state:
+        state[camel] = state[snake]
+path.write_text(json.dumps(state, indent=2))
+print('added:', [c for c in pairs.values() if c in state])
+PY
+docker compose start server</code></pre>
+          <p>
+            It stays fixed. The server only rewrites the file when it registers, and with the node
+            id and token now present it has nothing to register; the agent only rewrites it when
+            its own keys are missing, and they are not. Copy the same file if you ever move a node
+            to different hardware &mdash; without it, that machine is a stranger with a new key and
+            an empty history.
+          </p>
+
+          <h3 id="deploy-hashing">5. Hashing a node's library</h3>
+          <p>
+            Nothing is served from a node until its games have per-chunk hashes, and a
+            <code>ROLE=node</code> server has no API to compute them on. Give it one temporarily:
+            the same container, the same <code>data/</code>, the same library, with the role
+            flipped to <code>standalone</code> so the full API comes up.
+          </p>
+          <p>
+            The chunk table is written into that node's own database, which is where the reporter
+            reads it from &mdash; so hashing this way is not a workaround with a catch, it is the
+            same rows arriving the same way.
+          </p>
+
+          <pre><code># On the node, with the mesh agent left running.
+docker compose stop server
+
+# One-off, on a port nobody else is using, reachable from this host only.
+docker run --rm -it \
+  -v "$PWD/data:/data" \
+  -v /srv/games-a:/library:ro \
+  -p 127.0.0.1:8099:8080 \
+  -e ROLE=standalone \
+  -e DATA_DIR=/data \
+  -e LIBRARY_PATHS=/library \
+  -e ADMIN_USERNAME=hasher \
+  -e ADMIN_PASSWORD='&lt;temporary&gt;' \
+  ghcr.io/scopeddlol/gameblade:latest</code></pre>
+
+          <p>
+            Then drive it over <code>http://127.0.0.1:8099</code> exactly as
+            <a href="#hashing">computing chunk hashes</a> describes &mdash; sign in for a device
+            token, list the games, and post to <code>/api/games/&lt;id&gt;/chunks</code> one at a
+            time. Let its own scan finish first; the games have to be in its database before they
+            can be hashed.
+          </p>
+          <p>
+            Stop it when the last game is done, <code>docker compose start server</code>, and the
+            next report carries the hashes up. Chunk hashes are read out of the file's bytes, so
+            they survive the role flip, the restart and every future report.
+          </p>
+
+          <div class="note">
+            <p>
+              <strong>It is a long job, once.</strong> Every byte of every game is read at
+              8&nbsp;MiB a chunk, so a multi-terabyte node is measured in hours and is limited by
+              the disk. Only new and changed games need it afterwards. Run it on both nodes.
+            </p>
+          </div>
+
+          <div class="warn">
+            <p>
+              <strong>A game that changes on disk loses its hashes.</strong> A report replaces the
+              file rows for any game whose size, file count or modification time moved, and the
+              replacements carry whatever chunks the node sent &mdash; which is none, until it has
+              been hashed again. The game stays in the catalog and stays downloadable on a
+              standalone server; on a coordinator it quietly stops being servable, because there is
+              no origin copy behind it.
+            </p>
+            <p>
+              So: after adding or updating games on a node, hash again. Games nobody touched are
+              reported as unchanged and are not rewritten, so their hashes survive every report
+              indefinitely.
+            </p>
+          </div>
+
+          <h3 id="deploy-node-ui">6. Reaching a node's page two ways</h3>
+          <p>
+            The compose file above publishes the status page on the node's LAN address rather than
+            <code>127.0.0.1</code>, which is the whole of what is needed for
+            <code>http://192.168.1.20:8080</code> to work from anywhere on the network. Binding to
+            the address rather than to <code>0.0.0.0</code> is deliberate: it keeps the page off
+            any other interface the host happens to have, including a VPN or a second NIC.
+          </p>
+          <p>
+            Pangolin then covers the outside, without changing any of that. Point a resource at the
+            node &mdash; through an agent on the node's own host targeting
+            <code>localhost:8080</code>, or at <code>192.168.1.20:8080</code> from elsewhere on the
+            network &mdash; give it its own hostname, and the two paths coexist: the LAN one is a
+            published port, the outside one is a tunnel, and neither knows about the other.
+          </p>
+          <div class="warn">
+            <p>
+              <strong>Turn Pangolin's own authentication on for these resources.</strong> The page
+              has no sign-in of its own and is not going to get one &mdash; a node owns no accounts
+              to check against. It is a readout of your infrastructure, and the tunnel is the only
+              thing between it and the internet.
+            </p>
+          </div>
+          <p>
+            Leave <code>BASE_PATH</code> unset and give each node a hostname rather than a
+            sub-path. A node answers on <code>/</code>, two <code>/api</code> routes and a
+            catch-all that returns the page again; a sub-path buys nothing over that and adds a
+            rewrite that fails quietly.
+          </p>
+          <p>
+            And nothing about game downloads passes through here. The bytes leave the agent over
+            UDP on <code>47820</code>; tunnelling the status page does not speed them up, slow them
+            down, or route them anywhere.
+          </p>
+
+          <h3 id="deploy-reachability">7. Making the nodes reachable</h3>
+          <p>
+            This is the step that decides whether the whole thing works, so do it before you tell
+            anyone the archive has moved.
+          </p>
+          <ol>
+            <li>
+              <strong>Measure first.</strong> <code>docker exec gameblade-mesh-a mesh-doctor</code>
+              says whether a client can punch through to this machine. It measures the NAT's
+              mapping behaviour rather than counting layers, which is the only thing that predicts
+              anything &mdash; double NAT is routinely punchable and single NAT routinely is not.
+            </li>
+            <li>
+              <strong>Forward the UDP ports anyway.</strong> <code>47820/udp</code> to
+              192.168.1.20 and <code>47822/udp</code> to 192.168.1.21, with each node's
+              <code>GAMEBLADE_PORT</code> matching what you forwarded. One directly reachable side
+              makes the other side's NAT stop mattering, whatever it is.
+            </li>
+            <li>
+              <strong>Give each node a stable LAN address</strong>, by DHCP reservation or
+              statically. A node is known by its key rather than its address, so a changed one is
+              not fatal &mdash; but a forwarded port pointing at the wrong machine is.
+            </li>
+            <li>
+              <strong>Then decide about <a href="#relay">the relay</a>.</strong> With ports
+              forwarded and <code>mesh-doctor</code> content, most clients connect directly and the
+              relay is rarely asked for anything. Without them, on this topology, it is the only
+              thing standing between a player behind a hostile NAT and a game they cannot download
+              at all.
+            </li>
+          </ol>
+
+          <h3 id="deploy-check">8. Checking it, in order</h3>
+          <p>Each of these fails in its own way, so check them one at a time and in this order:</p>
+          <div class="scroller">
+            <table>
+              <thead><tr><th>Check</th><th>Where</th><th>Right answer</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>The coordinator is up and knows what it is</td>
+                  <td><code>curl https://games.example.com/api/health</code></td>
+                  <td><code>{"status":"ok","version":"0.6.1","role":"coordinator"}</code></td>
+                </tr>
+                <tr>
+                  <td>Each node is up and knows what it is</td>
+                  <td><code>curl http://192.168.1.20:8080/api/health</code></td>
+                  <td>the same, with <code>"role":"node"</code></td>
+                </tr>
+                <tr>
+                  <td>Each node scanned its disk</td>
+                  <td>the node's page, or <code>/api/node/status</code></td>
+                  <td>a library, a game count, and a recent scan time</td>
+                </tr>
+                <tr>
+                  <td>Each node enrolled</td>
+                  <td>the same page</td>
+                  <td>
+                    enrolled, with a node id. Still waiting means
+                    <a href="#deploy-state">the state file</a>.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Each node is reporting</td>
+                  <td>the same page, last report</td>
+                  <td>
+                    accepted, within the last five minutes. <em>No library assigned</em> means step
+                    2 is unfinished.
+                  </td>
+                </tr>
+                <tr>
+                  <td>The coordinator has the catalog</td>
+                  <td><strong>Admin → Catalog → Games</strong></td>
+                  <td>both nodes' games, in the right library each</td>
+                </tr>
+                <tr>
+                  <td>The games are hashed</td>
+                  <td>the node's page: hashed files out of total</td>
+                  <td>equal. Zero means <a href="#deploy-hashing">step 5</a>.</td>
+                </tr>
+                <tr>
+                  <td>Both nodes are online to the coordinator</td>
+                  <td><strong>Admin → Settings → Nodes</strong></td>
+                  <td>online, seen within the last minute or so</td>
+                </tr>
+                <tr>
+                  <td>The mesh is switched on</td>
+                  <td><strong>Admin → Settings → Server → Bandwidth</strong></td>
+                  <td><em>Let clients download from mesh nodes</em>, ticked</td>
+                </tr>
+                <tr>
+                  <td>A real download</td>
+                  <td>the desktop client, from outside your network</td>
+                  <td>
+                    it installs, and the downloads panel names a node rather than the origin as its
+                    source
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 id="deploy-trouble">When it does not</h3>
+          <div class="scroller">
+            <table>
+              <thead><tr><th>Symptom</th><th>Almost always</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>The node's page says waiting for the mesh agent's key, for ever</td>
+                  <td><a href="#deploy-state">The state file spellings.</a> Nothing else produces exactly this.</td>
+                </tr>
+                <tr>
+                  <td>The agent logs a refused registration and retries</td>
+                  <td>
+                    <code>GAMEBLADE_ENROLMENT</code> is unset, or the code was already spent, or it
+                    expired after 24 hours. Generate another; codes are free.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Reports are refused with a message about a library</td>
+                  <td>
+                    The node has none assigned. It is refused on purpose &mdash; guessing would add
+                    the whole catalog again as new games.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Games appear, then are flagged missing minutes later</td>
+                  <td>
+                    The coordinator is scanning. <code>SCAN_ON_START=false</code> and
+                    <code>SCAN_INTERVAL_MINUTES=0</code>. Clear the flags with
+                    <strong>Remove missing</strong> once it has stopped.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Two nodes take turns flagging each other's games missing</td>
+                  <td>They share a library. <a href="#deploy-libraries">They must not.</a></td>
+                </tr>
+                <tr>
+                  <td>The mesh is on, nodes are online, downloads still come from the origin</td>
+                  <td>
+                    No chunk hashes. Check hashed-of-total on each node's page. And on a
+                    coordinator the origin has nothing to serve, so this shows up as a download
+                    that fails rather than one that is merely slow.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Some players download and some cannot</td>
+                  <td>
+                    NAT. Run <code>mesh-doctor</code>, forward the UDP ports, and if it still
+                    happens, run <a href="#relay">the relay</a>.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Every player looks like the same IP, and rate limits fire</td>
+                  <td><code>TRUST_PROXY</code> is not set on the coordinator.</td>
+                </tr>
+                <tr>
+                  <td>The node's page is unreachable over the LAN</td>
+                  <td>
+                    The published port is still bound to <code>127.0.0.1</code>, or bound to a LAN
+                    address the host does not currently have &mdash; Docker refuses to start the
+                    container rather than binding something else.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <section id="providers">
@@ -1379,8 +2546,20 @@ cp .env.example .env</code></pre>
 
           <h3 id="admin-settings">Settings</h3>
           <ul>
-            <li><strong>Server</strong> — the name and tagline, provider credentials, the Windows client installer, and the bandwidth limits.</li>
+            <li>
+              <strong>Server</strong> — the name and tagline, self-registration, provider
+              credentials, the Windows client installer, and the <strong>Bandwidth</strong> card:
+              the speed cap, the monthly allowance, and the two mesh switches
+              (<a href="#mesh-on">let clients download from mesh nodes</a> and
+              <a href="#player-sharing">let players share what they have downloaded</a>).
+            </li>
+            <li><strong>Discord</strong> — sign-in, the bot, posting, roles and tickets. See <a href="#discord">Discord</a>.</li>
             <li><strong>API keys</strong> — scoped credentials for <a href="#external-api">the external API</a>.</li>
+            <li>
+              <strong>Nodes</strong> — enrol a node, see what each is holding and when it was last
+              heard from, assign each one its library, block one, or remove it. Outstanding
+              enrolment codes are listed underneath with their expiry.
+            </li>
           </ul>
         </section>
 
@@ -1392,7 +2571,7 @@ cp .env.example .env</code></pre>
             starts one and shows what it is doing.
           </p>
 
-          <div class="new">
+          <div class="new" data-since="0.5.3">
             <p>
               The scanner was rebuilt in 0.5.3. If you have been living with a scan that ran from
               boot and never finished, this section is the one to read.
@@ -1500,7 +2679,7 @@ cp .env.example .env</code></pre>
             proposition from one on an SSD, and 0.5.3 tunes for it.
           </p>
 
-          <div class="new">
+          <div class="new" data-since="0.5.3">
             <p>
               A 64 MiB page cache, a memory map, 8 KiB pages on a newly created database, and a
               write-ahead log that checkpoints a quarter as often. Ten indexes were added for
@@ -1588,13 +2767,22 @@ cp .env.example .env</code></pre>
 
           <h3 id="checksums">Checksums</h3>
           <p>
-            <strong>Compute checksums</strong> on a game hashes every file so the client can verify
-            what it downloads. It is opt-in per game because hashing reads every byte and is far too
-            expensive to do automatically across a multi-terabyte archive. <strong>Verify</strong>
-            re-hashes what was hashed before and records whether each file still matches — for an
-            archive, a changed file is almost always corruption rather than an edit, and nothing else
-            here would ever notice.
+            Hashing a game's files is what lets the client verify what it downloaded, and it is
+            opt-in per game because it reads every byte &mdash; far too expensive to do
+            automatically across a multi-terabyte archive. Verifying re-hashes what was hashed
+            before and records whether each file still matches: for an archive, a changed file is
+            almost always corruption rather than an edit, and nothing else here would ever notice.
+            Findings land on <a href="#health">Health</a>.
           </p>
+          <div class="warn">
+            <p>
+              <strong>Neither has a control in the panel as of 0.6.1.</strong> Both are API calls.
+              If you are turning the mesh on, run the chunk pass instead &mdash; it writes the
+              whole-file checksums as it goes, so it does this job too. See
+              <a href="#hashing">computing chunk hashes</a> for all three routes and a worked
+              example.
+            </p>
+          </div>
 
           <h3 id="import">Games players already have</h3>
           <p>
@@ -1632,7 +2820,7 @@ cp .env.example .env</code></pre>
           </p>
 
           <h3 id="auto-sync">Automatic syncing</h3>
-          <div class="new">
+          <div class="new" data-since="0.5.3">
             <p>
               The setting has said "pull before launching and push after quitting" since the client
               was written, and only the pull was ever implemented — so a player who trusted it had a
@@ -1689,7 +2877,7 @@ cp .env.example .env</code></pre>
           </p>
 
           <h4>Achievements without cloud saves</h4>
-          <div class="new">
+          <div class="new" data-since="0.5.3">
             <p>
               A game with unlock rules and no save rule is not a game whose save location is unknown.
               An unlock rule reads a file the game wrote <em>into its own save folder</em> — a
@@ -1800,7 +2988,7 @@ cp .env.example .env</code></pre>
             rate limit is shared with scanning and matching.
           </p>
 
-          <div class="new">
+          <div class="new" data-since="0.5.3">
             <p>
               Cards are clickable. A title the archive already has opens the game — the same panel
               the Store opens, with its screenshots, its size and its Install button. One it does not
@@ -1861,7 +3049,7 @@ cp .env.example .env</code></pre>
             rather than faked.
           </p>
 
-          <div class="new">
+          <div class="new" data-since="0.5.3">
             <p>0.5.3 adds room for a profile to be somebody's rather than a name and an avatar:</p>
             <ul>
               <li>
@@ -1892,7 +3080,7 @@ cp .env.example .env</code></pre>
             A linked player's handle is private by default. The toggle lives on their account page,
             and re-linking — which happens on every Discord sign-in — does not turn it back on.
           </p>
-          <div class="new">
+          <div class="new" data-since="0.5.3">
             <p>
               Turning it on used to change the friends rail and nothing else, including the profile
               page it is named after. Every path that builds a profile summary now resolves the
@@ -1995,7 +3183,7 @@ cp .env.example .env</code></pre>
           </p>
 
           <h3 id="stopping">Stopping a game</h3>
-          <div class="new">
+          <div class="new" data-since="0.5.3">
             <p>
               While a game runs, the Play button used to become a greyed-out "Running" — true, and no
               help at all to somebody whose game has hung behind a fullscreen window they cannot get
@@ -2044,7 +3232,7 @@ cp .env.example .env</code></pre>
           </p>
 
           <h3 id="media">The media viewer</h3>
-          <div class="new">
+          <div class="new" data-since="0.5.3">
             <p>
               Screenshots used to open into the 440-pixel dialog the app uses for confirmation
               prompts, so a 1080p capture rendered at about a fifth of its size with text buttons
@@ -2061,7 +3249,7 @@ cp .env.example .env</code></pre>
           </p>
 
           <h3 id="offline">Working offline</h3>
-          <div class="new">
+          <div class="new" data-since="0.5.3">
             <p>
               The archive runs on your own hardware, so it is down sometimes — a reboot, a moved
               cable, a laptop on a train. Any of those used to take the whole client with it: the
@@ -2214,7 +3402,7 @@ cp .env.example .env</code></pre>
             a link, so it works whether or not this server is reachable from the internet.
           </p>
 
-          <div class="new">
+          <div class="new" data-since="0.5.3">
             <p>
               The composer has three pickers — people, roles, channels — that insert a real mention at
               the cursor. Typing a snowflake by hand works and nobody does it: it has to be copied out
@@ -2459,9 +3647,17 @@ cp .env.example .env</code></pre>
             scan produces an archive that restores to a corrupt state.
           </p>
           <p>
-            Written every <code>backupEveryHours</code> hours keeping <code>backupKeep</code> of them,
-            or on demand. To restore: stop the server, unzip the archive over an empty
-            <code>DATA_DIR</code>, start it again.
+            The schedule is three settings on <strong>Admin → Insights → Health</strong>, not
+            environment variables: how many archives to keep (7), how many hours between runs (24,
+            and <code>0</code> turns automatic runs off), and whether to include cached artwork
+            (off). They are written into <code>DATA_DIR/backups</code>, which is itself left out of
+            them.
+          </p>
+          <p>
+            To restore: stop the server, unzip the archive over an empty <code>DATA_DIR</code>,
+            start it again. On a coordinator that is the whole restore, since no game files ever
+            lived there; on a standalone server the library is separate and was never in the
+            archive to begin with.
           </p>
         </section>
 
@@ -2529,14 +3725,27 @@ packages/shared Types, zod schemas and constants used by all three</code></pre>
 
           <h3 id="windows-build">Building a Windows release by hand</h3>
           <p>
-            The Windows client is built on demand rather than on every push. Both Actions workflows
-            can build it &mdash; run <strong>Publish</strong> manually and tick
-            <code>build_client</code> &mdash; but neither does so on its own, because Windows
-            minutes bill at twice the Linux rate and a full client build is long enough that doing
-            it on every push would dominate the budget for something most pushes do not ship.
+            The Windows client is built on demand rather than on every push, because Windows
+            minutes bill at twice the Linux rate and a Tauri build is long enough that building one
+            to prove a change to the admin panel did not break it is money for nothing. Two things
+            do trigger it:
           </p>
+          <ul>
+            <li>
+              <strong>CI</strong> builds it when the client's own code changed &mdash; it links a
+              Rust transport crate the Linux jobs never compile for Windows, so "it built on Linux"
+              stopped being evidence that it builds at all &mdash; and on any manual run. The
+              installer it produces is a by-product, built without link-time optimisation; it is
+              not a release build.
+            </li>
+            <li>
+              <strong>Publish</strong>, run by hand with <code>build_client</code> ticked. It needs
+              a Windows runner to be online.
+            </li>
+          </ul>
           <p>
-            <code>scripts/build-windows.ps1</code> does the same job on any Windows machine with
+            For a release you actually ship, build it locally.
+            <code>scripts/build-windows.ps1</code> does the whole job on any Windows machine with
             Node 22, pnpm and the Rust toolchain:
           </p>
           <pre><code>.\scripts\build-windows.ps1</code></pre>
