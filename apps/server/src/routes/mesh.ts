@@ -9,10 +9,10 @@ import {
   meshReportSchema,
   reportedCatalogSchema,
 } from '@gameblade/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { requireAdmin, requireUser } from '../auth/middleware.js';
-import { gameFiles, games } from '../db/schema.js';
+import { gameFiles, games, meshNodes } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 
@@ -114,11 +114,29 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
    * are omitted because a mirror could not prove its copy of one is right.
    */
   app.get('/mesh/catalog', async (request) => {
-    requireNode(request);
+    const { nodeId } = requireNode(request);
+    const node = db.select().from(meshNodes).where(eq(meshNodes.id, nodeId)).get();
+
+    /*
+     * Scoped to the library this node was assigned, when it has one.
+     *
+     * A node with a library is one that reports its own catalog, and the only
+     * games it can possibly hold are the ones in it. Sending the whole
+     * database meant a node fetched every other node's games too, checked its
+     * own disk for each of them, and found nothing — a stat of every file of
+     * every game on somebody else's machine, on a timer, for ever.
+     *
+     * A node with no library is a mirror, which syncs against everything on
+     * purpose, so that case is unchanged.
+     */
+    const scoped = node?.libraryId
+      ? and(eq(games.libraryId, node.libraryId), isNull(games.missingAt))
+      : isNull(games.missingAt);
 
     const rows = db
       .select({ id: games.id, title: games.title, sizeBytes: games.sizeBytes })
       .from(games)
+      .where(scoped)
       .all();
 
     return {

@@ -1,10 +1,13 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MESH_CHUNK_BYTES } from '@gameblade/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hashFileByChunk } from './chunks.js';
+import { createDb, type DbHandle } from '../db/index.js';
+import { gameFiles, games, libraries } from '../db/schema.js';
+import { newId } from '../lib/ids.js';
+import { ChunkService, hashFileByChunk } from './chunks.js';
 
 /**
  * These hashes are a wire format. A node, the server and the client each
@@ -95,5 +98,125 @@ describe('hashFileByChunk', () => {
 
   it('rejects rather than resolving when the file cannot be read', async () => {
     await expect(hashFileByChunk(path.join(dir, 'missing.bin'))).rejects.toThrow();
+  });
+});
+
+/**
+ * The sweep a node runs on itself.
+ *
+ * A node has no API, so nothing can ask it to hash anything: either it does
+ * this by itself or its library is never offered to a single client. The
+ * failure is silent at every step — the games are there, the scan succeeded,
+ * the node is online and reporting — so the properties are pinned here rather
+ * than left to be noticed in production.
+ */
+describe('ChunkService.hashUnhashed', () => {
+  let dir: string;
+  let handle: DbHandle;
+  let service: ChunkService;
+  let libraryDir: string;
+
+  const silent = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'gameblade-sweep-test-'));
+    libraryDir = path.join(dir, 'library');
+    handle = createDb(path.join(dir, 'test.db'));
+    service = new ChunkService(handle.db, silent);
+  });
+
+  afterEach(async () => {
+    handle.sqlite.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** One folder game of one file, on disk and in the database, unhashed. */
+  async function seed(name: string, bytes: Buffer, options: { missing?: boolean } = {}) {
+    const libraryId = newId('lib');
+    const existing = handle.db.select().from(libraries).all();
+    if (existing.length === 0) {
+      handle.db
+        .insert(libraries)
+        .values({ id: libraryId, name: 'Library', path: libraryDir })
+        .run();
+    }
+    const library = handle.db.select().from(libraries).all()[0]!;
+
+    await mkdir(path.join(libraryDir, name), { recursive: true });
+    await writeFile(path.join(libraryDir, name, 'game.bin'), bytes);
+
+    const gameId = newId('gam');
+    handle.db
+      .insert(games)
+      .values({
+        id: gameId,
+        libraryId: library.id,
+        relPath: name,
+        kind: 'folder',
+        title: name,
+        sortTitle: name.toLowerCase(),
+        searchTitle: name.toLowerCase(),
+        sizeBytes: bytes.length,
+        fileCount: 1,
+        missingAt: options.missing ? new Date().toISOString() : null,
+      })
+      .run();
+
+    handle.db
+      .insert(gameFiles)
+      .values({
+        id: newId('gfl'),
+        gameId,
+        relPath: 'game.bin',
+        sizeBytes: bytes.length,
+        modifiedAt: new Date().toISOString(),
+      })
+      .run();
+
+    return gameId;
+  }
+
+  it('hashes everything that was not hashed, so a node can serve it', async () => {
+    const first = await seed('One', randomBytes(4096));
+    const second = await seed('Two', randomBytes(4096));
+
+    expect(service.isGameChunked(first)).toBe(false);
+
+    const result = await service.hashUnhashed();
+
+    expect(result).toEqual({ hashed: 2, failed: 0 });
+    expect(service.isGameChunked(first)).toBe(true);
+    expect(service.isGameChunked(second)).toBe(true);
+  });
+
+  it('does nothing the second time, so it can run on a timer', async () => {
+    // The sweep runs every ten minutes for the life of the node. If it did not
+    // narrow to what is actually pending it would re-read every byte of the
+    // whole archive, for ever.
+    await seed('One', randomBytes(4096));
+    await service.hashUnhashed();
+
+    expect(service.unhashedGameIds()).toEqual([]);
+    expect(await service.hashUnhashed()).toEqual({ hashed: 0, failed: 0 });
+  });
+
+  it('leaves a game that is no longer on disk alone', async () => {
+    // Flagged missing means the files went away. Hashing it would fail once per
+    // sweep for ever, and the failure count is meant to mean something.
+    await seed('Gone', randomBytes(1024), { missing: true });
+
+    expect(service.unhashedGameIds()).toEqual([]);
+    expect(await service.hashUnhashed()).toEqual({ hashed: 0, failed: 0 });
+  });
+
+  it('stops between games when asked, so a scan is not fighting it for the disk', async () => {
+    await seed('One', randomBytes(4096));
+    await seed('Two', randomBytes(4096));
+
+    let seen = 0;
+    const result = await service.hashUnhashed(() => seen++ > 0);
+
+    expect(result.hashed).toBe(1);
+    expect(service.unhashedGameIds()).toHaveLength(1);
   });
 });

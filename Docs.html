@@ -659,6 +659,49 @@
             </div>
           </div>
 
+          <div class="new" data-since="the next release">
+            <p>
+              <strong>The split topology works.</strong> 0.6 introduced a coordinator and its
+              nodes; on 0.6.1 four things between a fresh coordinator and a client downloading a
+              game were unfinished, and every one of them failed silently. All four are fixed:
+            </p>
+            <ul>
+              <li>
+                <strong>A node enrols.</strong> Its two processes share one identity file and were
+                writing and reading it in different casings, so the half that reports the catalog
+                waited for ever for a key it could not see. See
+                <a href="#deploy-state">the state file</a>.
+              </li>
+              <li>
+                <strong>A node hashes its own games.</strong> Nothing is servable over the mesh
+                without per-chunk hashes, and a node &mdash; which has no API by design &mdash; had
+                no way to compute them. It now does it by itself after a scan. See
+                <a href="#deploy-hashing">hashing</a>.
+              </li>
+              <li>
+                <strong>A coordinator can create a library.</strong> It was checking that the path
+                existed inside its own container, which is right on a machine that reads its own
+                files and impossible on one whose games are somebody else's disk &mdash; so the
+                library a node has to report into could not be made.
+              </li>
+              <li>
+                <strong>A coordinator does not scan.</strong> It was scanning the libraries
+                describing what its nodes hold, finding them empty, and flagging the catalog those
+                nodes had just reported. The role decides now, rather than two settings.
+              </li>
+            </ul>
+            <p>
+              Also: a node is told about its own library rather than the whole database, and stops
+              re-fetching and re-checking every game on every heartbeat &mdash; on two nodes with
+              real libraries that was thousands of requests and filesystem checks a minute, to
+              learn nothing.
+            </p>
+            <p>
+              <a href="#deploy">The build, in order</a>, and
+              <a href="#deploy-upgrading">what to undo</a> if you worked around any of it.
+            </p>
+          </div>
+
           <div class="new" data-since="0.6.1">
             <p>
               <strong>What&rsquo;s new in 0.6.1.</strong> A short release, and all of it is the
@@ -700,9 +743,9 @@
               <strong>Setting one up.</strong> If you are building the split topology rather than
               reading about it, <a href="#deploy">a coordinator and two nodes, in production</a> is
               the whole build in order &mdash; Caddy in front, the nodes on a LAN, their status
-              pages reachable from outside &mdash; including
-              <a href="#deploy-gaps">the four things that are unfinished in 0.6.1</a> and what to
-              do about each. A <code>standalone</code> server is unaffected by all four.
+              pages reachable from outside. Four things stood between a fresh coordinator and a
+              client downloading a game in 0.6.1 and none of them do now; if you built one on
+              0.6.1 and worked around them, <a href="#deploy-upgrading">what to undo</a>.
             </p>
             <p>
               <strong>And in 0.6.0, if you are coming from 0.5.</strong> This is where GameBlade
@@ -944,6 +987,7 @@ cp .env.example .env</code></pre>
                 <tr><td><code>SCAN_ON_START</code></td><td><code>true</code></td><td>Scan a few seconds after boot</td></tr>
                 <tr><td><code>SCAN_INTERVAL_MINUTES</code></td><td><code>360</code></td><td>Scheduled rescan interval, up to 10080 (a week); <code>0</code> disables</td></tr>
                 <tr><td><code>SCAN_CONCURRENCY</code></td><td><code>4</code></td><td>How many entries are inspected at once, 1&ndash;32. Lower it on a spinning disk or a network share.</td></tr>
+                <tr><td><code>AUTO_CHUNK_HASH</code></td><td><code>true</code></td><td>Whether a node hashes what it scanned without being asked. Only the <code>node</code> role acts on it, because only a node has no API to be asked through. See <a href="#deploy-hashing">hashing</a>.</td></tr>
 
                 <tr><td colspan="3"><strong>Advanced</strong></td></tr>
                 <tr><td><code>RATE_LIMIT_MAX</code></td><td><code>300</code></td><td>Requests per window per client, minimum 10</td></tr>
@@ -954,15 +998,13 @@ cp .env.example .env</code></pre>
             </table>
           </div>
 
-          <div class="warn">
+          <div class="note">
             <p>
-              <strong><code>SCAN_ON_START</code> and <code>SCAN_INTERVAL_MINUTES</code> are not
-              gated by the role.</strong> A coordinator with those at their defaults will scan the
-              library paths registered in its database &mdash; and a coordinator holds no game
-              files, so if one of those paths exists and is empty, the scan finds nothing there and
-              flags every game a node reported as missing. Set both to off on a coordinator:
-              <code>SCAN_ON_START=false</code> and <code>SCAN_INTERVAL_MINUTES=0</code>. A path that
-              does not exist at all is skipped harmlessly; an empty one is not.
+              <strong>Scanning is decided by the role.</strong> A coordinator ignores
+              <code>SCAN_ON_START</code> and <code>SCAN_INTERVAL_MINUTES</code> and logs that it is
+              doing so, because its libraries are records of what its nodes hold rather than folders
+              it can read. In 0.6.1 it did scan them, which flagged every game its nodes had just
+              reported; turning both off was mandatory then and is a no-op now.
             </p>
           </div>
 
@@ -1277,12 +1319,10 @@ cp .env.example .env</code></pre>
               the original stays where it is and stays whole.
             </li>
             <li>
-              <strong>Start the coordinator</strong> with <code>ROLE=coordinator</code>,
-              <code>SCAN_ON_START=false</code> and <code>SCAN_INTERVAL_MINUTES=0</code>, and check
-              it while the old instance is still the live one: sign in, browse the catalog, open a
-              save, read a message. The scanning switches matter because they are not gated by the
-              role &mdash; the copied database still lists the old host's library paths, and a
-              coordinator that can read one and finds it empty will flag every game in it.
+              <strong>Start the coordinator</strong> with <code>ROLE=coordinator</code> and check it
+              while the old instance is still the live one: sign in, browse the catalog, open a
+              save, read a message. It will not scan the library paths the copied database still
+              lists &mdash; the role sees to that &mdash; so there is nothing to switch off first.
             </li>
             <li>
               <strong>Enrol the node</strong> that holds the games, and
@@ -1385,15 +1425,15 @@ cp .env.example .env</code></pre>
             <p>
               <strong>The panel does not display it as of 0.6.1</strong>, although the relay's own
               usage text says to look on the Nodes page. It is handed to a node at enrolment, so
-              the place to read it is a node that has already enrolled &mdash; it is in that node's
-              <code>data/node-state.json</code>. The mesh agent writes that file with snake_case
-              keys, so the field is <code>coordinator_key</code>; see
-              <a href="#deploy-state">the state file</a>.
+              the place to read it is a node that has already enrolled &mdash; the
+              <code>coordinatorKey</code> field of that node's
+              <a href="#deploy-state"><code>data/node-state.json</code></a>.
             </p>
           </div>
-          <pre><code># On a node whose agent has registered:
+          <pre><code># On a node whose agent has registered. A file written by 0.6.1 spells it
+# coordinator_key; either is read.
 python3 -c 'import json; s=json.load(open("data/node-state.json"));
-print(s.get("coordinator_key") or s.get("coordinatorKey"))'</code></pre>
+print(s.get("coordinatorKey") or s.get("coordinator_key"))'</code></pre>
           <p>
             It is a public key: it verifies grants and cannot mint one, which is exactly why the
             relay can be handed it and nothing else. The coordinator generates the pair on first
@@ -1522,8 +1562,9 @@ print(s.get("coordinator_key") or s.get("coordinatorKey"))'</code></pre>
               eligible once every one of its files has per-chunk hashes: without them a client
               cannot check a piece that came from somewhere else, so it will not accept one. The
               pass reads every byte once and produces the whole-file checksums at the same time,
-              which makes <a href="#checksums">the checksum pass</a> redundant. It is
-              <a href="#hashing">an API call, not a button</a>.
+              which makes <a href="#checksums">the checksum pass</a> redundant. On a
+              <code>node</code> this <a href="#deploy-hashing">happens by itself</a>; on a
+              standalone server it is <a href="#hashing">an API call, not a button</a>.
             </li>
             <li>
               <strong>Enrol the node.</strong> <strong>Admin → Settings → Nodes</strong> takes a
@@ -1624,13 +1665,14 @@ curl -sS -H "authorization: Bearer $TOKEN" \
             Revoke the device afterwards from <strong>Settings → Devices</strong> in the client, or
             leave it — it is a token like any other and is listed like any other.
           </p>
-          <div class="warn">
+          <div class="note">
             <p>
-              <strong>A <code>ROLE=node</code> server has no API to call this on.</strong> It
-              registers a liveness probe and its own status page and nothing else, deliberately —
-              so on a coordinator/node split there is no way, in 0.6.1, to hash the games from the
-              machine that holds them. <a href="#deploy-hashing">Hashing a node's library</a> has
-              the procedure that does work.
+              <strong>None of this applies to a node.</strong> A <code>ROLE=node</code> server has
+              no API to call — a liveness probe and its own status page, deliberately, and nothing
+              else — so it cannot be asked and does not need to be: it hashes what it scanned by
+              itself. See <a href="#deploy-hashing">hashing, which happens by itself</a>. These
+              routes are for a standalone server, where hashing stays a deliberate per-game
+              decision because the origin can always serve the file anyway.
             </p>
           </div>
 
@@ -1741,13 +1783,14 @@ curl -sS -H "authorization: Bearer $TOKEN" \
             is the whole build, in order, with the things that will bite marked.
           </p>
 
-          <div class="warn">
+          <div class="note">
             <p>
-              <strong>Read <a href="#deploy-gaps">what does not work yet</a> before you build
-              this.</strong> The split-role topology is new in 0.6, and four things in the path
-              from a fresh coordinator to a client downloading a game are unfinished in 0.6.1. All
-              four have a way round them and all four are below &mdash; but finding them at step
-              nine is a bad afternoon, and none of them is your network.
+              <strong>Nothing here needs working around.</strong> Four things in this path were
+              unfinished in 0.6.1 &mdash; a node could not enrol, could not hash its own games, a
+              coordinator would not accept a library, and then scanned the catalog its nodes had
+              just reported. All four are fixed, so what follows is the build rather than the
+              build plus four detours. If you already deployed on 0.6.1, see
+              <a href="#deploy-upgrading">upgrading from 0.6.1</a>.
             </p>
           </div>
 
@@ -1821,76 +1864,73 @@ curl -sS -H "authorization: Bearer $TOKEN" \
             </p>
           </div>
 
-          <h3 id="deploy-gaps">What does not work yet in 0.6.1</h3>
+          <h3 id="deploy-upgrading">Upgrading from 0.6.1</h3>
           <p>
-            Stated plainly, with what to do instead. None of these affects a
-            <code>standalone</code> server, which is why they survived a release.
+            Skip this if you are building a new one. If you already have a coordinator and nodes
+            running on 0.6.1, four things changed under you, and two of them mean undoing something
+            you were told to do:
           </p>
-
           <div class="scroller">
             <table>
-              <thead><tr><th>What happens</th><th>Why</th><th>What to do</th></tr></thead>
+              <thead><tr><th>Then</th><th>Now</th></tr></thead>
               <tbody>
                 <tr>
                   <td>
-                    A node never enrols. Its page says so, and its log repeats
-                    <em>waiting for the mesh agent to generate this node's key</em> for ever.
+                    The two processes on a node wrote and read the shared state file in different
+                    casings, so the server never saw the agent's key, never enrolled and never
+                    reported a catalog.
                   </td>
                   <td>
-                    The two processes on a node share one state file and disagree about how to
-                    spell its contents: the agent writes <code>secret_key</code>, the server reads
-                    <code>secretKey</code>.
+                    Both use the same names. A file written by the old agent is read as it is and
+                    rewritten in the new casing when the agent next registers, so the node keeps
+                    its identity and everything the coordinator knew it held. If you added
+                    duplicate camelCase keys by hand, leave them &mdash; they are what is read now,
+                    and the extra copies are ignored.
                   </td>
-                  <td><a href="#deploy-state">Write both spellings into the file once</a>.</td>
                 </tr>
                 <tr>
                   <td>
-                    No game is ever offered from a node, whatever the mesh switch says.
+                    A node had no way to compute chunk hashes, so nothing on it was ever
+                    mesh-eligible.
                   </td>
                   <td>
-                    A game needs per-chunk hashes to be mesh-eligible, and a
-                    <code>ROLE=node</code> server has no API to compute them on.
+                    A node hashes what it scanned, by itself, half a minute after boot and every
+                    ten minutes after that. Nothing to run. See
+                    <a href="#deploy-hashing">hashing</a>.
                   </td>
-                  <td><a href="#deploy-hashing">Hash them with the role temporarily flipped</a>.</td>
                 </tr>
                 <tr>
                   <td>
-                    You cannot assign a node its library, because the coordinator will not let you
-                    create one.
+                    A coordinator would not create a library unless the path existed inside its own
+                    container, so you mounted empty placeholder directories.
                   </td>
                   <td>
-                    Creating a library checks that the path is a readable directory
-                    <em>inside the coordinator's container</em>, and a coordinator mounts no
-                    library.
+                    A coordinator takes the path as the label it is. <strong>Unmount the
+                    placeholders</strong> &mdash; the library records keep working and nothing
+                    reads through them.
                   </td>
-                  <td><a href="#deploy-libraries">Mount empty placeholder directories</a>.</td>
                 </tr>
                 <tr>
                   <td>
-                    Everything a node reported is flagged missing a few minutes after it reports.
+                    A coordinator scanned those placeholders and flagged every game its nodes had
+                    reported, so <code>SCAN_ON_START=false</code> and
+                    <code>SCAN_INTERVAL_MINUTES=0</code> were mandatory.
                   </td>
                   <td>
-                    Scanning is not gated by role, so a coordinator scans those placeholder
-                    directories, finds them empty, and concludes the games are gone.
-                  </td>
-                  <td>
-                    <code>SCAN_ON_START=false</code> and <code>SCAN_INTERVAL_MINUTES=0</code> on
-                    the coordinator. Not optional.
+                    The role decides. Both settings are ignored on a coordinator and it says so in
+                    the log at boot, so you can leave them, remove them, or set them wrongly
+                    without consequence.
                   </td>
                 </tr>
               </tbody>
             </table>
           </div>
-
-          <div class="note">
+          <div class="warn">
             <p>
-              <strong>If none of that appeals</strong>, the topology that works today with nothing
-              worked around is a <code>standalone</code> server on the machine that holds the
-              biggest library &mdash; it keeps its HTTP download path, so nothing can strand a
-              player &mdash; with the second machine enrolled as a <code>mirror</code> node. The
-              mirror syncs against the origin's catalog rather than reporting one of its own, so
-              none of the four rows above applies to it. You lose the small-VPS front door and keep
-              everything else.
+              <strong>Update the coordinator and every node together.</strong> They exchange a
+              catalog and a state file, and two of these changes are on both sides of that. Running
+              a 0.6.1 node against an updated coordinator is not dangerous &mdash; it fails exactly
+              as it failed before &mdash; but it will look like the fix did not work.
             </p>
           </div>
 
@@ -1917,11 +1957,9 @@ services:
       TRUST_PROXY: 'true'
       SECURE_COOKIES: auto
 
-      # A coordinator has no library, and scanning is NOT gated by the role.
-      # Left at their defaults these would scan the placeholder directories
-      # below, find them empty, and flag every game the nodes reported.
-      SCAN_ON_START: 'false'
-      SCAN_INTERVAL_MINUTES: '0'
+      # Nothing here about scanning: a coordinator holds no files, so the role
+      # switches it off and says so in the log rather than leaving two more
+      # settings to get right.
 
       # Only if you run the relay. Public host, relay port.
       # RELAY_ENDPOINT: games.example.com:47821
@@ -1935,11 +1973,8 @@ services:
       STEAMGRIDDB_API_KEY: ''
       STEAM_API_KEY: ''
     volumes:
+      # The only thing on this host that cannot be recreated, and it is small.
       - ./data:/data
-      # Placeholders, not libraries. Empty directories that exist only so the
-      # coordinator will accept them as library paths — see below.
-      - ./libraries/node-a:/libraries/node-a
-      - ./libraries/node-b:/libraries/node-b
     ports:
       # Bound to loopback: Caddy is on this host and nothing else needs it.
       # If Caddy is in Docker on a shared network, drop this block entirely
@@ -1948,16 +1983,16 @@ services:
     security_opt:
       - 'no-new-privileges:true'</code></pre>
 
-          <pre><code>mkdir -p data libraries/node-a libraries/node-b
+          <pre><code>mkdir -p data
 sudo chown -R 1000:1000 ./data
 docker compose up -d</code></pre>
 
-          <div class="warn">
+          <div class="note">
             <p>
-              <strong>Do not put <code>LIBRARY_PATHS</code> on a coordinator.</strong> It would
-              register those placeholders as libraries at boot with names you did not choose. Add
-              them by hand in the panel instead, where you can name them after the node that will
-              report into each.
+              <strong>No <code>LIBRARY_PATHS</code> here, and no library mounts.</strong> A
+              coordinator's libraries are records of what its nodes hold; they are created in the
+              panel, where you can name them after the node reporting into each. Setting
+              <code>LIBRARY_PATHS</code> would register some at boot with names you did not choose.
             </p>
           </div>
 
@@ -2011,8 +2046,11 @@ docker compose up -d</code></pre>
           </ul>
 
           <p>
-            In <strong>Admin → Catalog → Libraries</strong>, add two, pointing at the placeholder
-            directories from the compose file above:
+            In <strong>Admin → Catalog → Libraries</strong>, add one per node. Nothing has to exist
+            on the coordinator for this: on a machine that reads its own files a library path is
+            checked at creation, because a library nobody can read is a scan that finds nothing for
+            a week and says so nowhere &mdash; but on a coordinator the games are on somebody
+            else's disk and the path is the label the catalog is filed under.
           </p>
           <div class="scroller">
             <table>
@@ -2024,19 +2062,10 @@ docker compose up -d</code></pre>
             </table>
           </div>
           <p>
-            The paths are labels here and nothing more &mdash; the coordinator never reads a byte
-            through them, and they do not have to resemble the paths on the nodes. They have to
-            <em>exist</em> only because the create-library route checks, which is the right check
-            on a standalone server and a nuisance on this one.
+            Any two distinct paths do; they need not resemble the paths on the nodes, and matching
+            them is only a kindness to whoever reads this later. Each has to be unique, because two
+            libraries cannot share one path.
           </p>
-          <div class="warn">
-            <p>
-              This is exactly why <code>SCAN_ON_START</code> and
-              <code>SCAN_INTERVAL_MINUTES</code> are off on the coordinator. An empty directory
-              that a scan can read is worse than one that does not exist: a missing path fails the
-              walk and is skipped, an empty one succeeds and reports zero games.
-            </p>
-          </div>
 
           <h3 id="deploy-nodes">3. The nodes</h3>
           <p>
@@ -2119,119 +2148,97 @@ services:
             made for it. Reports are refused until you do, with a message saying exactly that.
           </p>
 
-          <h3 id="deploy-state">4. The state file, and the one edit it needs</h3>
+          <h3 id="deploy-state">4. The state file</h3>
           <p>
             <code>data/node-state.json</code> is the node's identity: an Ed25519 secret, the node
             id and token the coordinator issued, and the coordinator's public key. Both processes
-            read it, and the intent is that the agent generates the key and the server picks it up.
+            on the node read and write it, which is how they are one node rather than two &mdash;
+            the agent generates the key and registers, and the server picks the registration up and
+            reports against it.
           </p>
+          <pre><code>{
+  "secretKey": "…",
+  "nodeId": "nod_…",
+  "nodeToken": "…",
+  "coordinatorKey": "…"
+}</code></pre>
           <div class="warn">
             <p>
-              <strong>They spell it differently in 0.6.1.</strong> The agent writes
-              <code>secret_key</code>, <code>node_id</code>, <code>node_token</code> and
-              <code>coordinator_key</code>; the server looks for <code>secretKey</code>,
-              <code>nodeId</code>, <code>nodeToken</code> and <code>coordinatorKey</code>. So the
-              server never sees a key, never enrols, and never reports a catalog &mdash; while the
-              agent, beside it, is enrolled and serving quite happily. The node's page shows this
-              as enrolled-but-never-reported.
+              <strong>Back this file up, and nothing else on a node.</strong> A node is known by its
+              key, not its address or its hostname. Lose it and the machine enrols again as a
+              stranger: a second node appears in the panel, the games it holds are attached to that
+              one, and the entry that knew what the old one held is left pointing at nothing. Copy
+              it if you ever move a node to different hardware. Everything else in a node's
+              <code>data/</code> is a rescan away.
             </p>
           </div>
-          <p>
-            The fix, until it is fixed properly, is to give the file both spellings. Let the agent
-            start and register first, then:
-          </p>
-          <pre><code>docker compose up -d mesh
-# Wait for "node:" in its output, which means it has registered.
-docker compose logs -f mesh
-
-docker compose stop server
-python3 - &lt;&lt;'PY'
-import json, pathlib
-path = pathlib.Path('data/node-state.json')
-state = json.loads(path.read_text())
-pairs = {
-    'secret_key': 'secretKey',
-    'node_id': 'nodeId',
-    'node_token': 'nodeToken',
-    'coordinator_key': 'coordinatorKey',
-}
-for snake, camel in pairs.items():
-    if snake in state and camel not in state:
-        state[camel] = state[snake]
-path.write_text(json.dumps(state, indent=2))
-print('added:', [c for c in pairs.values() if c in state])
-PY
-docker compose start server</code></pre>
-          <p>
-            It stays fixed. The server only rewrites the file when it registers, and with the node
-            id and token now present it has nothing to register; the agent only rewrites it when
-            its own keys are missing, and they are not. Copy the same file if you ever move a node
-            to different hardware &mdash; without it, that machine is a stranger with a new key and
-            an empty history.
-          </p>
-
-          <h3 id="deploy-hashing">5. Hashing a node's library</h3>
-          <p>
-            Nothing is served from a node until its games have per-chunk hashes, and a
-            <code>ROLE=node</code> server has no API to compute them on. Give it one temporarily:
-            the same container, the same <code>data/</code>, the same library, with the role
-            flipped to <code>standalone</code> so the full API comes up.
-          </p>
-          <p>
-            The chunk table is written into that node's own database, which is where the reporter
-            reads it from &mdash; so hashing this way is not a workaround with a catch, it is the
-            same rows arriving the same way.
-          </p>
-
-          <pre><code># On the node, with the mesh agent left running.
-docker compose stop server
-
-# One-off, on a port nobody else is using, reachable from this host only.
-docker run --rm -it \
-  -v "$PWD/data:/data" \
-  -v /srv/games-a:/library:ro \
-  -p 127.0.0.1:8099:8080 \
-  -e ROLE=standalone \
-  -e DATA_DIR=/data \
-  -e LIBRARY_PATHS=/library \
-  -e ADMIN_USERNAME=hasher \
-  -e ADMIN_PASSWORD='&lt;temporary&gt;' \
-  ghcr.io/scopeddlol/gameblade:latest</code></pre>
-
-          <p>
-            Then drive it over <code>http://127.0.0.1:8099</code> exactly as
-            <a href="#hashing">computing chunk hashes</a> describes &mdash; sign in for a device
-            token, list the games, and post to <code>/api/games/&lt;id&gt;/chunks</code> one at a
-            time. Let its own scan finish first; the games have to be in its database before they
-            can be hashed.
-          </p>
-          <p>
-            Stop it when the last game is done, <code>docker compose start server</code>, and the
-            next report carries the hashes up. Chunk hashes are read out of the file's bytes, so
-            they survive the role flip, the restart and every future report.
-          </p>
-
           <div class="note">
             <p>
-              <strong>It is a long job, once.</strong> Every byte of every game is read at
-              8&nbsp;MiB a chunk, so a multi-terabyte node is measured in hours and is limited by
-              the disk. Only new and changed games need it afterwards. Run it on both nodes.
+              In 0.6.1 the two processes wrote this file in different casings and a node could
+              therefore never report a catalog. A file from then is read as it is and rewritten
+              correctly; there is nothing to do about it by hand.
             </p>
           </div>
 
+          <h3 id="deploy-hashing">5. Hashing, which happens by itself</h3>
+          <p>
+            Nothing is served from a node until its games have per-chunk hashes: a client will not
+            accept a piece it cannot verify, so a game without them is never offered from anywhere
+            but the origin &mdash; and on this topology the origin has no copy.
+          </p>
+          <p>
+            A node does this on its own. Half a minute after boot, and every ten minutes after
+            that, it hashes whatever it scanned and has not hashed yet, one game at a time, and the
+            next catalog report carries the results up. There is nothing to run and nothing to
+            enable.
+          </p>
+          <div class="scroller">
+            <table>
+              <thead><tr><th>It waits for</th><th>Because</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>The scanner to finish</td>
+                  <td>They would otherwise be reading the same disk at the same time, and the scan
+                  is what tells it which games exist.</td>
+                </tr>
+                <tr>
+                  <td>Games it has already hashed</td>
+                  <td>
+                    Skipped, from the chunk table rather than by re-reading. A restart resumes
+                    where it stopped instead of starting the archive again.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Games flagged missing</td>
+                  <td>The files went away. Hashing one would fail once every ten minutes, for ever.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            Watch it on the node's own page: <strong>hashed files out of total</strong> climbs, and
+            what the coordinator will offer is the games where those two numbers have met. It is a
+            long job the first time &mdash; every byte of every game, at 8&nbsp;MiB a chunk, so a
+            multi-terabyte node is hours and is limited by the disk &mdash; and a short one
+            afterwards, since only new and changed games need it.
+          </p>
+          <div class="note">
+            <p>
+              <strong>To do it on your own schedule instead</strong>, set
+              <code>AUTO_CHUNK_HASH=false</code> on the node. Nothing then hashes anything, which
+              means nothing is servable from it, so this is for an operator who would rather spend
+              the disk deliberately &mdash; by starting the node with it on overnight, say &mdash;
+              than have hours of reads begin after a scan.
+            </p>
+          </div>
           <div class="warn">
             <p>
-              <strong>A game that changes on disk loses its hashes.</strong> A report replaces the
-              file rows for any game whose size, file count or modification time moved, and the
-              replacements carry whatever chunks the node sent &mdash; which is none, until it has
-              been hashed again. The game stays in the catalog and stays downloadable on a
-              standalone server; on a coordinator it quietly stops being servable, because there is
-              no origin copy behind it.
-            </p>
-            <p>
-              So: after adding or updating games on a node, hash again. Games nobody touched are
-              reported as unchanged and are not rewritten, so their hashes survive every report
-              indefinitely.
+              <strong>A game that changes on disk loses its hashes</strong>, and gets them back on
+              the next sweep. A report replaces the file rows of any game whose size, file count or
+              modification time moved, and the replacements carry whatever chunks the node sent. So
+              a game you have just updated is briefly unservable &mdash; ten minutes at most, and
+              longer only if it is large. Games nobody touched are reported as unchanged and are not
+              rewritten at all.
             </p>
           </div>
 
@@ -2327,8 +2334,8 @@ docker run --rm -it \
                   <td>Each node enrolled</td>
                   <td>the same page</td>
                   <td>
-                    enrolled, with a node id. Still waiting means
-                    <a href="#deploy-state">the state file</a>.
+                    enrolled, with a node id. Still waiting means the agent has not registered —
+                    check <code>GAMEBLADE_ENROLMENT</code> and its log.
                   </td>
                 </tr>
                 <tr>
@@ -2347,7 +2354,11 @@ docker run --rm -it \
                 <tr>
                   <td>The games are hashed</td>
                   <td>the node's page: hashed files out of total</td>
-                  <td>equal. Zero means <a href="#deploy-hashing">step 5</a>.</td>
+                  <td>
+                    equal, eventually. It climbs on its own; a number that is stuck at zero means
+                    <code>AUTO_CHUNK_HASH</code> is off or a scan is still running.
+                    <a href="#deploy-hashing">Step 5.</a>
+                  </td>
                 </tr>
                 <tr>
                   <td>Both nodes are online to the coordinator</td>
@@ -2378,7 +2389,11 @@ docker run --rm -it \
               <tbody>
                 <tr>
                   <td>The node's page says waiting for the mesh agent's key, for ever</td>
-                  <td><a href="#deploy-state">The state file spellings.</a> Nothing else produces exactly this.</td>
+                  <td>
+                    The agent is not running, or is in its retry loop and has never registered —
+                    it is the process that generates that key. Read its log. On 0.6.1 this was
+                    <a href="#deploy-upgrading">the state file casing</a> and would never resolve.
+                  </td>
                 </tr>
                 <tr>
                   <td>The agent logs a refused registration and retries</td>
@@ -2397,9 +2412,9 @@ docker run --rm -it \
                 <tr>
                   <td>Games appear, then are flagged missing minutes later</td>
                   <td>
-                    The coordinator is scanning. <code>SCAN_ON_START=false</code> and
-                    <code>SCAN_INTERVAL_MINUTES=0</code>. Clear the flags with
-                    <strong>Remove missing</strong> once it has stopped.
+                    On 0.6.1, the coordinator scanning its own placeholder libraries. It no longer
+                    scans at all; if you see this on a current build, two nodes are sharing a
+                    library. Clear the flags with <strong>Remove missing</strong> afterwards.
                   </td>
                 </tr>
                 <tr>
@@ -2409,9 +2424,10 @@ docker run --rm -it \
                 <tr>
                   <td>The mesh is on, nodes are online, downloads still come from the origin</td>
                   <td>
-                    No chunk hashes. Check hashed-of-total on each node's page. And on a
-                    coordinator the origin has nothing to serve, so this shows up as a download
-                    that fails rather than one that is merely slow.
+                    No chunk hashes yet. Check hashed-of-total on each node's page — the sweep may
+                    still be working through the library. And on a coordinator the origin has
+                    nothing to serve, so this shows up as a download that fails rather than one
+                    that is merely slow.
                   </td>
                 </tr>
                 <tr>

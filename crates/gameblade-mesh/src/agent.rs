@@ -38,12 +38,26 @@ use crate::MESH_CHUNK_BYTES;
 /// The identity in particular: a node is known to the coordinator by its public
 /// key, so losing it means enrolling again as a stranger and abandoning
 /// everything the old registration knew about what this machine holds.
+///
+/// **camelCase on disk, and it matters.** This file is not private to the
+/// agent: the server process beside it reads the same path, waits for the key
+/// this writes, and registers with it so that both halves of a node are one
+/// node. That server is TypeScript and reads `secretKey`. Serialised in Rust's
+/// own casing, the two processes wrote and read different files through the
+/// same filename — the agent enrolled and served, the server sat waiting for a
+/// key it could not see, and the catalog was never reported. The aliases read
+/// back a file written by a version that got this wrong.
 #[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentState {
     /// Base64url of the 32 secret bytes.
+    #[serde(alias = "secret_key")]
     pub secret_key: Option<String>,
+    #[serde(alias = "node_id")]
     pub node_id: Option<String>,
+    #[serde(alias = "node_token")]
     pub node_token: Option<String>,
+    #[serde(alias = "coordinator_key")]
     pub coordinator_key: Option<String>,
 }
 
@@ -163,6 +177,31 @@ impl LibraryIndex {
             },
         );
         true
+    }
+
+    /// The fingerprint this index holds for a game, if it holds it at all.
+    pub fn content_hash(&self, game_id: &str) -> Option<&str> {
+        self.games
+            .get(game_id)
+            .map(|game| game.content_hash.as_str())
+    }
+
+    /// Move a game across from the previous index without re-checking it.
+    ///
+    /// Only ever called when the coordinator is still announcing the same
+    /// fingerprint, which is the whole condition: a game whose content changed
+    /// gets a new one, so a match means the copy this index verified is the
+    /// copy still being asked for. Rebuilding it would mean re-fetching the
+    /// file layout and re-stat-ing every file of every game on a timer, which
+    /// on a real archive is thousands of syscalls a minute to learn nothing.
+    pub fn carry_over(&mut self, previous: &mut LibraryIndex, game_id: &str) -> bool {
+        match previous.games.remove(game_id) {
+            Some(game) => {
+                self.games.insert(game_id.to_string(), game);
+                true
+            }
+            None => false,
+        }
     }
 
     /// What to announce on the next heartbeat.
@@ -591,6 +630,58 @@ mod tests {
             reloaded.identity().unwrap().public_key(),
             identity.public_key()
         );
+    }
+
+    #[test]
+    fn agent_state_is_written_in_the_casing_the_server_reads() {
+        // The server process beside this one is TypeScript and looks for
+        // `secretKey`. Asserted on the bytes rather than on a round trip
+        // through this struct, because a round trip passes whatever casing
+        // both ends happen to agree on and this is about the end that is not
+        // here.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+
+        let mut state = AgentState::default();
+        state.identity().unwrap();
+        state.node_id = Some("nod_1".into());
+        state.node_token = Some("tok_1".into());
+        state.coordinator_key = Some("key_1".into());
+        state.save(&path).unwrap();
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+
+        for key in ["secretKey", "nodeId", "nodeToken", "coordinatorKey"] {
+            assert!(
+                written.get(key).is_some(),
+                "{key} is missing from {written}"
+            );
+        }
+        for key in ["secret_key", "node_id", "node_token", "coordinator_key"] {
+            assert!(written.get(key).is_none(), "{key} should not be written");
+        }
+    }
+
+    #[test]
+    fn a_state_file_from_before_the_casing_was_fixed_still_loads() {
+        // Upgrading must not look like losing the identity: a node that
+        // re-enrols is a stranger to the coordinator, and everything it was
+        // known to hold is abandoned.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        std::fs::write(
+            &path,
+            r#"{"secret_key":"c2VjcmV0","node_id":"nod_old","node_token":"tok_old",
+                "coordinator_key":"key_old"}"#,
+        )
+        .unwrap();
+
+        let state = AgentState::load(&path);
+        assert_eq!(state.node_id.as_deref(), Some("nod_old"));
+        assert_eq!(state.node_token.as_deref(), Some("tok_old"));
+        assert_eq!(state.coordinator_key.as_deref(), Some("key_old"));
+        assert_eq!(state.secret_key.as_deref(), Some("c2VjcmV0"));
     }
 
     #[test]

@@ -15,12 +15,19 @@ services:
     container_name: gameblade-coordinator
     restart: unless-stopped
     environment:
-      # No local library, no scanning. The catalog arrives from nodes.
+      # No local library and no scanning: the role switches scanning off, since
+      # a coordinator's libraries are records of what its nodes hold rather
+      # than folders it can read. The catalog arrives from nodes.
       ROLE: coordinator
       DATA_DIR: /data
-      # Behind a reverse proxy that terminates TLS.
+      # Behind a reverse proxy that terminates TLS. Required: without it every
+      # request appears to come from the proxy, and rate limiting buckets every
+      # player together.
       TRUST_PROXY: 'true'
     volumes:
       - ./data:/data
+    # Published for a reverse proxy on this host. Bind it to loopback when that
+    # proxy is here too, or drop the block entirely and let a proxy on a shared
+    # Docker network reach it by service name.
     ports:
-      - '8080:8080'
+      - '127.0.0.1:8080:8080'

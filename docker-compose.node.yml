@@ -7,10 +7,15 @@
 # Two processes, one node. The server scans and reports; the mesh agent serves.
 # They share a state file so they agree about which node they are.
 #
-# First run only: put the code from Admin → Settings → Nodes in ENROLMENT_TOKEN.
-# It is spent immediately and can be removed afterwards — what identifies this
-# node from then on is the key in ./data/node-state.json, which is the one file
-# here worth keeping.
+# First run only: put the code from Admin → Settings → Nodes into BOTH services.
+# The agent owns this node's keypair and so has to register first; the server
+# then finds the registration already in the state file and reports against it.
+# Both derive the same identity from that one file, so the second registration
+# is recognised rather than counted as a new node, and one code covers both.
+#
+# The code is spent immediately and can be removed afterwards — what identifies
+# this node from then on is the key in ./data/node-state.json, which is the one
+# file here worth keeping.
 
 services:
   scanner:
@@ -30,9 +35,15 @@ services:
       # Read-only: a node serves this library and must never write to it.
       - /path/to/games:/library:ro
     # The node's own status page: what it scanned, whether it enrolled, when it
-    # last reported. Bound to localhost because a node has nothing to say to the
-    # public internet over HTTP - reach it through an SSH tunnel, or drop the
-    # `127.0.0.1` if this host is somewhere only you can reach.
+    # last reported. Bound to localhost by default because the page has no
+    # authentication of its own and a node has nothing to say to the public
+    # internet over HTTP.
+    #
+    # To reach it from elsewhere on your network, bind it to this host's LAN
+    # address instead - '192.168.1.20:8080:8080'. Binding to the address rather
+    # than to 0.0.0.0 keeps it off every other interface this host has. For
+    # access from outside the network, put a tunnel with its own authentication
+    # in front; the two coexist, and neither needs to know about the other.
     ports:
       - '127.0.0.1:8080:8080'
 
@@ -47,6 +58,9 @@ services:
       GAMEBLADE_LIBRARY: /library
       GAMEBLADE_STATE: /data/node-state.json
       GAMEBLADE_PORT: '47820'
+      # The same code as the scanner's ENROLMENT_TOKEN above. This process
+      # registers first, so without it nothing here ever enrols.
+      # GAMEBLADE_ENROLMENT: paste-once-then-remove
     volumes:
       - ./data:/data
       - /path/to/games:/library:ro

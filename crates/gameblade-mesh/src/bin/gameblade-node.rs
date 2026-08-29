@@ -56,6 +56,10 @@ struct CatalogList {
 struct CatalogEntry {
     #[serde(rename = "gameId")]
     game_id: String,
+    /// Changes whenever the game's contents do, which is what lets an index
+    /// entry be reused instead of rebuilt.
+    #[serde(rename = "contentHash")]
+    content_hash: Option<String>,
 }
 
 fn required(name: &str) -> String {
@@ -448,8 +452,31 @@ async fn refresh(
         return;
     };
 
+    // Taken out rather than borrowed: entries that survive are moved across
+    // into the new index, and whatever is left behind is what this node has
+    // stopped holding.
+    let mut previous = std::mem::take(&mut *index.write().await);
+
     let mut rebuilt = LibraryIndex::new();
+    let mut reused = 0usize;
+
     for entry in catalog.games {
+        // Unchanged since the last pass: the fingerprint the coordinator is
+        // announcing is the one this index already verified a copy against.
+        // Nothing about the files can have moved without that changing, so
+        // re-fetching the layout and re-stat-ing every file would confirm what
+        // is already known. On a large library this is the difference between
+        // a request per game every refresh and one request in total.
+        if entry
+            .content_hash
+            .as_deref()
+            .is_some_and(|hash| previous.content_hash(&entry.game_id) == Some(hash))
+            && rebuilt.carry_over(&mut previous, &entry.game_id)
+        {
+            reused += 1;
+            continue;
+        }
+
         let detail = http
             .get(format!("{server_url}/api/mesh/catalog/{}", entry.game_id))
             .header("authorization", format!("Bearer {node_token}"))
@@ -470,5 +497,10 @@ async fn refresh(
 
     let held = rebuilt.len();
     *index.write().await = rebuilt;
-    println!("library: holding {held} game(s) the coordinator knows about");
+
+    // Only worth a line when it changed. This runs on a timer, and a node that
+    // is working prints the same number for ever otherwise.
+    if reused != held {
+        println!("library: holding {held} game(s) the coordinator knows about");
+    }
 }

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { MESH_CHUNK_BYTES, chunkCountFor, type ChunkRef } from '@gameblade/shared';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, or, ne } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { gameFileChunks, gameFiles, games, libraries } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
@@ -134,6 +134,77 @@ export class ChunkService {
 
     if (files.length === 0) return false;
     return files.every((file) => file.chunkBytes === MESH_CHUNK_BYTES || file.sizeBytes === 0);
+  }
+
+  /**
+   * Every game with at least one file that is not hashed on the current grid.
+   *
+   * One query rather than `isGameChunked` per game, because a node runs this on
+   * a timer for its whole life and a real archive is thousands of games. A game
+   * made entirely of zero-byte files is not pending: it has no chunks and never
+   * will, which is what `isGameChunked` already treats as finished.
+   */
+  unhashedGameIds(): string[] {
+    return this.db
+      .selectDistinct({ gameId: gameFiles.gameId })
+      .from(gameFiles)
+      .innerJoin(games, eq(games.id, gameFiles.gameId))
+      .where(
+        and(
+          isNull(games.missingAt),
+          // A zero-byte file has no chunks and never will, so a game made only
+          // of those is finished rather than pending.
+          gt(gameFiles.sizeBytes, 0),
+          or(isNull(gameFiles.chunkBytes), ne(gameFiles.chunkBytes, MESH_CHUNK_BYTES)),
+        ),
+      )
+      .all()
+      .map((row) => row.gameId);
+  }
+
+  /**
+   * Hash everything that is not hashed yet, one game at a time.
+   *
+   * On a node this is not an optimisation somebody opts into per game: a node's
+   * entire job is serving bytes, it can only serve a game every one of whose
+   * files carries chunk hashes, and it has no API of its own for an operator to
+   * ask through. Without this a node holds a library nobody is ever offered,
+   * which is indistinguishable from a node that is not working.
+   *
+   * Deliberately not the default anywhere else. A standalone server can always
+   * serve the file itself, so there hashing stays the explicit, per-game
+   * decision it has always been — it reads every byte of a multi-terabyte
+   * archive, and that is a choice rather than a background job.
+   *
+   * Sequential, and interruptible between games. The disk this is reading is
+   * the same one the scanner and the download routes are using, and the pass
+   * takes hours the first time; stopping between games rather than at the end
+   * means a restart resumes instead of starting again, since a game already
+   * hashed is skipped by the query above.
+   */
+  async hashUnhashed(shouldStop: () => boolean = () => false): Promise<{
+    hashed: number;
+    failed: number;
+  }> {
+    let hashed = 0;
+    let failed = 0;
+
+    for (const gameId of this.unhashedGameIds()) {
+      // An operator-triggered pass owns the service while it runs. Yielding to
+      // it rather than queueing behind it: this sweep will come round again.
+      if (shouldStop() || this.running) break;
+
+      try {
+        await this.start(gameId);
+        if (this.isGameChunked(gameId)) hashed += 1;
+        else failed += 1;
+      } catch (error) {
+        this.logger.warn({ err: error, gameId }, 'could not chunk-hash game');
+        failed += 1;
+      }
+    }
+
+    return { hashed, failed };
   }
 
   start(gameId: string, options: { force?: boolean } = {}): Promise<void> {
