@@ -1,6 +1,6 @@
 [package]
 name = "gameblade-mesh"
-version = "0.6.0"
+version = "0.6.1"
 description = "Direct node-to-client transport for GameBlade"
 edition = "2021"
 rust-version = "1.77.2"
@@ -23,6 +23,10 @@ rustls = { version = "0.23", default-features = false, features = ["std", "ring"
 rcgen = "0.13"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
+# Only for one thing std cannot express: clearing IPV6_V6ONLY before the bind,
+# so a node's `[::]` socket answers IPv4 on Windows as it already did on Linux.
+# quinn and tokio both pull it in regardless, so it costs nothing to compile.
+socket2 = "0.6"
 # "fs" and "rt-multi-thread" are needed by the node agent binary. They were
 # once only in dev-dependencies, where feature unification made `cargo test`
 # compile happily while a real `cargo build` of the binary failed — so the

@@ -116,6 +116,7 @@ export function startSchedules(app: FastifyInstance): () => void {
     backups,
     saveManifest,
     discord,
+    nodeStatus,
     sqlite,
   } = app.gameblade;
   const timers: NodeJS.Timeout[] = [];
@@ -144,9 +145,22 @@ export function startSchedules(app: FastifyInstance): () => void {
 
       const publish = async () => {
         try {
-          if (await reporter.ensureRegistered()) await reporter.report();
+          if (!(await reporter.ensureRegistered())) return;
+
+          const games = reporter.collect().length;
+          const ok = await reporter.report();
+          nodeStatus.record({
+            ok,
+            games,
+            detail: ok ? 'accepted' : 'the coordinator refused the catalog — see the log',
+          });
         } catch (error) {
           app.log.warn({ err: error }, 'catalog report failed');
+          nodeStatus.record({
+            ok: false,
+            games: 0,
+            detail: error instanceof Error ? error.message : 'could not reach the coordinator',
+          });
         }
       };
 

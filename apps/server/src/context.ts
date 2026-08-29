@@ -13,6 +13,7 @@ import { ClientButtonService } from './services/clientButtons.js';
 import { CollectionService } from './services/collections.js';
 import { ChecksumService } from './services/checksums.js';
 import { CatalogIngestService } from './services/catalogIngest.js';
+import { NodeStatusService } from './services/nodeStatus.js';
 import { ChunkService } from './services/chunks.js';
 import { DownloadTokenService } from './services/downloads.js';
 import { FriendService } from './services/friends.js';
@@ -62,6 +63,8 @@ export interface GamebladeContext {
   mesh: MeshService;
   /** Folds a catalog a node scanned into this database, preserving game ids. */
   catalogIngest: CatalogIngestService;
+  /** What this machine can say about itself when it is a node. */
+  nodeStatus: NodeStatusService;
   downloadTokens: DownloadTokenService;
   images: ImageCache;
   installer: InstallerService;
@@ -132,6 +135,7 @@ export function createContext(
   const chunks = new ChunkService(db, logger);
   const mesh = new MeshService(db, logger);
   const catalogIngest = new CatalogIngestService(db, logger);
+  const nodeStatus = new NodeStatusService(db, config, scanner);
   const auth = new AuthService(db);
   const downloadTokens = new DownloadTokenService(db, config.sessionSecret);
   const installer = new InstallerService(db, config);
@@ -190,6 +194,7 @@ export function createContext(
     chunks,
     mesh,
     catalogIngest,
+    nodeStatus,
     downloadTokens,
     images,
     installer,

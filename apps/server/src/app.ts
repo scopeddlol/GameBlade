@@ -34,6 +34,7 @@ import { playRoutes } from './routes/play.js';
 import { realtimeRoutes } from './routes/realtime.js';
 import { requestRoutes } from './routes/requests.js';
 import { meshRoutes } from './routes/mesh.js';
+import { nodeRoutes } from './routes/node.js';
 import { messageRoutes } from './routes/messages.js';
 import { socialRoutes } from './routes/social.js';
 
@@ -175,6 +176,18 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
   });
 
   const apiPrefix = `${config.basePath}/api`;
+
+  // A node stops here.
+  //
+  // It owns no catalog, no accounts and no settings, so the coordinator's API
+  // and panel would be a second, empty copy of both — with its own first-run
+  // administrator screen sitting on a port somebody eventually exposes. What it
+  // gets instead is a liveness probe and a page about itself.
+  if (!config.servesApi) {
+    await app.register(async (api) => healthRoutes(api), { prefix: apiPrefix });
+    await nodeRoutes(app);
+    return app;
+  }
 
   await app.register(
     async (api) => {

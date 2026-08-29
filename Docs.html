@@ -471,7 +471,7 @@
         color: var(--warn);
       }
       .new::before {
-        content: 'New in 0.5.3';
+        content: 'New in 0.6.1';
         color: var(--new);
       }
 
@@ -588,7 +588,7 @@
   <body>
     <header class="top">
       <button class="menu-toggle" id="menu-toggle" aria-expanded="false">Contents</button>
-      <span class="brand">GameBlade <span class="version">0.5.3</span></span>
+      <span class="brand">GameBlade <span class="version">0.6.1</span></span>
       <span class="spacer"></span>
       <a class="external" href="https://github.com/scopeddlol/GameBlade">GitHub</a>
       <a class="external" href="docs/API.md">API reference</a>
@@ -647,15 +647,52 @@
           </div>
 
           <div class="new">
-            <p><strong>0.5.3 at a glance.</strong> The larger changes are described in their own sections:</p>
+            <p>
+              <strong>What&rsquo;s new in 0.6.1.</strong> A short release, and all of it is the
+              0.6 infrastructure being made to work rather than anything added on top:
+            </p>
             <ul>
-              <li><a href="#scanning">The library scanner</a>, rebuilt — the run that never finished.</li>
-              <li><a href="#messages">Direct messages and group chats</a>.</li>
-              <li><a href="#offline">The client works offline</a>, where it previously refused to start.</li>
-              <li><a href="#database">Database tuning</a> for a catalog on a spinning disk.</li>
-              <li><a href="#save-paths">Save rules derived from achievement rules</a>.</li>
-              <li><a href="#discord-posting">Tagging people, roles and channels</a> in what the bot posts.</li>
-              <li><a href="#media">A real media viewer</a>, and <a href="#profiles">more on a profile</a>.</li>
+              <li>
+                <strong>Sharing a download now works on Windows.</strong> It never had.
+                A seeding client bound its socket in a way Windows accepts and then quietly
+                refuses to deliver IPv4 traffic to, so a player who switched sharing on was
+                unreachable &mdash; indistinguishable, from the outside, from a player who had
+                nothing to offer. See <a href="#player-sharing">letting players share</a>.
+              </li>
+              <li>
+                <strong>A node has <a href="#node-page">a page of its own</a></strong> instead of
+                the coordinator&rsquo;s admin panel over an empty database. It says what it
+                scanned, what it can serve, and whether the coordinator is hearing from it.
+              </li>
+              <li>
+                <strong><code>/api/health</code> names the role.</strong> Three containers used to
+                answer it identically.
+              </li>
+              <li>
+                <strong>A node&rsquo;s catalog report is one transaction</strong>, so a report that
+                fails halfway no longer leaves the catalog halfway written.
+              </li>
+              <li>
+                <strong>The client&rsquo;s own tests now pass on Windows</strong>, where two of
+                them had been failing &mdash; which, for a client that only runs on Windows, is
+                everywhere that counts.
+              </li>
+              <li>
+                <strong>Node 24 is refused rather than discovered.</strong> The database driver
+                aborts on it; the image and CI have always run Node 22. See
+                <a href="#development">development</a>.
+              </li>
+            </ul>
+            <p>
+              <strong>And in 0.6.0, if you are coming from 0.5.</strong> This is where GameBlade
+              stopped being one machine:
+            </p>
+            <ul>
+              <li><a href="#roles">Three roles from one image</a> &mdash; standalone, coordinator, node. <code>standalone</code> is still the default and behaves exactly as before.</li>
+              <li><a href="#mesh">Clients download straight from the machine holding the files</a>, over QUIC, verified a chunk at a time.</li>
+              <li><a href="#relay">A relay</a> for clients that cannot reach a node directly.</li>
+              <li><a href="#player-sharing">Players can serve pieces to each other</a>, off by default at both ends.</li>
+              <li><a href="#nat-check"><code>mesh-doctor</code></a>, which answers &ldquo;can a client actually reach this machine&rdquo; before anything is deployed.</li>
             </ul>
           </div>
         </section>
@@ -692,6 +729,22 @@
                   <td><strong>Desktop client</strong> (Windows)</td>
                   <td>Players</td>
                   <td>Home, Library, Store, Requests, News, Social, Messages and Settings</td>
+                </tr>
+                <tr>
+                  <td><strong>Node</strong> (<code>ROLE=node</code>)</td>
+                  <td>You</td>
+                  <td>
+                    Holds the game files, scans them, reports upward, and serves bytes straight to
+                    clients. Has <a href="#node-page">a status page</a> and nothing else.
+                  </td>
+                </tr>
+                <tr>
+                  <td><strong>Relay</strong> (<code>gameblade-relay</code>)</td>
+                  <td>Nobody, directly</td>
+                  <td>
+                    Joins a client and a node that cannot reach each other. Optional, and
+                    <a href="#relay">deliberately dim</a>.
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -969,7 +1022,7 @@ cp .env.example .env</code></pre>
             </p>
           </div>
 
-          <h3>The relay</h3>
+          <h3 id="relay">The relay</h3>
           <p>
             A coordinator holds no game files, so there is no plain HTTP download to fall back to
             when a client cannot reach a node directly. The relay is that fallback. Both ends dial
@@ -1008,6 +1061,55 @@ cp .env.example .env</code></pre>
             the node first: if it reports the connection punchable, most clients will reach it
             without the relay ever being asked.
           </p>
+
+          <h3 id="node-page">Looking at a node</h3>
+          <p>
+            A node serves one page, about itself, on its HTTP port. It is not the admin panel and
+            deliberately cannot be: a node owns no accounts, no settings and no catalog of record,
+            so there is nothing on it to administer. What it can answer is the question people
+            actually walk up to a node to ask &mdash; is this thing working?
+          </p>
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr><th>It tells you</th><th>Which answers</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Which coordinator it reports to, and whether it has enrolled</td>
+                  <td>Whether the one manual step was done, or the code was never spent</td>
+                </tr>
+                <tr>
+                  <td>Its libraries, the games in each, and when each was last scanned</td>
+                  <td>Whether the volume mounted and the walk found anything</td>
+                </tr>
+                <tr>
+                  <td>How many files have per-chunk hashes, out of how many</td>
+                  <td>Why a game that is plainly on this machine is not being served from it</td>
+                </tr>
+                <tr>
+                  <td>The last catalog report, and the reason if it failed</td>
+                  <td>Whether the coordinator is hearing from it at all</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            The same thing as JSON is at <code>/api/node/status</code>, and
+            <code>/api/health</code> now names the role, so a monitoring check can tell three
+            otherwise identical containers apart.
+          </p>
+          <div class="warn">
+            <p>
+              <strong>Keep it off the public internet.</strong> The page is unauthenticated, and it
+              is given nothing worth authenticating &mdash; counts, paths already in your compose
+              file, and whether the coordinator answered. There is no game data on it, no
+              credentials, no key, and nothing on a node that a request can change. It is still
+              about your infrastructure, so <code>docker-compose.node.yml</code> publishes it on
+              <code>127.0.0.1</code>; reach it over an SSH tunnel, or drop that prefix if the host
+              is somewhere only you can get to.
+            </p>
+          </div>
         </section>
 
         <section id="mesh">
@@ -1099,7 +1201,7 @@ cp .env.example .env</code></pre>
             being offered — no diffing, and no relying on a mirror to notice.
           </p>
 
-          <h3>Letting players share</h3>
+          <h3 id="player-sharing">Letting players share</h3>
           <p>
             <strong>Let players share what they have downloaded</strong> is a separate switch, also
             off by default, and deliberately not implied by the one above. The first shares machines
@@ -1113,6 +1215,50 @@ cp .env.example .env</code></pre>
             before it is sent, so an edited or modded install simply stops being a source. Turning
             the server switch off stops every sharing client within one heartbeat, without having to
             reach any of them.
+          </p>
+
+          <div class="warn">
+            <p>
+              <strong>This did not work at all before 0.6.1.</strong> A sharing client bound its
+              listening socket in a way Windows accepts and then declines to deliver IPv4 traffic
+              to, so every player who switched sharing on was simply unreachable. There was nothing
+              to notice: a peer nobody can connect to looks exactly like a peer with nothing worth
+              having. If you tried player sharing on 0.6.0 and concluded it did nothing, you were
+              right, and it was not your network. Update the clients.
+            </p>
+          </div>
+
+          <h3 id="nat-check">Finding out before you deploy</h3>
+          <p>
+            Everything above rests on one question: can a client actually reach this machine
+            directly? Two tools answer it, and both measure the NAT&rsquo;s mapping behaviour rather
+            than guessing from how many layers of it there are &mdash; double NAT is routinely
+            punchable and single NAT routinely is not, so counting layers tells you nothing.
+          </p>
+          <div class="scroller">
+            <table>
+              <thead>
+                <tr><th>Tool</th><th>Where</th><th>Needs</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>mesh-doctor</code></td>
+                  <td>In the image, on <code>PATH</code>. <code>docker exec gameblade-mesh mesh-doctor</code></td>
+                  <td>Nothing. It is already there.</td>
+                </tr>
+                <tr>
+                  <td><code>scripts/nat-check.py</code></td>
+                  <td>The repository. Run it on any machine you are considering.</td>
+                  <td>Python, and nothing else &mdash; no dependencies, no toolchain.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            Run one of them on a prospective node <em>before</em> enrolling it. If it reports the
+            connection punchable, most clients will reach it and the relay will rarely be asked for
+            anything. If it does not, forward a UDP port &mdash; that single change makes the
+            question stop mattering, whatever the client is behind.
           </p>
 
           <h3>When it does not apply</h3>
@@ -2336,6 +2482,17 @@ cp .env.example .env</code></pre>
         <section id="development">
           <h2>Development</h2>
           <p>Requires Node 22 and pnpm 10.</p>
+          <div class="warn">
+            <p>
+              <strong>Node 22, not newer.</strong> <code>better-sqlite3</code> 11 aborts the
+              process on Node 24 &mdash; <code>Assertion failed: (env) != nullptr</code> &mdash;
+              once enough SQLite work goes through it at once, which scanning or ingesting a real
+              catalog does. It arrives as a crash with no message rather than an error, so
+              <code>engines</code> is <code>&gt;=22 &lt;24</code> and pnpm will refuse to install
+              on 24 instead of letting you find out. The image and CI have always run 22 and were
+              never affected.
+            </p>
+          </div>
 
           <pre><code>pnpm install
 pnpm --filter @gameblade/shared build
@@ -2401,7 +2558,7 @@ packages/shared Types, zod schemas and constants used by all three</code></pre>
             <table>
               <thead><tr><th>Flag</th><th></th></tr></thead>
               <tbody>
-                <tr><td><code>-Version 0.5.3</code></td><td>Skip the prompt.</td></tr>
+                <tr><td><code>-Version 0.6.1</code></td><td>Skip the prompt.</td></tr>
                 <tr><td><code>-KeepVersion</code></td><td>Build at the current version, changing no files.</td></tr>
                 <tr><td><code>-Fast</code></td><td>Drop link-time optimisation. Much quicker; not for release.</td></tr>
                 <tr><td><code>-SkipChecks</code></td><td>Skip typecheck and tests.</td></tr>
@@ -2475,7 +2632,7 @@ packages/shared Types, zod schemas and constants used by all three</code></pre>
           <p>AGPL-3.0-only.</p>
           <footer class="page">
             <p>
-              GameBlade 0.5.3 · Documentation lives in <code>Docs.html</code> at the repository root
+              GameBlade 0.6.1 · Documentation lives in <code>Docs.html</code> at the repository root
               and is edited as ordinary HTML — the contents list on the left builds itself from the
               headings.
             </p>

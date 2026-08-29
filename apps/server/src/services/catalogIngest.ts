@@ -23,6 +23,15 @@ function batched<T>(items: T[], size = BATCH): T[][] {
   return out;
 }
 
+/** The handle drizzle hands a transaction body. */
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+/** One game's files, waiting to be written with everybody else's. */
+interface FileWork {
+  gameId: string;
+  files: ReportedFile[];
+}
+
 /**
  * Takes a catalog a node scanned and folds it into this coordinator's database.
  *
@@ -89,6 +98,23 @@ export class CatalogIngestService {
 
     const result: IngestResult = { added: 0, updated: 0, unchanged: 0, missing: 0 };
     const seen = new Set<string>();
+    const now = new Date().toISOString();
+
+    // Decided first, written second.
+    //
+    // The obvious shape - write each game as its decision is made - issues
+    // three or four statements per entry, and a real archive is thousands of
+    // entries arriving in one report. Every one of those is a prepared
+    // statement behind a native handle, and this loop is synchronous, so none
+    // of them is ever collected while it runs: one report allocated tens of
+    // thousands and was still holding all of them at the end. It also meant a
+    // report that failed halfway left the catalog halfway written. Sorting the
+    // work out in memory and then writing it in batches inside one transaction
+    // fixes both - the whole report lands or none of it does, in a number of
+    // statements that grows with the batch count rather than the catalog.
+    const inserts: (typeof games.$inferInsert)[] = [];
+    const updates: { id: string; item: ReportedGame }[] = [];
+    const fileWork: FileWork[] = [];
 
     for (const item of reported) {
       seen.add(item.relPath);
@@ -106,58 +132,17 @@ export class CatalogIngestService {
           continue;
         }
 
-        const now = new Date().toISOString();
-        this.db
-          .update(games)
-          .set({
-            // File-derived only. Everything an operator curated is untouched.
-            sizeBytes: item.sizeBytes,
-            fileCount: item.files.length,
-            contentMtime: item.contentMtime,
-            scannedAt: now,
-            updatedAt: now,
-            missingAt: null,
-          })
-          .where(eq(games.id, current.id))
-          .run();
-
-        this.replaceFiles(current.id, item.files);
+        updates.push({ id: current.id, item });
+        fileWork.push({ gameId: current.id, files: item.files });
         result.updated += 1;
         continue;
       }
 
-      this.insert(library.id, item);
-      result.added += 1;
-    }
-
-    // Only a complete report may mark games missing. A partial one says
-    // nothing about what it did not mention, and reading silence as absence
-    // would flag an entire catalog because a node sent it in pieces.
-    result.missing = options.complete ? this.markMissing(library.id, existing, seen) : 0;
-
-    this.db
-      .update(meshNodes)
-      .set({
-        catalogReportedAt: new Date().toISOString(),
-        catalogStatus: `ok: ${reported.length} entries`,
-      })
-      .where(eq(meshNodes.id, nodeId))
-      .run();
-
-    this.logger.info({ nodeId, library: library.name, ...result }, 'node catalog ingested');
-    return result;
-  }
-
-  private insert(libraryId: string, item: ReportedGame): void {
-    const title = parseTitle(basename(item.relPath), item.kind === 'archive');
-    const id = newId('gam');
-    const now = new Date().toISOString();
-
-    this.db
-      .insert(games)
-      .values({
+      const title = parseTitle(basename(item.relPath), item.kind === 'archive');
+      const id = newId('gam');
+      inserts.push({
         id,
-        libraryId,
+        libraryId: library.id,
         relPath: item.relPath,
         kind: item.kind,
         title,
@@ -170,52 +155,114 @@ export class CatalogIngestService {
         addedAt: now,
         updatedAt: now,
         scannedAt: now,
-      })
-      .run();
+      });
+      fileWork.push({ gameId: id, files: item.files });
+      result.added += 1;
+    }
 
-    this.replaceFiles(id, item.files);
+    // Only a complete report may mark games missing. A partial one says
+    // nothing about what it did not mention, and reading silence as absence
+    // would flag an entire catalog because a node sent it in pieces.
+    const vanished = options.complete
+      ? [...existing.keys()].filter((relPath) => !seen.has(relPath))
+      : [];
+    result.missing = vanished.length;
+
+    this.db.transaction((tx) => {
+      for (const batch of batched(inserts)) {
+        tx.insert(games).values(batch).run();
+      }
+
+      for (const { id, item } of updates) {
+        tx.update(games)
+          .set({
+            // File-derived only. Everything an operator curated is untouched.
+            sizeBytes: item.sizeBytes,
+            fileCount: item.files.length,
+            contentMtime: item.contentMtime,
+            scannedAt: now,
+            updatedAt: now,
+            missingAt: null,
+          })
+          .where(eq(games.id, id))
+          .run();
+      }
+
+      this.replaceFiles(tx, fileWork);
+      this.markMissing(tx, library.id, vanished, now);
+
+      tx.update(meshNodes)
+        .set({
+          catalogReportedAt: now,
+          catalogStatus: `ok: ${reported.length} entries`,
+        })
+        .where(eq(meshNodes.id, nodeId))
+        .run();
+    });
+
+    this.logger.info({ nodeId, library: library.name, ...result }, 'node catalog ingested');
+    return result;
   }
 
   /**
-   * Swap a game's file rows, keeping any chunk hashes the node computed.
+   * Swap the file rows of every game in one report, keeping the node's hashes.
    *
    * The node has already read every byte to hash them, so carrying them across
-   * here means the coordinator never has to — which matters rather a lot when
+   * here means the coordinator never has to - which matters rather a lot when
    * the coordinator has no copy of the file to read.
+   *
+   * Takes the whole report's worth at once rather than a game at a time: the
+   * deletes collapse into a handful of `IN` statements and the inserts into a
+   * handful of batches, instead of three statements per game.
    */
-  private replaceFiles(gameId: string, files: ReportedFile[]): void {
-    this.db.transaction((tx) => {
-      // Chunk rows cascade from the file rows, so this clears both.
-      tx.delete(gameFiles).where(eq(gameFiles.gameId, gameId)).run();
+  private replaceFiles(tx: Tx, work: FileWork[]): void {
+    if (work.length === 0) return;
 
-      const rows = files.map((file) => ({
-        id: newId('gfl'),
-        gameId,
-        relPath: file.relPath,
-        sizeBytes: file.sizeBytes,
-        modifiedAt: file.modifiedAt,
-        sha256: file.sha256 ?? null,
-        chunkedAt: file.chunks?.length ? new Date().toISOString() : null,
-        chunkBytes: file.chunks?.length ? MESH_CHUNK_BYTES : null,
-      }));
+    // Chunk rows cascade from the file rows, so this clears both.
+    for (const batch of batched(
+      work.map((entry) => entry.gameId),
+      400,
+    )) {
+      tx.delete(gameFiles).where(inArray(gameFiles.gameId, batch)).run();
+    }
 
-      for (const batch of batched(rows)) {
-        tx.insert(gameFiles).values(batch).run();
+    const now = new Date().toISOString();
+    const fileRows: (typeof gameFiles.$inferInsert)[] = [];
+    const chunkRows: (typeof gameFileChunks.$inferInsert)[] = [];
+
+    for (const { gameId, files } of work) {
+      for (const file of files) {
+        const id = newId('gfl');
+        const chunked = Boolean(file.chunks?.length);
+
+        fileRows.push({
+          id,
+          gameId,
+          relPath: file.relPath,
+          sizeBytes: file.sizeBytes,
+          modifiedAt: file.modifiedAt,
+          sha256: file.sha256 ?? null,
+          chunkedAt: chunked ? now : null,
+          chunkBytes: chunked ? MESH_CHUNK_BYTES : null,
+        });
+
+        for (const piece of file.chunks ?? []) {
+          chunkRows.push({
+            fileId: id,
+            chunkIndex: piece.index,
+            sizeBytes: piece.sizeBytes,
+            sha256: piece.sha256,
+          });
+        }
       }
+    }
 
-      const chunkRows = rows.flatMap((row, index) =>
-        (files[index]?.chunks ?? []).map((piece) => ({
-          fileId: row.id,
-          chunkIndex: piece.index,
-          sizeBytes: piece.sizeBytes,
-          sha256: piece.sha256,
-        })),
-      );
-
-      for (const batch of batched(chunkRows)) {
-        tx.insert(gameFileChunks).values(batch).run();
-      }
-    });
+    for (const batch of batched(fileRows)) {
+      tx.insert(gameFiles).values(batch).run();
+    }
+    for (const batch of batched(chunkRows)) {
+      tx.insert(gameFileChunks).values(batch).run();
+    }
   }
 
   /**
@@ -225,18 +272,10 @@ export class CatalogIngestService {
    * catalog. Deleting the difference would destroy hand-made metadata over a
    * temporary condition, so this marks and the operator decides.
    */
-  private markMissing(
-    libraryId: string,
-    existing: Map<string, { relPath: string }>,
-    seen: Set<string>,
-  ): number {
-    const vanished = [...existing.keys()].filter((relPath) => !seen.has(relPath));
-    if (vanished.length === 0) return 0;
-
+  private markMissing(tx: Tx, libraryId: string, vanished: string[], at: string): void {
     for (const batch of batched(vanished, 400)) {
-      this.db
-        .update(games)
-        .set({ missingAt: new Date().toISOString() })
+      tx.update(games)
+        .set({ missingAt: at })
         .where(
           and(
             eq(games.libraryId, libraryId),
@@ -246,8 +285,6 @@ export class CatalogIngestService {
         )
         .run();
     }
-
-    return vanished.length;
   }
 }
 

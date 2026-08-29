@@ -25,6 +25,9 @@ file, no build step, and everything below is covered there in depth.
 - **Invite-only.** Self-registration is off by default. Accounts come from
   invite codes an administrator generates.
 - **Small.** One Alpine container, SQLite, no external database or cache.
+- **One machine, or several.** `standalone` is the default and is everything in
+  one process. A `coordinator` holds the database and the panel; `node`s hold the
+  games and serve them straight to clients. One image, three roles.
 
 | Piece                        | Who uses it   | What it does                                                           |
 | ---------------------------- | ------------- | ---------------------------------------------------------------------- |
@@ -32,6 +35,8 @@ file, no build step, and everything below is covered there in depth.
 | **Landing page** (`/`)       | Everyone      | Explains the archive and links the Windows client download             |
 | **Admin panel** (`/admin`)   | Administrator | Invites, users, catalog, metadata, featured games, settings            |
 | **Desktop client** (Windows) | Players       | The whole player experience                                            |
+| **Node** (`ROLE=node`)       | You           | Holds the game files, scans them, and serves bytes straight to clients |
+| **Relay** (optional)         | Nobody        | Joins a client and a node that cannot reach each other                 |
 
 ---
 
@@ -76,7 +81,8 @@ archive. Nested folders are that game's files, not separate games.
 
 ## Development
 
-Requires Node 22 and pnpm 10.
+Requires Node 22 and pnpm 10. Not Node 24 — `better-sqlite3` 11 aborts on it,
+so `engines` refuses it rather than letting you meet it as an unexplained crash.
 
 ```bash
 pnpm install
