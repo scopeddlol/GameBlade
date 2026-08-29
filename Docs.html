@@ -2334,6 +2334,24 @@ services:
           </ol>
 
           <h3 id="deploy-check">8. Checking it, in order</h3>
+
+          <div class="warn">
+            <p>
+              <strong>The catalog arrives long before the games are downloadable, and this is
+              normal.</strong> A node reports what it scanned within a few minutes, so the panel
+              fills up almost at once &mdash; but a game is only servable once its files are
+              hashed, and hashing a real archive is hours. In between, the catalog looks completely
+              right and nothing will install, which on a coordinator means a download that fails
+              rather than a slow one.
+            </p>
+            <p>
+              This is the first thing that looks broken on a new deployment and is not.
+              <strong>Hashed files out of total</strong> on each node's page is the number to
+              watch; the games that can be served are the ones where those two have met. Leave it
+              overnight for a large library.
+            </p>
+          </div>
+
           <p>Each of these fails in its own way, so check them one at a time and in this order:</p>
           <div class="scroller">
             <table>
