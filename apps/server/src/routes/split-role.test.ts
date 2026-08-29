@@ -375,6 +375,59 @@ describe('the split-role topology', () => {
     );
   });
 
+  it('says on the health page when a coordinator has no relay address', async () => {
+    // Not a reason to refuse to start — most connections punch, and for those
+    // players this changes nothing. But the ones it does affect cannot
+    // download at all, and it reads to them as a broken archive rather than as
+    // their own network, so it is said somewhere an operator looks.
+    const { app } = await boot({ ROLE: 'coordinator' });
+    const admin = await signIn(app);
+
+    const report = await app.inject({
+      method: 'GET',
+      url: '/api/admin/health',
+      headers: auth(admin),
+    });
+    const findings = (report.json() as { findings: { id: string; severity: string }[] }).findings;
+    const relay = findings.find((finding) => finding.id === 'no-relay-endpoint');
+
+    expect(relay).toBeDefined();
+    expect(relay?.severity).toBe('warning');
+  });
+
+  it('says nothing about a relay once one is configured', async () => {
+    const { app } = await boot({
+      ROLE: 'coordinator',
+      RELAY_ENDPOINT: 'games.example.com:47821',
+    });
+    const admin = await signIn(app);
+
+    const report = await app.inject({
+      method: 'GET',
+      url: '/api/admin/health',
+      headers: auth(admin),
+    });
+    const findings = (report.json() as { findings: { id: string }[] }).findings;
+
+    expect(findings.map((finding) => finding.id)).not.toContain('no-relay-endpoint');
+  });
+
+  it('leaves a standalone server alone about relays', async () => {
+    // It has the files. A client that cannot reach a node downloads from it
+    // instead, so there is nothing here to warn about.
+    const { app } = await boot({ ROLE: 'standalone' });
+    const admin = await signIn(app);
+
+    const report = await app.inject({
+      method: 'GET',
+      url: '/api/admin/health',
+      headers: auth(admin),
+    });
+    const findings = (report.json() as { findings: { id: string }[] }).findings;
+
+    expect(findings.map((finding) => finding.id)).not.toContain('no-relay-endpoint');
+  });
+
   /* ------------------------------------------------------ pairing a node */
 
   it('makes a library for a node when it registers, named after it', async () => {

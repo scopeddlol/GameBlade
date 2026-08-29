@@ -317,6 +317,24 @@ export function startSchedules(app: FastifyInstance): () => void {
     );
   }
 
+  /*
+   * A coordinator with no relay address, said once, at boot.
+   *
+   * It is not a reason to refuse to start: most players' connections can be
+   * punched and for them this changes nothing. But for the ones behind a
+   * symmetric or carrier-grade NAT it is the difference between downloading
+   * and not, and a coordinator has no game files to fall back on — so it is
+   * worth a line here and a finding on the health page, rather than being
+   * found out by somebody who cannot install anything.
+   */
+  if (!config.servesLocalFiles && !config.relayEndpoint) {
+    app.log.warn(
+      'RELAY_ENDPOINT is not set, so clients are never told a relay exists. ' +
+        'Players whose network refuses a direct connection to a node will not be able to ' +
+        'download at all. Set it to this host’s public name and the relay’s port.',
+    );
+  }
+
   /**
    * Scheduled archives of the data directory.
    *

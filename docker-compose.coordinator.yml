@@ -39,10 +39,13 @@ services:
       # and the relay's port — not localhost, and not the container name: this
       # value is handed to players' machines.
       #
-      # The one line here you must edit. Without it clients are never told a
-      # relay exists, and the ones whose NAT defeats hole punching cannot
-      # download at all — a coordinator holds no files to fall back on.
-      RELAY_ENDPOINT: ${RELAY_ENDPOINT:?set this to <your public hostname>:47821}
+      # The one line here you have to fill in. Left empty the coordinator still
+      # starts, and the relay below still runs, but no client is ever told it
+      # exists — so the players whose NAT defeats hole punching cannot download
+      # at all, and a coordinator holds no files to fall back on. It is said in
+      # the log at boot and on Admin -> Insights -> Health rather than being
+      # left to a player to discover.
+      RELAY_ENDPOINT: ${RELAY_ENDPOINT:-}
 
       # Metadata providers. Can also be set in Admin -> Settings.
       IGDB_CLIENT_ID: ${IGDB_CLIENT_ID:-}

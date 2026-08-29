@@ -233,8 +233,11 @@ relay fetches it, waiting for a coordinator that has not booted yet rather than
 dying because it came up first.
 
 `RELAY_ENDPOINT` is the one value that cannot be derived, because only you know
-your public hostname, and the compose file now refuses to start without it
-rather than letting a player find out.
+your public hostname. Leaving it empty does not stop the coordinator — most
+players' connections punch through and for them it changes nothing — but it
+does mean the relay runs with nobody ever being sent to it. So it is a warning
+in the log at boot and a finding on **Admin → Insights → Health**, rather than
+something a player who cannot install anything finds out for you.
 
 ---
 

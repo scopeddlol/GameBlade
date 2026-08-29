@@ -684,8 +684,10 @@
               </li>
               <li>
                 <strong>The relay is part of the coordinator's compose file</strong> and fetches
-                its own key. It is not optional on this topology and no longer acts like it is.
-                See <a href="#relay">the relay</a>.
+                its own key, so there is nothing to look up and paste. Leaving
+                <code>RELAY_ENDPOINT</code> unset is now a warning at boot and a finding on the
+                health page rather than something a player finds out for you. See
+                <a href="#relay">the relay</a>.
               </li>
             </ul>
           </div>
@@ -1468,14 +1470,19 @@ cp .env.example .env</code></pre>
     ports:
       - '47821:47821/udp'</code></pre>
           <p>
-            The one thing you must supply is on the coordinator, not here:
+            The one thing you have to supply is on the coordinator, not here:
             <code>RELAY_ENDPOINT</code> is what clients are told to dial, so it is your
             <em>public</em> hostname and the relay's port &mdash; not <code>localhost</code>, not
-            the container name, and not the internal port if the published one differs. The
-            shipped compose file refuses to start without it rather than letting you find out from
-            a player who cannot download.
+            the container name, and not the internal port if the published one differs.
           </p>
           <pre><code>RELAY_ENDPOINT=games.example.com:47821</code></pre>
+          <p>
+            Left empty, the coordinator still starts and the relay still runs &mdash; but no client
+            is ever told it exists, so it sits there doing nothing while the players who need it
+            cannot download. That is said at boot in the log and again on
+            <strong>Admin → Insights → Health</strong>, rather than being left to a player to
+            discover.
+          </p>
           <p>
             Then open <code>47821/udp</code> on the host firewall. The reverse proxy is not
             involved &mdash; this is UDP and it is not HTTP, so Caddy has nothing to do with it.
@@ -2056,7 +2063,9 @@ services:
       ADMIN_PASSWORD: '&lt;something long, used once&gt;'
 
       # What clients are told to dial for the relay below: your public
-      # hostname and its port. The one line here you have to edit.
+      # hostname and its port. The one line here you have to fill in — left
+      # empty the coordinator still starts and says so on the health page,
+      # and the relay runs with nobody being sent to it.
       RELAY_ENDPOINT: games.example.com:47821
     volumes:
       - ./data:/data
@@ -3847,7 +3856,9 @@ services:
             does not: disks running out, games that have gone from disk, entries with no launch or
             save rule, games tracking achievements they cannot sync, files whose contents no longer
             match their recorded checksum, accounts that have hit their limit, unanswered bug reports,
-            and when the library was last scanned. Every finding links to where it is fixed. It is all
+            when the library was last scanned, and &mdash; on a coordinator &mdash; whether
+            <a href="#relay">a relay address</a> is set, since without one some players cannot
+            download at all. Every finding links to where it is fixed. It is all
             derived from rows already being written, so there is nothing to keep in step by hand.
           </p>
 
