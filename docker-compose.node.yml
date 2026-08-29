@@ -29,6 +29,12 @@ services:
       - ./data:/data
       # Read-only: a node serves this library and must never write to it.
       - /path/to/games:/library:ro
+    # The node's own status page: what it scanned, whether it enrolled, when it
+    # last reported. Bound to localhost because a node has nothing to say to the
+    # public internet over HTTP - reach it through an SSH tunnel, or drop the
+    # `127.0.0.1` if this host is somewhere only you can reach.
+    ports:
+      - '127.0.0.1:8080:8080'
 
   mesh:
     image: ghcr.io/scopeddlol/gameblade:latest
