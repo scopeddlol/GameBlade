@@ -1,26 +1,78 @@
 # The coordinator: everything except the game files.
 #
 # Runs on the VPS. Holds the database, the admin panel, the landing page and the
-# API, and knows which nodes hold what — but stores no game data itself, which
-# is what makes it fit on a small host. Nodes report their catalogs to it and
-# serve bytes straight to clients.
+# API, and knows which nodes hold what — but stores no game data itself, which is
+# what makes it fit on a small host. Nodes report their catalogs to it and serve
+# bytes straight to clients.
+#
+# The image is the role. There is no ROLE variable here because pulling
+# `gameblade-coordinator` has already said what this is, and saying it twice is
+# a thing to get wrong. It will not scan, because a coordinator has nothing to
+# scan; the scanning settings are ignored and it says so in the log.
 #
 # Moving an existing GameBlade here is a copy, not a migration: stop the old
 # container, copy its `data/` directory to this host, start this. The database
 # file is the same file, opened by the same code.
 
 services:
-  gameblade:
-    image: ghcr.io/scopeddlol/gameblade:latest
+  coordinator:
+    image: ghcr.io/scopeddlol/gameblade-coordinator:latest
     container_name: gameblade-coordinator
     restart: unless-stopped
+
     environment:
-      # No local library, no scanning. The catalog arrives from nodes.
-      ROLE: coordinator
-      DATA_DIR: /data
-      # Behind a reverse proxy that terminates TLS.
+      TZ: Etc/UTC
+
+      # Required behind a reverse proxy. Without it every request appears to
+      # come from the proxy, which breaks per-client rate limiting and logs the
+      # wrong address for everyone.
       TRUST_PROXY: 'true'
+      # 'auto' marks session cookies Secure when the proxy reports https.
+      SECURE_COOKIES: auto
+
+      # Optional, and only while the database has no accounts. Leave both unset
+      # to create the first administrator through the web UI instead.
+      # ADMIN_USERNAME: admin
+      # ADMIN_PASSWORD: change-me-to-something-long
+
+      # The relay's public address, if you run one. Coordinator host, relay
+      # port — this is what clients are told to dial.
+      # RELAY_ENDPOINT: games.example.com:47821
+
+      # Metadata providers. Can also be set in Admin -> Settings.
+      IGDB_CLIENT_ID: ${IGDB_CLIENT_ID:-}
+      IGDB_CLIENT_SECRET: ${IGDB_CLIENT_SECRET:-}
+      STEAMGRIDDB_API_KEY: ${STEAMGRIDDB_API_KEY:-}
+      STEAM_API_KEY: ${STEAM_API_KEY:-}
+
     volumes:
+      # The only thing here that cannot be recreated, and it is small: no game
+      # file ever passes through this host. Back it up.
       - ./data:/data
+
+    # Bound to loopback for a reverse proxy on this same host. If the proxy is
+    # in Docker on a shared network, remove this block entirely and point it at
+    # `coordinator:8080` instead, so nothing is exposed on the host at all.
     ports:
-      - '8080:8080'
+      - '127.0.0.1:8080:8080'
+
+    security_opt:
+      - 'no-new-privileges:true'
+# The relay, for clients whose NAT defeats hole punching. Optional: run it only
+# once `mesh-doctor` on a node says the connection is not punchable, or once
+# some players cannot download.
+#
+# It needs the coordinator's public key and nothing else — no database, no
+# credentials, no API. Read it from an enrolled node's data/node-state.json,
+# field `coordinatorKey`.
+#
+#  relay:
+#    image: ghcr.io/scopeddlol/gameblade-relay:latest
+#    container_name: gameblade-relay
+#    restart: unless-stopped
+#    environment:
+#      GAMEBLADE_COORDINATOR_KEY: '<base64url SPKI from node-state.json>'
+#    ports:
+#      # UDP, and not something a reverse proxy can carry. Open it on the host
+#      # firewall, and set RELAY_ENDPOINT above to this host and this port.
+#      - '47821:47821/udp'

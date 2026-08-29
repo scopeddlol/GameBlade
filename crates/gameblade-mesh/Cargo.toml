@@ -1,6 +1,6 @@
 [package]
 name = "gameblade-mesh"
-version = "0.6.1"
+version = "0.6.2"
 description = "Direct node-to-client transport for GameBlade"
 edition = "2021"
 rust-version = "1.77.2"
@@ -56,6 +56,27 @@ reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "rustls-tls",
 ] }
+
+# ---------------------------------------------------------------------------
+# The shipped binaries.
+#
+# This crate is the reason the transfer path is in Rust at all: it hashes every
+# chunk on the way out and again on the way in, and moves game data at whatever
+# the disk and the link will carry. The default release profile leaves most of
+# that on the table — sixteen codegen units means the optimiser never sees
+# across them, and without LTO it never sees across crates either, which is
+# where quinn, rustls and sha2 actually live.
+#
+# It costs build time, once, on a machine that is not yours.
+# ---------------------------------------------------------------------------
+[profile.release]
+lto = "fat"
+codegen-units = 1
+# Kept: a node that panics mid-transfer should say where, in a log somebody
+# reads later. `panic = "abort"` would trade that for a little more speed and a
+# stripped stack, which is the wrong way round for a background service.
+panic = "unwind"
+strip = "debuginfo"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }

@@ -37,6 +37,7 @@ export function renderNodePage(status: NodeStatusSnapshot): string {
         --ok: #3fb950;
         --warn: #d29922;
         --bad: #f85149;
+        --accent: #2f81f7;
       }
       @media (prefers-color-scheme: light) {
         :root {
@@ -48,6 +49,7 @@ export function renderNodePage(status: NodeStatusSnapshot): string {
           --ok: #1a7f37;
           --warn: #9a6700;
           --bad: #cf222e;
+          --accent: #0969da;
         }
       }
       * { box-sizing: border-box; }
@@ -90,6 +92,37 @@ export function renderNodePage(status: NodeStatusSnapshot): string {
       .empty { color: var(--muted); margin: 0; }
       footer { color: var(--muted); font-size: 13px; text-align: center; margin-top: 26px; }
       a { color: inherit; }
+
+      /* Setup. Only ever drawn while this node has not enrolled. */
+      .setup { border-color: var(--accent); }
+      .setup h2 { color: var(--accent); }
+      label { display: block; margin-bottom: 14px; }
+      label span { display: block; margin-bottom: 5px; font-size: 13px; }
+      label small { display: block; color: var(--muted); font-weight: 400; margin-top: 4px; }
+      input {
+        width: 100%;
+        padding: 9px 11px;
+        font: inherit;
+        color: var(--text);
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+      }
+      input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+      button {
+        font: inherit;
+        font-weight: 600;
+        color: #fff;
+        background: var(--accent);
+        border: 0;
+        border-radius: 7px;
+        padding: 9px 16px;
+        cursor: pointer;
+      }
+      button[disabled] { opacity: 0.6; cursor: progress; }
+      .msg { margin: 12px 0 0; font-size: 13px; }
+      ol.steps { margin: 0 0 16px; padding-left: 20px; color: var(--muted); font-size: 13px; }
+      ol.steps li { margin-bottom: 4px; }
     </style>
   </head>
   <body>
@@ -99,6 +132,8 @@ export function renderNodePage(status: NodeStatusSnapshot): string {
         This machine holds game files and serves them to players directly. It has no
         catalog, no accounts and no settings of its own — those live on the coordinator.
       </p>
+
+      ${setupPanel(status)}
 
       <section>
         <h2>Coordinator</h2>
@@ -132,10 +167,66 @@ export function renderNodePage(status: NodeStatusSnapshot): string {
       </footer>
     </main>
     <script>
-      // The page is a status readout, so it goes stale the moment it is drawn.
-      // Reloading beats asking somebody to press F5 to find out whether the
-      // thing they are waiting for has happened yet.
-      setTimeout(function () { location.reload(); }, 15000);
+      (function () {
+        var form = document.getElementById('setup');
+        var reloadIn = form ? 5000 : 15000;
+
+        // The page is a status readout, so it goes stale the moment it is
+        // drawn. Reloading beats asking somebody to press F5 to find out
+        // whether the thing they are waiting for has happened. Faster while
+        // setup is on screen, because that is somebody waiting rather than
+        // somebody glancing.
+        var timer = setTimeout(function () { location.reload(); }, reloadIn);
+
+        if (!form) return;
+
+        var message = document.getElementById('setup-msg');
+        var button = form.querySelector('button');
+
+        form.addEventListener('submit', function (event) {
+          event.preventDefault();
+          // Whatever happens next, a reload mid-request would throw away what
+          // was typed and the answer at the same time.
+          clearTimeout(timer);
+
+          var body = {
+            coordinatorUrl: form.elements.coordinatorUrl.value.trim(),
+            enrolmentToken: form.elements.enrolmentToken.value.trim()
+          };
+
+          button.disabled = true;
+          message.className = 'msg';
+          message.textContent = 'Saving…';
+
+          fetch('api/node/setup', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body)
+          })
+            .then(function (response) {
+              return response.json().then(function (data) {
+                return { ok: response.ok, data: data };
+              });
+            })
+            .then(function (result) {
+              if (!result.ok) throw new Error(
+                (result.data && result.data.error && result.data.error.message) ||
+                'The node refused that.'
+              );
+              message.className = 'msg ok';
+              message.textContent =
+                'Saved. Registering with the coordinator — this page will update by itself.';
+              setTimeout(function () { location.reload(); }, 3000);
+            })
+            .catch(function (error) {
+              message.className = 'msg bad';
+              message.textContent = error.message;
+              button.disabled = false;
+              // Back to the slow refresh so a failed attempt is readable.
+              timer = setTimeout(function () { location.reload(); }, 15000);
+            });
+        });
+      })();
     </script>
   </body>
 </html>
@@ -143,18 +234,81 @@ export function renderNodePage(status: NodeStatusSnapshot): string {
 }
 
 /**
+ * The setup form, drawn only while this node has not enrolled.
+ *
+ * Joining a node to a coordinator is two values entered once, and doing it
+ * through the environment means editing a compose file on the machine with the
+ * games on it and restarting the container — for something that is, in every
+ * other respect, a first-run screen. So it is a first-run screen. It disappears
+ * the moment the node is enrolled and does not come back.
+ *
+ * Two states, and they are told apart because they are fixed differently:
+ * nothing entered yet, and entered but not yet accepted — a coordinator that is
+ * down, an address with a typo in it, a code already spent. The second keeps
+ * the form on screen with the reason above it rather than replacing it with a
+ * spinner that never resolves.
+ */
+function setupPanel(status: NodeStatusSnapshot): string {
+  if (status.enrolled) return '';
+
+  const waiting = status.configured || status.enrolmentPending;
+
+  const banner = waiting
+    ? `<p class="msg warn"><span class="dot">●</span>Trying to enrol with
+         ${status.coordinatorUrl ? `<code>${escapeHtml(status.coordinatorUrl)}</code>` : 'the coordinator'}.
+         This page refreshes itself; if it stays here, check the address is reachable from this
+         machine and that the code has not already been used.</p>`
+    : '';
+
+  return `
+      <section class="setup">
+        <h2>Set this node up</h2>
+        <ol class="steps">
+          <li>On the coordinator, open <strong>Admin → Settings → Nodes</strong>.</li>
+          <li>Give the node a name, pick the role <strong>Origin</strong>, and press
+              <strong>Generate code</strong>.</li>
+          <li>Paste both below. The code is shown once and expires in 24 hours.</li>
+        </ol>
+
+        <form id="setup" autocomplete="off">
+          <label>
+            <span>Coordinator address</span>
+            <input name="coordinatorUrl" type="url" required spellcheck="false"
+                   placeholder="https://games.example.com"
+                   value="${status.coordinatorUrl ? escapeHtml(status.coordinatorUrl) : ''}" />
+            <small>Where players sign in. This machine has to be able to reach it.</small>
+          </label>
+          <label>
+            <span>Enrolment code</span>
+            <input name="enrolmentToken" type="text" required spellcheck="false"
+                   placeholder="paste the code" />
+            <small>Spent the moment this node registers, and not kept afterwards.</small>
+          </label>
+          <button type="submit">Connect this node</button>
+          <p class="msg" id="setup-msg"></p>
+        </form>
+        ${banner}
+      </section>
+`;
+}
+
+/**
  * Where this node is in the one process that has states worth naming.
  *
- * Enrolment is the only thing an operator has to do to a node by hand, and the
- * only thing that can leave it running perfectly while doing nothing at all —
- * so it says which of those it is, and what to do about it.
+ * Enrolment is the only thing that can leave a node running perfectly while
+ * doing nothing at all, so it says which of those it is and what to do about
+ * it. Once the setup form above exists, "not enrolled" points there rather than
+ * naming an environment variable — the form is the answer, and it is on screen.
  */
 function enrolment(status: NodeStatusSnapshot): string {
   if (status.enrolled) return '<span class="ok"><span class="dot">●</span>enrolled</span>';
   if (!status.keyPresent) {
     return '<span class="warn"><span class="dot">●</span>waiting for the mesh agent to generate this node’s key</span>';
   }
-  return '<span class="warn"><span class="dot">●</span>not enrolled — set <code>ENROLMENT_TOKEN</code> to a code from Admin → Settings → Nodes</span>';
+  if (status.configured || status.enrolmentPending) {
+    return '<span class="warn"><span class="dot">●</span>registering…</span>';
+  }
+  return '<span class="warn"><span class="dot">●</span>not enrolled — fill in the setup form above</span>';
 }
 
 function lastReport(status: NodeStatusSnapshot): string {
@@ -188,7 +342,7 @@ function libraryTable(status: NodeStatusSnapshot): string {
     const configured = status.configuredPaths.length > 0;
     return configured
       ? `<p class="empty">Nothing scanned yet from <code>${status.configuredPaths.map(escapeHtml).join('</code>, <code>')}</code>.</p>`
-      : '<p class="empty bad">No library configured. Set <code>LIBRARY_PATHS</code> and mount the games read-only.</p>';
+      : '<p class="empty bad">No library configured. The node image reads <code>/library</code>; mount the games there, read-only.</p>';
   }
 
   const rows = status.libraries

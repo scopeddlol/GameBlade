@@ -302,17 +302,32 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return body;
   });
 
-  app.post('/admin/libraries', async (request, reply) => {
-    const input = createLibrarySchema.parse(request.body);
-    const resolved = path.resolve(input.path);
+  /**
+   * Whether a library path has to exist on this machine.
+   *
+   * On a standalone server it does, and checking at creation is far better
+   * than silently scanning nothing for a week. On a coordinator it cannot:
+   * the games are on somebody else's disk, the path is the label a node's
+   * catalog is filed under, and requiring it to be present here meant a
+   * coordinator could not create the library its nodes had to report into —
+   * so the topology could not be assembled at all.
+   */
+  async function assertUsableLibraryPath(resolved: string): Promise<void> {
+    if (!config.servesLocalFiles) return;
 
-    // Fail loudly at creation rather than silently scanning nothing later.
     const info = await stat(resolved).catch(() => null);
     if (!info?.isDirectory()) {
       throw ApiError.badRequest(
         `"${resolved}" is not a readable directory inside the container. Check the volume mount.`,
       );
     }
+  }
+
+  app.post('/admin/libraries', async (request, reply) => {
+    const input = createLibrarySchema.parse(request.body);
+    const resolved = path.resolve(input.path);
+
+    await assertUsableLibraryPath(resolved);
 
     const existing = db.select().from(libraries).where(eq(libraries.path, resolved)).get();
     if (existing) throw ApiError.conflict('That path is already a library');
@@ -342,10 +357,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     if (input.enabled !== undefined) patch.enabled = input.enabled;
     if (input.path !== undefined) {
       const resolved = path.resolve(input.path);
-      const info = await stat(resolved).catch(() => null);
-      if (!info?.isDirectory()) {
-        throw ApiError.badRequest(`"${resolved}" is not a readable directory inside the container`);
-      }
+      await assertUsableLibraryPath(resolved);
       patch.path = resolved;
     }
 

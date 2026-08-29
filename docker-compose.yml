@@ -1,10 +1,14 @@
 services:
   gameblade:
-    # Pull the image CI publishes. To build locally instead, comment `image`
-    # out and uncomment `build`.
+    # Everything on one machine. This image is the standalone role and says so
+    # itself, so there is no ROLE to set here. For a coordinator and its nodes,
+    # see docker-compose.coordinator.yml and docker-compose.node.yml.
     image: ghcr.io/scopeddlol/gameblade:latest
+    # To build locally instead, comment `image` out and uncomment this. The
+    # target is the role; omitting it builds the shared runtime, which has none.
     # build:
     #   context: .
+    #   target: standalone
     container_name: gameblade
     restart: unless-stopped
 

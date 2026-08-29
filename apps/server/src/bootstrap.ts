@@ -117,9 +117,17 @@ export function startSchedules(app: FastifyInstance): () => void {
     saveManifest,
     discord,
     nodeStatus,
+    chunks,
     sqlite,
   } = app.gameblade;
   const timers: NodeJS.Timeout[] = [];
+  /**
+   * Extra teardown for work that reschedules itself.
+   *
+   * Clearing a timer is not enough for a chained timeout: one already in flight
+   * would go on to schedule the next, after teardown, on a closed database.
+   */
+  const stoppers: (() => void)[] = [];
 
   /**
    * A node's whole job, once its files are scanned: tell the coordinator.
@@ -130,70 +138,161 @@ export function startSchedules(app: FastifyInstance): () => void {
    * what it already knows straight away instead of waiting for the next walk.
    */
   if (config.reportsCatalogUpstream) {
-    if (!config.coordinatorUrl) {
-      app.log.error('ROLE is "node" but COORDINATOR_URL is not set; nothing will be reported');
-    } else {
-      const reporter = new CatalogReporter(
-        db,
-        {
-          coordinatorUrl: config.coordinatorUrl,
-          enrolmentToken: config.enrolmentToken,
-          statePath: config.nodeStatePath,
-        },
-        app.log,
-      );
+    // No coordinator yet is a state, not an error.
+    //
+    // A node can be given one from the setup page it serves, so the reporter is
+    // built either way and resolves where to report on each attempt. It says
+    // "waiting" until somebody answers and starts the moment they do, without
+    // this container being restarted underneath the person answering.
+    const reporter = new CatalogReporter(
+      db,
+      {
+        coordinatorUrl: config.coordinatorUrl,
+        enrolmentToken: config.enrolmentToken,
+        statePath: config.nodeStatePath,
+      },
+      app.log,
+    );
 
-      const publish = async () => {
-        try {
-          if (!(await reporter.ensureRegistered())) return;
+    /** Steady state, once this node is enrolled and reporting. */
+    const SETTLED_INTERVAL_MS = 5 * 60_000;
+    /**
+     * While it is not.
+     *
+     * Somebody is watching the setup page for this to turn green, and five
+     * minutes of nothing reads as "it did not work" long before it is. The
+     * request is small and only happens while a node is not yet doing its job.
+     */
+    const WAITING_INTERVAL_MS = 10_000;
 
-          const games = reporter.collect().length;
-          const ok = await reporter.report();
-          nodeStatus.record({
-            ok,
-            games,
-            detail: ok ? 'accepted' : 'the coordinator refused the catalog — see the log',
-          });
-        } catch (error) {
-          app.log.warn({ err: error }, 'catalog report failed');
-          nodeStatus.record({
-            ok: false,
-            games: 0,
-            detail: error instanceof Error ? error.message : 'could not reach the coordinator',
-          });
+    const publish = async (): Promise<number> => {
+      try {
+        if (!(await reporter.ensureRegistered())) return WAITING_INTERVAL_MS;
+
+        const games = reporter.collect().length;
+        const ok = await reporter.report();
+        nodeStatus.record({
+          ok,
+          games,
+          detail: ok ? 'accepted' : 'the coordinator refused the catalog — see the log',
+        });
+        return ok ? SETTLED_INTERVAL_MS : WAITING_INTERVAL_MS;
+      } catch (error) {
+        app.log.warn({ err: error }, 'catalog report failed');
+        nodeStatus.record({
+          ok: false,
+          games: 0,
+          detail: error instanceof Error ? error.message : 'could not reach the coordinator',
+        });
+        return WAITING_INTERVAL_MS;
+      }
+    };
+
+    /*
+     * Self-scheduling rather than a fixed interval, so the cadence follows the
+     * state: fast while a node is being set up or has lost its coordinator,
+     * slow once it is settled. A fixed interval has to be one or the other, and
+     * either choice is wrong half the time.
+     *
+     * Chained timeouts also cannot overlap. A report of a large catalog over a
+     * slow link can outlast its own interval, and `setInterval` would have
+     * started the next one on top of it.
+     */
+    let stopped = false;
+    const schedule = (delay: number) => {
+      const timer = setTimeout(() => {
+        if (stopped) return;
+        void publish().then(schedule);
+      }, delay);
+      timer.unref();
+      timers.push(timer);
+    };
+    stoppers.push(() => {
+      stopped = true;
+    });
+
+    // The first attempt is delayed enough for the mesh agent beside this
+    // process to have written its key.
+    schedule(8_000);
+  }
+
+  /**
+   * Hash what the scan found, because nothing else on a node will.
+   *
+   * A game is only servable over the mesh once every one of its files has
+   * per-chunk hashes, and a node has no API for an operator to ask for them
+   * through — so on a node the pass has to run itself or it never runs at all,
+   * and the machine sits there holding a library the coordinator will never
+   * offer anyone. Deliberately not the default elsewhere: a standalone server
+   * can always serve the file itself, so there hashing stays the explicit,
+   * per-game decision it has always been.
+   *
+   * On its own timer rather than inside the reporter, because it takes hours on
+   * a real archive the first time and the catalog report has to keep happening
+   * meanwhile. It waits for the scanner rather than competing with it for the
+   * same disk, and hashes are read from file contents, so whatever it finishes
+   * is reported by the next publish and survives every one after that.
+   */
+  if (config.reportsCatalogUpstream && config.autoChunkHash) {
+    let hashing = false;
+    const hashSweep = async () => {
+      if (hashing || scanner.isRunning) return;
+      hashing = true;
+      try {
+        const result = await chunks.hashUnhashed(() => scanner.isRunning);
+        if (result.hashed > 0 || result.failed > 0) {
+          app.log.info(result, 'hashed games so they can be served from this node');
         }
-      };
+      } catch (error) {
+        app.log.warn({ err: error }, 'chunk hashing sweep failed');
+      } finally {
+        hashing = false;
+      }
+    };
 
-      // Soon after boot, then steadily. The first attempt is delayed enough for
-      // the mesh agent beside this process to have written its key.
-      const first = setTimeout(() => void publish(), 8_000);
-      first.unref();
-      timers.push(first);
+    const firstSweep = setTimeout(() => void hashSweep(), 30_000);
+    firstSweep.unref();
+    timers.push(firstSweep);
 
-      const repeat = setInterval(() => void publish(), 5 * 60_000);
-      repeat.unref();
-      timers.push(repeat);
+    const repeatSweep = setInterval(() => void hashSweep(), 10 * 60_000);
+    repeatSweep.unref();
+    timers.push(repeatSweep);
+  }
+
+  /**
+   * Scanning, but only where there is a disk to scan.
+   *
+   * A coordinator's libraries are rows describing what its nodes hold, not
+   * folders it can read. Scanning them was not merely pointless: a library
+   * whose path happens to exist and be empty reads as a library whose games
+   * have all been deleted, so the scan flagged the entire catalog its nodes had
+   * just reported. The role knows better than the operator does here, so it
+   * decides rather than leaving two more variables to get right.
+   */
+  if (config.servesLocalFiles) {
+    if (config.scanOnStart) {
+      // Delay slightly so the server starts answering requests immediately.
+      const timer = setTimeout(() => {
+        app.log.info('starting initial library scan');
+        void scanner.scan({ fetchMetadata: true });
+      }, 3_000);
+      timer.unref();
+      timers.push(timer);
     }
-  }
 
-  if (config.scanOnStart) {
-    // Delay slightly so the server starts answering requests immediately.
-    const timer = setTimeout(() => {
-      app.log.info('starting initial library scan');
-      void scanner.scan({ fetchMetadata: true });
-    }, 3_000);
-    timer.unref();
-    timers.push(timer);
-  }
-
-  if (config.scanIntervalMinutes > 0) {
-    const interval = setInterval(() => {
-      if (scanner.isRunning) return;
-      app.log.info('starting scheduled library scan');
-      void scanner.scan({ fetchMetadata: true });
-    }, config.scanIntervalMinutes * 60_000);
-    interval.unref();
-    timers.push(interval);
+    if (config.scanIntervalMinutes > 0) {
+      const interval = setInterval(() => {
+        if (scanner.isRunning) return;
+        app.log.info('starting scheduled library scan');
+        void scanner.scan({ fetchMetadata: true });
+      }, config.scanIntervalMinutes * 60_000);
+      interval.unref();
+      timers.push(interval);
+    }
+  } else if (config.scanOnStart || config.scanIntervalMinutes > 0) {
+    app.log.info(
+      'this is a coordinator, so it holds no files to scan; scanning settings are ignored',
+    );
   }
 
   /**
@@ -364,6 +463,7 @@ export function startSchedules(app: FastifyInstance): () => void {
   timers.push(cleanup);
 
   return () => {
+    for (const stop of stoppers) stop();
     for (const timer of timers) {
       clearTimeout(timer);
       clearInterval(timer);

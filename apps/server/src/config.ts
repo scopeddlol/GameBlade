@@ -99,6 +99,15 @@ const envSchema = z.object({
   MEDIA_QUOTA_MB: z.coerce.number().int().min(0).default(20_480),
   SAVE_QUOTA_MB: z.coerce.number().int().min(0).default(10_240),
 
+  /**
+   * Whether a node hashes what it scanned without being asked.
+   *
+   * On by default and only acted on by the `node` role, because a node cannot
+   * be asked: it has no API. Turning it off is for an operator who would rather
+   * schedule hours of disk reads themselves than have them start after a scan.
+   */
+  AUTO_CHUNK_HASH: booleanish.default(true),
+
   SCAN_ON_START: booleanish.default(true),
   SCAN_INTERVAL_MINUTES: z.coerce.number().int().min(0).max(10080).default(360),
   SCAN_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
@@ -199,6 +208,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     steamGridDbKey: e.STEAMGRIDDB_API_KEY ?? null,
     steamApiKey: e.STEAM_API_KEY ?? null,
     clientDownloadUrl: e.CLIENT_DOWNLOAD_URL?.trim() ? e.CLIENT_DOWNLOAD_URL.trim() : null,
+
+    /** Only meaningful on a node; see the schema above. */
+    autoChunkHash: e.AUTO_CHUNK_HASH,
 
     scanOnStart: e.SCAN_ON_START,
     scanIntervalMinutes: e.SCAN_INTERVAL_MINUTES,

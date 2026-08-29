@@ -154,6 +154,221 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.2 - August 29, 2026
+
+The release where a coordinator and its nodes stop being a thing you assemble
+and start being a thing you deploy.
+
+### An image per role
+
+`ghcr.io/scopeddlol/gameblade-coordinator`, `-node` and `-relay`, alongside the
+standalone `gameblade` that has always been there. Each sets its own role, so
+there is no `ROLE` in a compose file: pulling the coordinator image has already
+said what that container is, and saying it a second time is a thing to get
+wrong — a coordinator accidentally left as a standalone scans libraries it
+cannot read and flags the catalog its nodes just reported, and looks fine doing
+it.
+
+One build, one Dockerfile, four targets. They are the same filesystem with
+different metadata on top, so a coordinator and its nodes cannot drift into
+disagreeing about the catalog they exchange, and pulling two onto one host
+pulls the layers once. `ROLE` still overrides for anyone already setting it.
+
+A node is now one container rather than two. The scanner and the mesh agent are
+an implementation detail — one is Node, the other is Rust — and not something
+an operator should be keeping in step across two services that each had to be
+told the same library path and the same state path. They run under a shared
+entrypoint that takes the container down if either dies, so the restart policy
+brings back a working pair instead of leaving half a node running.
+
+### A node sets itself up
+
+Bring one up with nothing configured, open its page, and give it the
+coordinator's address and an enrolment code. Both processes pick the answers up
+without a restart, and the form disappears once the node has enrolled.
+
+The alternative was editing a compose file on the machine with the games on it
+and restarting the container, for two values entered once. It is bounded like
+the coordinator's own first-run administrator screen, which is the same shape of
+problem: it exists only while the node is not enrolled, it grants nothing by
+itself — the code is checked by the coordinator — and the page it lives on is
+bound to localhost by default.
+
+`COORDINATOR_URL` and `ENROLMENT_TOKEN` still work and still win.
+
+### It stays connected
+
+A rejected credential was permanent. The heartbeat logged "refused" every thirty
+seconds for ever, the coordinator marked the node stale and stopped handing it
+to clients, and the process sat there healthy serving nothing until somebody
+noticed and restarted it. A node deleted and re-enrolled, a token rotated by a
+registration elsewhere, an operator who blocked it and changed their mind — all
+of them ended there.
+
+Both halves recover by themselves now. The agent registers again with the key
+that has always been its identity, which is what a restart would have done
+without the restart, and the server beside it rereads the credential the agent
+just wrote. The catalog reporter also paces itself: every ten seconds while a
+node is not yet reporting, every five minutes once it is, and chained rather
+than on a fixed interval so a slow report cannot start the next one on top of
+itself.
+
+### Performance
+
+The mesh crate builds with fat LTO and a single codegen unit. It is the reason
+the transfer path is in Rust at all — it hashes every chunk on the way out and
+again on the way in — and the default release profile leaves the optimiser
+unable to see across codegen units or across into quinn, rustls and sha2, which
+is where that work actually happens. It costs build time, once, on a machine
+that is not yours.
+
+Two things found while assembling a real pair, both of which would have hurt at
+two nodes: `/api/mesh/catalog` returned the whole database, so each node fetched
+the file layout of every other node's games on every heartbeat and stat-ed them
+against its own disk; and the agent rebuilt index entries whose fingerprint had
+not changed. Scoped and cached respectively, a steady-state refresh is now one
+request rather than one per game.
+
+### Releases come from CI
+
+The PowerShell build scripts are gone. There is no longer a step that depends on
+somebody having a Windows machine, the right toolchain, and the discipline to
+run the same command every time — which is the arrangement that lets a release
+ship with one manifest still on the previous version.
+
+Stamp the version, tag it, and Publish does the rest: it refuses a tag whose ten
+manifests do not all agree, builds and pushes the four images, builds the
+Windows installers, and publishes the release with both attached. CI also builds
+every role image and boots each one, checking that `/api/health` names the role
+the image is for, that a node comes up with nothing configured and serves its
+setup page with both processes alive, and that the relay refuses to start
+without its key and says which one.
+
+### One empty folder stopped a node's whole catalog
+
+Found by writing the end-to-end test rather than by deploying: an empty
+directory in a library scans as a game with no files, and its fingerprint is
+the newest of no modification times — the empty string. A catalog report is all
+or nothing, so the coordinator refused the entire thing as malformed.
+
+The node enrolled, heartbeated, and reported every five minutes, and none of
+its catalog ever arrived. Nothing was on fire and nothing said so anywhere but
+a log. Games predating the column were null and did the same.
+
+The report now falls back to a timestamp the node already holds, so the game is
+described accurately rather than dropping the four thousand beside it.
+
+### Assembling one turned out to be four faults deep
+
+Before any of the above could matter, four things had to stop being true. Each
+stopped the deployment dead and none of them said anything, which is how a
+release went out over the top of them. None touches a standalone server, which
+is exactly how they survived.
+
+### A node could not enrol
+
+The two processes on a node share one state file: the mesh agent generates the
+keypair and registers, and the server beside it picks that registration up and
+reports the catalog against it. That is what makes them one node rather than
+two.
+
+They spelled the file differently. The agent wrote `secret_key`; the server
+looked for `secretKey`. So the agent enrolled and served quite happily while
+the server sat waiting for a key it could not see, logging "waiting for the
+mesh agent to generate this node's key" every five minutes, for ever. The
+catalog was never reported, which on a coordinator means the games do not
+exist.
+
+The agent now writes the casing the server reads, and reads either, so a state
+file from 0.6.1 keeps its identity instead of enrolling as a stranger. Pinned
+with a test that asserts the bytes on disk rather than a round trip through the
+struct — a round trip agrees with whatever casing both ends of the round trip
+happen to use, which is precisely the thing that was wrong.
+
+### A node could not hash the games it holds
+
+Nothing is servable over the mesh until every one of a game's files has
+per-chunk hashes: a client will not accept a piece it cannot verify. Computing
+them is an API call, and a node has no API — deliberately, since it owns no
+accounts, settings or catalog of record.
+
+So on a coordinator/node split there was no machine that could do it. The
+coordinator has the API and no files; the node has the files and no API. Every
+game stayed ineligible for ever, the mesh switch did nothing, and because a
+coordinator has no copy to fall back on, that is not a slow download but no
+download.
+
+A node now hashes what it scanned by itself, half a minute after boot and every
+ten minutes after. It waits for the scanner rather than competing with it for
+the disk, skips what is already hashed from the chunk table rather than by
+re-reading it, and stops between games, so a restart resumes instead of
+starting a multi-terabyte archive again. `AUTO_CHUNK_HASH=false` turns it off
+for an operator who would rather spend the disk deliberately.
+
+Still not the default anywhere else. A standalone server can always serve the
+file itself, so hashing stays the explicit per-game decision it has been.
+
+### A coordinator would not accept a library
+
+Creating a library checks that the path is a readable directory inside the
+container. That is the right check on a machine that reads its own files — a
+library nobody can read is a scan that finds nothing for a week and says so
+nowhere — and impossible on a coordinator, whose games are on somebody else's
+disk and which mounts no library at all.
+
+A node's catalog is filed into an assigned library and reports are refused
+until it has one. So a coordinator could not be given a working node, and the
+topology could not be assembled from a clean install by any route that did not
+involve mounting empty directories to lie to the check.
+
+The check now applies where it means something.
+
+### And then a coordinator scanned that library and deleted the catalog
+
+Scanning was gated on `SCAN_ON_START` and `SCAN_INTERVAL_MINUTES`, not on the
+role. A coordinator therefore scanned the libraries describing what its nodes
+hold. A path that does not exist fails the walk and is skipped; one that exists
+and is empty succeeds and reports zero games — so the empty directories from
+the previous fault read as a library whose games had all been deleted, and the
+scan flagged the entire catalog its nodes had just reported.
+
+The role decides now, and says so in the log at boot. Both settings are ignored
+on a coordinator, so they can be left, removed, or set wrongly.
+
+### A node was told about every other node's games
+
+`/api/mesh/catalog` returned everything in the database. A node fetched the
+file layout of every game on it, on every heartbeat, and stat-ed every file of
+each against its own disk — including every game belonging to every other node,
+which it will never hold. Two nodes with real libraries meant thousands of
+requests and filesystem checks a minute to learn nothing.
+
+Scoped to the node's assigned library, and to games that are not flagged
+missing. A node with no library is a mirror and still syncs against everything,
+which is what a mirror is for.
+
+The agent also stopped rebuilding what it already knew: an entry whose
+fingerprint the coordinator is still announcing is carried across rather than
+re-fetched and re-checked, so a steady-state refresh is one request instead of
+one per game.
+
+### Documentation
+
+`Docs.html` gains **a coordinator and two nodes, in production** — the build in
+order, with Caddy in front of the coordinator, the nodes on a LAN, and their
+status pages reachable both over the LAN and through a tunnel.
+
+The rest of it was audited against the code rather than against the last
+version of itself, which turned up: sixteen of twenty-six environment variables
+documented and none of the ones that make a role a role; two hashing controls
+described as buttons in an admin panel that has never had them; the mesh
+switches on a tab that does not exist; the relay's key said to be somewhere it
+is not shown; backups described with two config keys that are three settings on
+a page; and a "New in 0.6.1" badge, hard-coded, on eleven blocks describing
+0.5.3.
+
+---
+
 ## Version 0.6.1 - August 28, 2026
 
 0.6.0 moved GameBlade off one machine. This is the release that checks the

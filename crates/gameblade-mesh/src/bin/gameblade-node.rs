@@ -4,18 +4,24 @@
 //! so those bytes never cross the reverse proxy. Coordination still goes
 //! through it — that traffic is kilobytes.
 //!
-//! Configured entirely by environment, because it is meant to sit in a compose
-//! file next to the server:
+//! Nothing has to be configured for it to start. Every value below has a
+//! working default, and the two that cannot — which coordinator, and the code
+//! that proves you are allowed to join it — can be answered from the setup page
+//! the node serves instead of from a compose file:
 //!
-//!     GAMEBLADE_SERVER      https://games.example.com   (required)
-//!     GAMEBLADE_LIBRARY     /library                     (required, read-only)
-//!     GAMEBLADE_ENROLMENT   <code from Admin → Nodes>    (first run only)
+//!     GAMEBLADE_SERVER      https://games.example.com   (or from the state file)
+//!     GAMEBLADE_LIBRARY     /library                     (default, read-only)
+//!     GAMEBLADE_ENROLMENT   <code from Admin → Nodes>    (or from the state file)
 //!     GAMEBLADE_STATE       /data/node-state.json        (default)
 //!     GAMEBLADE_PORT        47820                        (default; 0 for any)
 //!
-//! The enrolment code is spent on first run. After that the agent identifies
-//! itself with the key in its state file, so the code can be removed from the
-//! environment and does not need to be kept anywhere.
+//! An unconfigured agent waits rather than exiting. It is one half of a node
+//! and the other half is serving the page somebody is about to fill in, so
+//! "not told yet" is a state to sit in, not an error to die of.
+//!
+//! The enrolment code is spent on first run and cleared from the state file.
+//! After that the agent identifies itself with its key, so nothing anywhere
+//! needs to keep the code.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,7 +33,10 @@ use gameblade_mesh::agent::{
 use gameblade_mesh::diagnostics::DEFAULT_STUN_SERVERS;
 use gameblade_mesh::node::NodeServer;
 use gameblade_mesh::transport::MeshEndpoint;
-use gameblade_mesh::{MeshError, MeshResult, MESH_DEFAULT_PORT};
+use gameblade_mesh::{
+    MeshError, MeshResult, DEFAULT_LIBRARY_ROOT, DEFAULT_STATE_PATH, MESH_DEFAULT_PORT,
+    UNCONFIGURED_POLL,
+};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
@@ -56,47 +65,88 @@ struct CatalogList {
 struct CatalogEntry {
     #[serde(rename = "gameId")]
     game_id: String,
+    /// Changes whenever the game's contents do, which is what lets an index
+    /// entry be reused instead of rebuilt.
+    #[serde(rename = "contentHash")]
+    content_hash: Option<String>,
 }
 
-fn required(name: &str) -> String {
+fn optional(name: &str) -> Option<String> {
     match std::env::var(name) {
-        Ok(value) if !value.trim().is_empty() => value,
-        _ => {
-            eprintln!("{name} must be set. See the comment at the top of this binary.");
-            std::process::exit(2);
-        }
+        Ok(value) if !value.trim().is_empty() => Some(value.trim().to_string()),
+        _ => None,
     }
+}
+
+/// Which coordinator to talk to: the environment, else whatever the setup page
+/// wrote, else nothing yet.
+///
+/// Re-read every time round the wait loop rather than captured once, because
+/// the whole point is that it can be answered while this process is running.
+fn coordinator_url(state_path: &std::path::Path) -> Option<String> {
+    optional("GAMEBLADE_SERVER")
+        .or_else(|| AgentState::load(state_path).coordinator_url)
+        .map(|url| url.trim_end_matches('/').to_string())
 }
 
 #[tokio::main]
 async fn main() {
-    let server_url = required("GAMEBLADE_SERVER")
-        .trim_end_matches('/')
-        .to_string();
-    let library_root = PathBuf::from(required("GAMEBLADE_LIBRARY"));
-    let state_path = PathBuf::from(
-        std::env::var("GAMEBLADE_STATE").unwrap_or_else(|_| "/data/node-state.json".to_string()),
+    let library_root = PathBuf::from(
+        optional("GAMEBLADE_LIBRARY").unwrap_or_else(|| DEFAULT_LIBRARY_ROOT.to_string()),
     );
-    let port: u16 = std::env::var("GAMEBLADE_PORT")
-        .ok()
+    let state_path = PathBuf::from(
+        optional("GAMEBLADE_STATE").unwrap_or_else(|| DEFAULT_STATE_PATH.to_string()),
+    );
+    let port: u16 = optional("GAMEBLADE_PORT")
         .and_then(|value| value.parse().ok())
         .unwrap_or(MESH_DEFAULT_PORT);
 
+    println!("GameBlade node agent");
+    println!("  library: {}", library_root.display());
+    println!("  state:   {}", state_path.display());
+
     if !library_root.is_dir() {
+        // Not fatal, and deliberately so: the library is a volume mount, and a
+        // compose file whose mount is wrong is fixed by editing the compose
+        // file — which is a great deal easier to do against a node that is
+        // running and saying what is wrong than against one in a crash loop.
         eprintln!(
-            "GAMEBLADE_LIBRARY is not a directory: {}",
+            "  warning: {} is not a directory. Mount the games there; nothing can be served until you do.",
             library_root.display()
         );
-        std::process::exit(2);
     }
 
-    println!("GameBlade node agent");
-    println!("  server:  {server_url}");
-    println!("  library: {}", library_root.display());
+    // Wait to be told, rather than exiting for want of an answer.
+    //
+    // The other half of this node is already serving its setup page, and the
+    // whole design is that somebody fills that in. Exiting here would take the
+    // container down in a restart loop underneath the page they are typing
+    // into.
+    let server_url = {
+        let mut waited = 0u64;
+        loop {
+            if let Some(url) = coordinator_url(&state_path) {
+                break url;
+            }
+            // Said once, then once a minute. The poll is a small file read and
+            // wants to be frequent — somebody is at the setup page waiting for
+            // this to notice — but a node left unconfigured overnight should
+            // not write twenty thousand identical lines about it.
+            if waited % 20 == 0 {
+                println!(
+                    "  waiting: no coordinator set yet — set one on this node's page, or in GAMEBLADE_SERVER"
+                );
+            }
+            waited += 1;
+            tokio::time::sleep(UNCONFIGURED_POLL).await;
+        }
+    };
 
-    // Retried rather than fatal: an agent starting alongside the server in a
-    // compose file will routinely come up first, and exiting would make that a
-    // crash loop instead of a wait.
+    println!("  server:  {server_url}");
+
+    // Retried rather than fatal, for the same reason: a coordinator that is
+    // down, or an agent that came up before the server beside it, is a wait
+    // rather than a crash.
     let agent = loop {
         match start(&server_url, &state_path, port).await {
             Ok(agent) => break agent,
@@ -121,7 +171,7 @@ async fn main() {
         println!("  seen as: (could not determine — clients may not reach this node)");
     }
 
-    run(agent, server_url, library_root).await;
+    run(agent, server_url, library_root, state_path).await;
 }
 
 async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> MeshResult<Agent> {
@@ -177,8 +227,21 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
         }));
     }
 
+    // The environment first, then whatever the setup page wrote. Either way it
+    // is spent once and cleared below.
+    let enrolment = optional("GAMEBLADE_ENROLMENT")
+        .or_else(|| state.enrolment_token.clone())
+        .unwrap_or_default();
+
+    if enrolment.is_empty() {
+        return Err(MeshError::Refused(
+            "no enrolment code: paste one from Admin → Settings → Nodes into this node's setup page"
+                .into(),
+        ));
+    }
+
     let body = serde_json::json!({
-        "enrolmentToken": std::env::var("GAMEBLADE_ENROLMENT").unwrap_or_default(),
+        "enrolmentToken": enrolment,
         "publicKey": identity.public_key_base64(),
         "agentVersion": env!("CARGO_PKG_VERSION"),
         "endpoints": endpoints,
@@ -207,6 +270,12 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
     state.node_id = Some(registration.node_id.clone());
     state.node_token = Some(registration.node_token.clone());
     state.coordinator_key = Some(registration.coordinator_public_key.clone());
+    // Spent. Cleared so it is not sitting on disk being useless, and so a
+    // restart cannot look like it still has something to enrol with.
+    state.enrolment_token = None;
+    // Remembered, so a node pointed at its coordinator through the setup page
+    // stays pointed there across restarts without the environment knowing.
+    state.coordinator_url = Some(server_url.to_string());
     state.save(state_path)?;
 
     let coordinator = state
@@ -251,13 +320,25 @@ fn assemble(
     }
 }
 
-async fn run(agent: Agent, server_url: String, library_root: PathBuf) {
+/// Whether the coordinator has just told us this credential is no longer good.
+///
+/// 401 and 403 are the two ways it says so: the node was deleted, its token was
+/// rotated by a registration somewhere else, or an operator blocked and then
+/// unblocked it. Every one of those is recoverable without a human, because the
+/// key in the state file is the identity and registering again with it is how a
+/// node says "still me".
+fn credential_rejected(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN
+}
+
+async fn run(agent: Agent, server_url: String, library_root: PathBuf, state_path: PathBuf) {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(40))
         .build()
         .expect("an HTTP client with only a timeout set always builds");
 
     let Agent {
+        identity,
         node_id,
         node_token,
         endpoint,
@@ -268,6 +349,15 @@ async fn run(agent: Agent, server_url: String, library_root: PathBuf) {
     } = agent;
 
     let endpoint = Arc::new(endpoint);
+
+    // The credential rotates; the identity does not.
+    //
+    // A node is its keypair and the socket that keypair answers on, both of
+    // which outlive any particular token — so a rejected credential is
+    // replaced in place rather than by tearing the agent down and rebuilding
+    // it. Shared because the rendezvous poll below runs on its own task and
+    // must not go on presenting a token this loop has already replaced.
+    let node_token = Arc::new(RwLock::new(node_token));
 
     // Accept: clients connecting, one chunk per stream.
     {
@@ -295,14 +385,17 @@ async fn run(agent: Agent, server_url: String, library_root: PathBuf) {
         let http = http.clone();
         let server_url = server_url.clone();
         let node_id = node_id.clone();
-        let node_token = node_token.clone();
+        let node_token = Arc::clone(&node_token);
         let endpoint = Arc::clone(&endpoint);
 
         tokio::spawn(async move {
             loop {
+                // Read per poll, so a token replaced by the heartbeat loop is
+                // picked up on the next one rather than at the next restart.
+                let token = node_token.read().await.clone();
                 let reply = http
                     .get(format!("{server_url}/api/mesh/rendezvous"))
-                    .header("authorization", format!("Bearer {node_token}"))
+                    .header("authorization", format!("Bearer {token}"))
                     .header("x-gameblade-node", &node_id)
                     .send()
                     .await;
@@ -363,7 +456,7 @@ async fn run(agent: Agent, server_url: String, library_root: PathBuf) {
             &http,
             &server_url,
             &node_id,
-            &node_token,
+            &node_token.read().await.clone(),
             &library_root,
             &index,
         )
@@ -395,33 +488,126 @@ async fn run(agent: Agent, server_url: String, library_root: PathBuf) {
             }));
         }
 
+        let token = node_token.read().await.clone();
         let sent = http
             .post(format!("{server_url}/api/mesh/heartbeat"))
-            .header("authorization", format!("Bearer {node_token}"))
+            .header("authorization", format!("Bearer {token}"))
             .header("x-gameblade-node", &node_id)
-            .json(&serde_json::json!({ "endpoints": endpoints, "games": games }))
+            .json(&serde_json::json!({ "endpoints": &endpoints, "games": games }))
             .send()
             .await;
 
-        if let Ok(response) = sent {
-            if !response.status().is_success() {
-                eprintln!("heartbeat refused: {}", response.status());
+        match sent {
+            Ok(response) if response.status().is_success() => {}
+
+            // The credential is no longer good, and this is recoverable
+            // without anybody being woken up.
+            //
+            // A node that is deleted and re-enrolled, a token rotated by a
+            // registration elsewhere, an operator who blocked it and changed
+            // their mind: all of these used to be permanent. The heartbeat
+            // logged "refused" every thirty seconds for ever, the coordinator
+            // marked the node stale, and it stopped being handed to clients —
+            // while the process sat there healthy, serving nothing, until
+            // somebody noticed and restarted it. Registering again with the
+            // key that has always been this node's identity is exactly what a
+            // restart would have done, minus the restart.
+            Ok(response) if credential_rejected(response.status()) => {
+                eprintln!(
+                    "the coordinator rejected this node's credential ({}); registering again",
+                    response.status()
+                );
+                match reregister(&http, &server_url, &identity, &endpoint, &state_path).await {
+                    Ok(fresh) => {
+                        *node_token.write().await = fresh;
+                        println!("re-registered; the node is listed again");
+                    }
+                    Err(err) => eprintln!("could not register again: {err}"),
+                }
+                continue;
             }
+
+            Ok(response) => eprintln!("heartbeat refused: {}", response.status()),
+            Err(err) => eprintln!("heartbeat did not reach the coordinator: {err}"),
         }
 
         // Report what was served, so transfer allowances still mean something
-        // when the bytes never crossed the server.
+        // when the bytes never crossed the server. A rejection here needs no
+        // handling of its own: the next heartbeat is thirty seconds away and
+        // deals with it, and the ledger keeps the report until it lands.
         let pending = server.ledger().lock().await.pending_reports();
         for (nonce, bytes) in pending {
             let _ = http
                 .post(format!("{server_url}/api/mesh/report"))
-                .header("authorization", format!("Bearer {node_token}"))
+                .header("authorization", format!("Bearer {token}"))
                 .header("x-gameblade-node", &node_id)
                 .json(&serde_json::json!({ "nonce": nonce, "bytesServed": bytes }))
                 .send()
                 .await;
         }
     }
+}
+
+/// Present this node's key again and take the credential that comes back.
+///
+/// Not enrolment: the coordinator matches on the public key, finds the node it
+/// already has, and issues a fresh token. No enrolment code is involved and
+/// none is needed — which is the property that makes recovering from a rejected
+/// credential something the agent can do by itself.
+async fn reregister(
+    http: &reqwest::Client,
+    server_url: &str,
+    identity: &gameblade_mesh::NodeIdentity,
+    endpoint: &MeshEndpoint,
+    state_path: &std::path::Path,
+) -> MeshResult<String> {
+    let mut endpoints = Vec::new();
+    if let Ok(local) = endpoint.local_addr() {
+        endpoints.push(serde_json::json!({
+            "kind": "local",
+            "address": local.ip().to_string(),
+            "port": local.port(),
+        }));
+    }
+    if let Some(reflexive) = endpoint.reflexive_addr() {
+        endpoints.push(serde_json::json!({
+            "kind": "observed",
+            "address": reflexive.ip().to_string(),
+            "port": reflexive.port(),
+        }));
+    }
+
+    let response = http
+        .post(format!("{server_url}/api/mesh/register"))
+        .json(&serde_json::json!({
+            "publicKey": identity.public_key_base64(),
+            "agentVersion": env!("CARGO_PKG_VERSION"),
+            "endpoints": endpoints,
+        }))
+        .send()
+        .await
+        .map_err(|err| MeshError::Unreachable(format!("re-registering: {err}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(MeshError::Refused(format!("({status}): {body}")));
+    }
+
+    let registration: Registration = response
+        .json()
+        .await
+        .map_err(|err| MeshError::Protocol(format!("registration reply: {err}")))?;
+
+    // Written through so the server process beside this one, which reads the
+    // same file, is not left presenting the credential that was just replaced.
+    let mut state = AgentState::load(state_path);
+    state.node_id = Some(registration.node_id);
+    state.node_token = Some(registration.node_token.clone());
+    state.coordinator_key = Some(registration.coordinator_public_key);
+    state.save(state_path)?;
+
+    Ok(registration.node_token)
 }
 
 /// Rebuild the index of what this machine can serve.
@@ -448,8 +634,31 @@ async fn refresh(
         return;
     };
 
+    // Taken out rather than borrowed: entries that survive are moved across
+    // into the new index, and whatever is left behind is what this node has
+    // stopped holding.
+    let mut previous = std::mem::take(&mut *index.write().await);
+
     let mut rebuilt = LibraryIndex::new();
+    let mut reused = 0usize;
+
     for entry in catalog.games {
+        // Unchanged since the last pass: the fingerprint the coordinator is
+        // announcing is the one this index already verified a copy against.
+        // Nothing about the files can have moved without that changing, so
+        // re-fetching the layout and re-stat-ing every file would confirm what
+        // is already known. On a large library this is the difference between
+        // a request per game every refresh and one request in total.
+        if entry
+            .content_hash
+            .as_deref()
+            .is_some_and(|hash| previous.content_hash(&entry.game_id) == Some(hash))
+            && rebuilt.carry_over(&mut previous, &entry.game_id)
+        {
+            reused += 1;
+            continue;
+        }
+
         let detail = http
             .get(format!("{server_url}/api/mesh/catalog/{}", entry.game_id))
             .header("authorization", format!("Bearer {node_token}"))
@@ -470,5 +679,10 @@ async fn refresh(
 
     let held = rebuilt.len();
     *index.write().await = rebuilt;
-    println!("library: holding {held} game(s) the coordinator knows about");
+
+    // Only worth a line when it changed. This runs on a timer, and a node that
+    // is working prints the same number for ever otherwise.
+    if reused != held {
+        println!("library: holding {held} game(s) the coordinator knows about");
+    }
 }

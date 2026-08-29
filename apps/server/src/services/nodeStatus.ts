@@ -17,6 +17,8 @@ interface NodeStateFile {
   nodeId?: string;
   coordinatorKey?: string;
   secretKey?: string;
+  coordinatorUrl?: string;
+  enrolmentToken?: string;
 }
 
 export interface ReportAttempt {
@@ -32,6 +34,16 @@ export interface NodeStatusSnapshot {
   coordinatorUrl: string | null;
   /** True once this node has a saved registration, whatever it does next. */
   enrolled: boolean;
+  /**
+   * Whether somebody has answered the two questions setup asks.
+   *
+   * Distinct from `enrolled`: a node can be configured and not yet enrolled
+   * (the coordinator is down, the code was wrong) and the page has to tell
+   * those apart, because they are fixed differently.
+   */
+  configured: boolean;
+  /** Whether a code is sitting in the state file waiting to be spent. */
+  enrolmentPending: boolean;
   nodeId: string | null;
   /** Whether the mesh agent has generated this node's key yet. */
   keyPresent: boolean;
@@ -93,8 +105,12 @@ export class NodeStatusService {
     return {
       version: VERSION,
       role: this.config.role,
-      coordinatorUrl: this.config.coordinatorUrl,
+      // The environment when an operator declared one, else whatever setup
+      // wrote — the same order the reporter and the agent resolve it in.
+      coordinatorUrl: this.config.coordinatorUrl ?? state.coordinatorUrl ?? null,
       enrolled: Boolean(state.nodeId),
+      configured: Boolean(this.config.coordinatorUrl ?? state.coordinatorUrl),
+      enrolmentPending: Boolean(state.enrolmentToken),
       nodeId: state.nodeId ?? null,
       keyPresent: Boolean(state.secretKey),
       libraries: rows.map((library) => ({
