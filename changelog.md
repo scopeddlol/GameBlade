@@ -154,6 +154,88 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.1 - August 28, 2026
+
+0.6.0 moved GameBlade off one machine. This is the release that checks the
+result actually works, on the platforms it has to work on.
+
+### Sharing a download never worked on Windows
+
+The client that seeds pieces of games to other players bound its listening
+socket to `[::]` and relied on the operating system to accept IPv4 on it too.
+Linux does. Windows does not — `IPV6_V6ONLY` defaults on there — so on the only
+platform the client ships for, a seeding player's socket could not receive an
+IPv4 packet, which is nearly all of them.
+
+Nothing reported it because there was nothing to report: a peer that cannot be
+reached is indistinguishable from a peer that has nothing anybody wants. The
+whole feature was off, silently, for everyone who turned it on.
+
+The socket now clears the option before binding, and falls back to IPv4 if that
+fails rather than returning one half the internet cannot reach.
+
+The tests that would have caught this existed and passed — on Linux, which is
+the only place CI ran them. Seven of the eight end-to-end transport tests fail
+on Windows without this fix. That job now runs on both.
+
+### A node can be looked at
+
+A node ran the coordinator's entire web application: its own empty database, its
+own admin panel over a catalog it does not own, and its own first-run "create
+the first administrator" screen, on a port an operator might reasonably expose.
+None of it meant anything, and one part of it was a liability.
+
+It now serves a page about itself instead — what it scanned, how many files have
+the per-chunk hashes that let them be served, whether it enrolled, and when it
+last reported to the coordinator, with the reason if that failed. It answers the
+question people actually stand in front of a node to ask, which until now had to
+be answered by reading container logs.
+
+The API and the panel are not mounted at all in the `node` role, rather than
+mounted and ignored. `docker-compose.node.yml` publishes the page on localhost.
+
+`/api/health` also names the role now. Three containers answered it identically,
+which is unhelpful when the thing you are trying to establish is which one you
+just reached.
+
+### Reporting a catalog is one transaction
+
+Ingest wrote each game as it decided about it: three or four statements per
+entry, thousands of entries per report, all of them prepared and held for the
+length of a synchronous loop. A report that failed halfway left the catalog
+halfway written.
+
+It now sorts the work out in memory and writes it in batches inside a single
+transaction. Five hundred games went from thousands of prepared statements to
+twelve. The whole report lands or none of it does.
+
+### The client's own tests did not run on Windows
+
+Two of them failed there, and only there, which for a Windows-only client means
+they were failing everywhere that counts. One built a temporary directory name
+out of a debug-printed timestamp, which contains colons and therefore cannot be
+a Windows path, so the test died creating its own fixture. The other asserted a
+forward slash in a path list that is built from `PathBuf` and so came back
+back-slashed.
+
+The path list is now normalised to forward slashes before it is persisted. It is
+read back to clean up after a cancelled download and Windows joins either form
+happily, so this only means the queue file no longer records which platform
+wrote it.
+
+### Node 24 is refused rather than discovered
+
+`engines` claimed Node 22 or newer. On Node 24, `better-sqlite3` 11 aborts the
+process outright — `Assertion failed: (env) != nullptr` — once enough SQLite
+work goes through it in one burst, which ingesting a real catalog does. The
+image and CI both run Node 22 and were never affected; a developer on current
+Node hit it as a crash with no explanation.
+
+The range is now `>=22 <24`, which is the truth. Lifting it means upgrading the
+driver.
+
+---
+
 ## Version 0.6.0 - August 28, 2026
 
 The release GameBlade stops being one machine. A coordinator holds the database
