@@ -1771,7 +1771,7 @@ curl -sS -H "authorization: Bearer $TOKEN" \
               <tbody>
                 <tr>
                   <td><code>mesh-doctor</code></td>
-                  <td>In the image, on <code>PATH</code>. <code>docker exec gameblade-mesh mesh-doctor</code></td>
+                  <td>In every image, on <code>PATH</code>. <code>docker exec gameblade-node mesh-doctor</code></td>
                   <td>Nothing. It is already there.</td>
                 </tr>
                 <tr>
@@ -1828,7 +1828,7 @@ curl -sS -H "authorization: Bearer $TOKEN" \
                 <tr>
                   <td><strong>The coordinator</strong><br />a small VPS</td>
                   <td>
-                    <code>gameblade</code> (<code>ROLE=coordinator</code>), Caddy, and optionally
+                    <code>gameblade-coordinator</code>, Caddy, and optionally
                     <code>gameblade-relay</code>
                   </td>
                   <td>
@@ -1839,8 +1839,8 @@ curl -sS -H "authorization: Bearer $TOKEN" \
                 <tr>
                   <td><strong>Node A</strong><br />on your LAN</td>
                   <td>
-                    <code>gameblade-node-a</code> (<code>ROLE=node</code>) and
-                    <code>gameblade-mesh-a</code> (the agent)
+                    one <code>gameblade-node</code> container, running both the scanner and the
+                    mesh agent
                   </td>
                   <td>
                     <code>http://192.168.1.20:8080</code> on the LAN, a Pangolin hostname from
@@ -1848,11 +1848,11 @@ curl -sS -H "authorization: Bearer $TOKEN" \
                   </td>
                 </tr>
                 <tr>
-                  <td><strong>Node B</strong><br />on your LAN</td>
-                  <td>the same pair, its own <code>data/</code> and its own library</td>
+                  <td><strong>Node B</strong><br />elsewhere &mdash; a friend's house is fine</td>
+                  <td>the same, with its own <code>data/</code> and its own library</td>
                   <td>
-                    <code>http://192.168.1.21:8080</code>, its own Pangolin hostname, and
-                    <code>47822/udp</code> forwarded
+                    its own address and its own Pangolin hostname, and
+                    <code>47820/udp</code> forwarded on <em>that</em> network
                   </td>
                 </tr>
               </tbody>
@@ -2373,21 +2373,25 @@ services:
           </p>
           <ol>
             <li>
-              <strong>Measure first.</strong> <code>docker exec gameblade-mesh-a mesh-doctor</code>
+              <strong>Measure first.</strong> <code>docker exec gameblade-node mesh-doctor</code>
               says whether a client can punch through to this machine. It measures the NAT's
               mapping behaviour rather than counting layers, which is the only thing that predicts
               anything &mdash; double NAT is routinely punchable and single NAT routinely is not.
             </li>
             <li>
-              <strong>Forward the UDP ports anyway.</strong> <code>47820/udp</code> to
-              192.168.1.20 and <code>47822/udp</code> to 192.168.1.21, with each node's
-              <code>GAMEBLADE_PORT</code> matching what you forwarded. One directly reachable side
-              makes the other side's NAT stop mattering, whatever it is.
+              <strong>Forward the UDP port anyway.</strong> <code>47820/udp</code> to the node's
+              LAN address, on each network. Nodes on <em>different</em> networks &mdash; yours and
+              a friend's &mdash; each use the default port and neither knows about the other, so
+              there is nothing to coordinate. Two nodes behind the <em>same</em> router are the
+              only case that needs a second port: give one <code>GAMEBLADE_PORT=47822</code>,
+              publish and forward that instead. One directly reachable side makes the other side's
+              NAT stop mattering, whatever it is.
             </li>
             <li>
               <strong>Give each node a stable LAN address</strong>, by DHCP reservation or
               statically. A node is known by its key rather than its address, so a changed one is
-              not fatal &mdash; but a forwarded port pointing at the wrong machine is.
+              not fatal &mdash; but a forwarded port pointing at the wrong machine is. Worth
+              writing down for a node you do not live with.
             </li>
             <li>
               <strong>Then decide about <a href="#relay">the relay</a>.</strong> With ports
