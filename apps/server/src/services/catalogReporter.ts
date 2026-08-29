@@ -262,7 +262,21 @@ export class CatalogReporter {
         relPath: game.relPath,
         kind: game.kind,
         sizeBytes: game.sizeBytes,
-        contentMtime: game.contentMtime ?? '',
+        /*
+         * Never empty, because a report is all or nothing.
+         *
+         * An empty folder in a library scans as a game with no files, and its
+         * fingerprint is the newest of no modification times — the empty
+         * string. Sent as it was, the coordinator refused the *whole* report
+         * as malformed, so one stray directory meant a node that enrolled,
+         * heartbeated and reported every five minutes while none of its
+         * catalog ever arrived, saying so only in a log nobody reads. Rows
+         * predating the column are null and did the same.
+         *
+         * The fallback is a real timestamp this node already holds, so the
+         * game is described accurately rather than dropped.
+         */
+        contentMtime: game.contentMtime || game.scannedAt || game.updatedAt,
         files: reportedFiles,
       });
     }

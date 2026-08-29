@@ -244,6 +244,20 @@ the image is for, that a node comes up with nothing configured and serves its
 setup page with both processes alive, and that the relay refuses to start
 without its key and says which one.
 
+### One empty folder stopped a node's whole catalog
+
+Found by writing the end-to-end test rather than by deploying: an empty
+directory in a library scans as a game with no files, and its fingerprint is
+the newest of no modification times — the empty string. A catalog report is all
+or nothing, so the coordinator refused the entire thing as malformed.
+
+The node enrolled, heartbeated, and reported every five minutes, and none of
+its catalog ever arrived. Nothing was on fire and nothing said so anywhere but
+a log. Games predating the column were null and did the same.
+
+The report now falls back to a timestamp the node already holds, so the game is
+described accurately rather than dropping the four thousand beside it.
+
 ### Assembling one turned out to be four faults deep
 
 Before any of the above could matter, four things had to stop being true. Each
