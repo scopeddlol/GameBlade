@@ -35,16 +35,9 @@ services:
       # ADMIN_USERNAME: admin
       # ADMIN_PASSWORD: change-me-to-something-long
 
-      # Where clients are told to find the relay below. Your public hostname
-      # and the relay's port — not localhost, and not the container name: this
-      # value is handed to players' machines.
-      #
-      # The one line here you have to fill in. Left empty the coordinator still
-      # starts, and the relay below still runs, but no client is ever told it
-      # exists — so the players whose NAT defeats hole punching cannot download
-      # at all, and a coordinator holds no files to fall back on. It is said in
-      # the log at boot and on Admin -> Insights -> Health rather than being
-      # left to a player to discover.
+      # Optional public relay override. Left empty, clients use the coordinator
+      # request hostname and UDP port 47821, which matches the relay below. Set
+      # this only when the relay has a different public name or port.
       RELAY_ENDPOINT: ${RELAY_ENDPOINT:-}
 
       # Metadata providers. Can also be set in Admin -> Settings.
@@ -97,7 +90,7 @@ services:
     ports:
       # UDP, and not something a reverse proxy can carry — Caddy has nothing to
       # do with this. Open 47821/udp on the host firewall, and make sure
-      # RELAY_ENDPOINT above names this host and this port.
+      # RELAY_ENDPOINT overrides this automatic same-host address when needed.
       - '47821:47821/udp'
 
     security_opt:

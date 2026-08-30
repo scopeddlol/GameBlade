@@ -69,6 +69,20 @@ impl DownloadStatus {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DownloadSourceState {
+    pub node_id: Option<String>,
+    pub label: String,
+    /// `origin_node`, `mirror_node`, `peer_client`, or `coordinator`.
+    pub source_type: String,
+    /// `direct`, `relay`, or `https`.
+    pub route: String,
+    pub endpoint: Option<String>,
+    /// `connecting`, `connected`, `available`, or `failed`.
+    pub status: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DownloadState {
     pub game_id: String,
     pub title: String,
@@ -81,6 +95,7 @@ pub struct DownloadState {
     pub current_file: Option<String>,
     pub destination: String,
     pub error: Option<String>,
+    pub sources: Vec<DownloadSourceState>,
 }
 
 /// What the queue remembers about one download, on disk as well as in memory.
@@ -884,6 +899,7 @@ fn download_state_for(entry: &QueueEntry) -> DownloadState {
         current_file: None,
         destination: entry.destination.clone(),
         error: entry.error.clone(),
+        sources: Vec::new(),
     }
 }
 
@@ -1076,6 +1092,7 @@ mod tests {
             token: String::new(),
             expires_at: None,
             chunk_bytes: None,
+            origin_available: true,
             sources: None,
         }
     }

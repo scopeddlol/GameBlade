@@ -81,8 +81,16 @@ pub struct DownloadManifest {
     /// instead of verifying arriving bytes against boundaries nobody uses.
     #[serde(rename = "chunkBytes", default)]
     pub chunk_bytes: Option<u64>,
+    /// Older standalone servers predate the field and do serve their files, so
+    /// true is the compatibility default. Coordinators send false explicitly.
+    #[serde(rename = "originAvailable", default = "default_origin_available")]
+    pub origin_available: bool,
     #[serde(default)]
     pub sources: Option<Vec<ManifestSource>>,
+}
+
+fn default_origin_available() -> bool {
+    true
 }
 
 /// One node the coordinator is offering, with the grant to use it.
@@ -451,20 +459,18 @@ impl ApiClient {
     ///
     /// One call rather than two: knowing about a node is useless without a
     /// grant, and a grant is meaningless for a node you were not told about.
-    /// A server that has never heard of the mesh 404s here, which is an empty
-    /// answer rather than an error — the origin was always going to be the
-    /// fallback anyway.
+    /// Errors stay errors so a coordinator-only download can explain why no
+    /// node was usable instead of silently falling through to a dead HTTP
+    /// origin. Standalone callers can still choose their real origin.
     pub async fn resolve_mesh(
         &self,
         game_id: &str,
         candidates: &[(String, u16)],
-    ) -> MeshResolution {
-        let Ok(request) = self.authorised(
+    ) -> AppResult<MeshResolution> {
+        let request = self.authorised(
             self.http
                 .post(self.endpoint(&format!("/mesh/resolve/{game_id}"))),
-        ) else {
-            return MeshResolution::default();
-        };
+        )?;
 
         // The client's own external address, so nodes can punch toward it. The
         // address this request arrives from is a different NAT mapping on a
@@ -481,14 +487,8 @@ impl ApiClient {
         });
         let request = request.json(&body);
 
-        match request.send().await {
-            Ok(response) if response.status().is_success() => {
-                response.json().await.unwrap_or_default()
-            }
-            // Every failure here means the same thing: use the origin. There is
-            // nothing a caller could usefully do with the distinction.
-            _ => MeshResolution::default(),
-        }
+        let response = check_status(request.send().await?).await?;
+        Ok(response.json().await?)
     }
 
     /// Offer this machine as a peer node.
@@ -564,28 +564,23 @@ impl ApiClient {
     /// Ask for a relay session, having failed to reach a node directly.
     ///
     /// Asked for only after the direct attempt failed, because relaying spends
-    /// the coordinator's bandwidth — the very thing the mesh exists to save. A
-    /// server with no relay answers plainly and this returns nothing, which is
-    /// the right outcome: there is no path, and pretending otherwise would fail
-    /// slowly instead of quickly.
-    pub async fn request_relay(&self, game_id: &str, node_id: &str) -> Option<RelaySession> {
-        let request = self
-            .authorised(
-                self.http
-                    .post(self.endpoint(&format!("/mesh/relay/{game_id}"))),
-            )
-            .ok()?;
+    /// the coordinator's bandwidth — the very thing the mesh exists to save.
+    /// Any refusal is preserved so the downloads panel can show why that route
+    /// was unavailable instead of collapsing every failure into "no source".
+    pub async fn request_relay(&self, game_id: &str, node_id: &str) -> AppResult<RelaySession> {
+        let request = self.authorised(
+            self.http
+                .post(self.endpoint(&format!("/mesh/relay/{game_id}"))),
+        )?;
 
-        let response = request
-            .json(&serde_json::json!({ "nodeId": node_id }))
-            .send()
-            .await
-            .ok()?;
-
-        if !response.status().is_success() {
-            return None;
-        }
-        response.json().await.ok()
+        let response = check_status(
+            request
+                .json(&serde_json::json!({ "nodeId": node_id }))
+                .send()
+                .await?,
+        )
+        .await?;
+        Ok(response.json().await?)
     }
 
     /// Reads a non-2xx response into its structured parts without turning it

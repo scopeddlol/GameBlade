@@ -62,11 +62,11 @@ export interface ChunkRef {
 /**
  * Where a chunk can be fetched from.
  *
- * `origin` is the server's own HTTP download routes — the path that exists
- * today and stays the permanent fallback. `node` is a mesh node reached
- * directly. `relay` is a mesh node reached through the coordinator because a
- * direct path could not be established; it works everywhere and is slow, which
- * is exactly the trade a fallback should make.
+ * `origin` is the server's own HTTP download routes, present on standalone
+ * servers and absent from coordinators that hold no files. `node` is a mesh
+ * node reached directly. `relay` is a mesh node reached through the
+ * coordinator because a direct path could not be established; it works
+ * everywhere and is slow, which is exactly the trade a fallback should make.
  */
 export const MESH_SOURCE_KINDS = ['origin', 'node', 'relay'] as const;
 export type MeshSourceKind = (typeof MESH_SOURCE_KINDS)[number];

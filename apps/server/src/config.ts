@@ -106,9 +106,8 @@ const envSchema = z.object({
   /**
    * The relay's public address, as `host:port`.
    *
-   * Unset means there is no relay, and a client that cannot reach a node
-   * directly simply cannot download from it — which is the honest answer, and
-   * better than handing out an address nothing is listening on.
+   * Optional override. Coordinators otherwise use the request hostname and
+   * the relay's default UDP port, matching docker-compose.coordinator.yml.
    */
   RELAY_ENDPOINT: z.string().optional(),
   /** One-time code from Admin → Nodes. Only needed once. */

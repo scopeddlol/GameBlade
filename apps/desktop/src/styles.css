@@ -2150,6 +2150,38 @@ textarea::placeholder {
 .download p {
   margin: 0;
 }
+.download-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 9px;
+  background: color-mix(in srgb, var(--ink-900) 72%, transparent);
+  border: 1px solid var(--ink-700);
+  border-radius: calc(var(--radius) - 3px);
+}
+.download-source {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr);
+  gap: 7px;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.download-source > div > strong {
+  font-size: 12px;
+}
+.download-source-state {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--success) 65%, transparent);
+}
+.download-source.failed .download-source-state {
+  background: var(--danger);
+  box-shadow: none;
+}
 .download-actions {
   display: flex;
   gap: 7px;

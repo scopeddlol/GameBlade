@@ -460,6 +460,29 @@ describe('mesh coordinator', () => {
     expect(node.nodeId).toBe(app.gameblade.mesh.listNodes()[0]?.id);
   });
 
+  it('refreshes liveness without clearing the catalog being verified', async () => {
+    const node = await enrol('Home archive', 'v'.repeat(44));
+    const contentHash = app.gameblade.mesh.contentHashFor(gameId);
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/mesh/heartbeat',
+      headers: nodeAuth(node),
+      payload: { endpoints: [], games: [{ gameId, contentHash }] },
+    });
+    expect(app.gameblade.mesh.nodesForGame(gameId)).toHaveLength(1);
+
+    const liveness = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/heartbeat',
+      headers: nodeAuth(node),
+      payload: { endpoints: [] },
+    });
+
+    expect(liveness.statusCode).toBe(200);
+    expect(app.gameblade.mesh.nodesForGame(gameId)).toHaveLength(1);
+  });
+
   /* --------------------------------------------------------------- content */
 
   it('accepts an announcement whose fingerprint matches the origin', async () => {
@@ -879,20 +902,20 @@ describe('mesh coordinator', () => {
     return node;
   }
 
-  it('says plainly when there is no relay, rather than offering a dead address', async () => {
-    // A client told to connect somewhere nothing is listening fails slowly and
-    // confusingly; told there is no relay, it stops.
+  it('uses the coordinator hostname and default UDP port when no relay override is set', async () => {
     await nodeHoldingGame('r'.repeat(44));
 
     const response = await app.inject({
       method: 'POST',
       url: `/api/mesh/relay/${gameId}`,
-      headers: auth(player),
+      headers: { ...auth(player), host: 'games.example.com' },
       payload: {},
     });
 
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toMatchObject({ error: { code: 'no_relay' } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      relay: { address: 'games.example.com', port: 47821 },
+    });
   });
 
   it('refuses a relay session while the mesh is switched off', async () => {
@@ -926,9 +949,7 @@ describe('mesh coordinator', () => {
       payload: {},
     });
 
-    // Either no relay configured or no node — both refuse rather than
-    // inventing a session nothing could use.
-    expect([404, 503]).toContain(response.statusCode);
+    expect(response.statusCode).toBe(404);
   });
 
   it('pairs both ends on the same session when a relay exists', async () => {

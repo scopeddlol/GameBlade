@@ -5,9 +5,10 @@
 //! what multi-source needs, so this adds one decision to it rather than a
 //! second download path: for each chunk, which source should serve it.
 //!
-//! The rule everywhere here is that a node is an optimisation. Every failure
-//! ends at the origin over HTTP — the path that worked before any of this
-//! existed — and no failure of a node is ever allowed to fail a download.
+//! On a standalone server a node is an optimisation over its HTTP origin. A
+//! coordinator has no origin, however, so its node connection is the download
+//! path rather than an optional acceleration. Keeping that distinction here is
+//! what prevents a failed node attempt from becoming a guaranteed HTTP 410.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use gameblade_mesh::{
 };
 use tokio::sync::Mutex;
 
+use super::DownloadSourceState;
 use crate::api::{ApiClient, MeshResolution};
 
 /// How long a node may take to deliver one chunk before it is written off.
@@ -44,38 +46,81 @@ pub struct MeshContext {
     pool: Mutex<SourcePool>,
 }
 
+/// The result of discovering and connecting download sources.
+pub struct MeshPreparation {
+    pub context: Option<Arc<MeshContext>>,
+    pub sources: Vec<DownloadSourceState>,
+    pub failure: Option<String>,
+}
+
+impl MeshPreparation {
+    fn unavailable(message: impl Into<String>, sources: Vec<DownloadSourceState>) -> Self {
+        Self {
+            context: None,
+            sources,
+            failure: Some(message.into()),
+        }
+    }
+}
+
 impl MeshContext {
     /// Set the mesh up for one game, or decide it is not available.
     ///
-    /// Returns `None` for every reason a download should simply proceed over
-    /// HTTP: the mesh is off, the server is older, the game has no chunk
-    /// hashes, no node holds it, or nothing would connect. None of these are
-    /// errors and none of them are worth telling anyone about.
-    pub async fn prepare(client: &ApiClient, game_id: &str, chunked: bool) -> Option<Arc<Self>> {
+    /// The preparation result preserves every attempted source for the
+    /// downloads panel. Its failure is fatal only when the manifest says there
+    /// is no HTTP origin to fall back to.
+    pub async fn prepare(
+        client: &ApiClient,
+        game_id: &str,
+        chunked: bool,
+        origin_available: bool,
+    ) -> MeshPreparation {
         // Without chunk hashes a client cannot verify a piece, so it must not
         // accept one from anywhere but the origin.
         if !chunked {
-            return None;
+            return MeshPreparation::unavailable(
+                "This game has no compatible chunk hashes, so it cannot be verified from a node.",
+                Vec::new(),
+            );
         }
 
         // Bound and address-discovered before anything else: the reflexive
         // address belongs to this socket alone, and it is what the coordinator
         // needs in order to tell a node where to punch.
-        let endpoint = MeshEndpoint::client_with_discovery(
+        let endpoint = match MeshEndpoint::client_with_discovery(
             NodeIdentity::generate(),
             gameblade_mesh::diagnostics::DEFAULT_STUN_SERVERS,
-        )
-        .ok()?;
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(err) => {
+                return MeshPreparation::unavailable(
+                    format!("Could not open a node connection: {err}"),
+                    Vec::new(),
+                )
+            }
+        };
 
         let candidates: Vec<(String, u16)> = endpoint
             .reflexive_addr()
             .map(|address| vec![(address.ip().to_string(), address.port())])
             .unwrap_or_default();
 
-        let resolution = client.resolve_mesh(game_id, &candidates).await;
+        let resolution = match client.resolve_mesh(game_id, &candidates).await {
+            Ok(resolution) => resolution,
+            Err(err) => {
+                endpoint.close();
+                return MeshPreparation::unavailable(
+                    format!("The coordinator could not resolve a download node: {err}"),
+                    Vec::new(),
+                );
+            }
+        };
         if resolution.nodes.is_empty() {
             endpoint.close();
-            return None;
+            return MeshPreparation::unavailable(
+                "The coordinator reported no active node holding this game.",
+                Vec::new(),
+            );
         }
 
         let coordinator = resolution
@@ -87,13 +132,19 @@ impl MeshContext {
         // accept either, so there is no point starting.
         if coordinator.is_none() {
             endpoint.close();
-            return None;
+            return MeshPreparation::unavailable(
+                "The coordinator published an unusable signing key for node access.",
+                Vec::new(),
+            );
         }
 
         let nodes = candidates_from(&resolution);
         if nodes.is_empty() {
             endpoint.close();
-            return None;
+            return MeshPreparation::unavailable(
+                "The coordinator offered nodes, but none had a usable address and access grant.",
+                Vec::new(),
+            );
         }
 
         // A beat for the nodes to act on the punch the coordinator just queued.
@@ -102,8 +153,13 @@ impl MeshContext {
         // has opened its NAT.
         tokio::time::sleep(PUNCH_LEAD).await;
 
-        let mut pool = SourcePool::new("Origin");
+        let mut pool = if origin_available {
+            SourcePool::new("Coordinator")
+        } else {
+            SourcePool::nodes_only()
+        };
         let mut sessions = Vec::new();
+        let mut sources = Vec::new();
 
         // Connected up front rather than lazily. A handshake costs a round trip
         // and the first chunk should not pay for it, and how long the handshake
@@ -112,9 +168,32 @@ impl MeshContext {
             match connect_to_node(&endpoint, candidate).await {
                 Ok(session) => {
                     pool.add_node(&candidate.node_id, &candidate.label, position);
+                    sources.push(source_state(
+                        &resolution,
+                        candidate,
+                        "direct",
+                        "connected",
+                        Some(session.address.to_string()),
+                        Some(format!("Connected in {} ms", session.handshake_ms)),
+                    ));
                     sessions.push(Arc::new(session));
                 }
                 Err(err) => {
+                    sources.push(source_state(
+                        &resolution,
+                        candidate,
+                        "direct",
+                        "failed",
+                        Some(
+                            candidate
+                                .addresses
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ),
+                        Some(err.to_string()),
+                    ));
                     tracing_log(&format!(
                         "mesh: {} unreachable ({err}); continuing without it",
                         candidate.label
@@ -129,21 +208,56 @@ impl MeshContext {
         // between a slow download and no download at all.
         if sessions.is_empty() {
             for (position, candidate) in nodes.iter().enumerate() {
-                let Some(session) = client.request_relay(game_id, &candidate.node_id).await else {
-                    continue;
+                let session = match client.request_relay(game_id, &candidate.node_id).await {
+                    Ok(session) => session,
+                    Err(err) => {
+                        sources.push(source_state(
+                            &resolution,
+                            candidate,
+                            "relay",
+                            "failed",
+                            None,
+                            Some(err.to_string()),
+                        ));
+                        continue;
+                    }
                 };
                 let Some(address) = socket_address(&session.relay.address, session.relay.port)
                 else {
+                    sources.push(source_state(
+                        &resolution,
+                        candidate,
+                        "relay",
+                        "failed",
+                        Some(format!("{}:{}", session.relay.address, session.relay.port)),
+                        Some("The relay returned an unusable address.".to_string()),
+                    ));
                     continue;
                 };
 
                 match connect_through_relay(&endpoint, address, &session.ticket, candidate).await {
                     Ok(live) => {
                         pool.add_node(&candidate.node_id, &candidate.label, position);
+                        sources.push(source_state(
+                            &resolution,
+                            candidate,
+                            "relay",
+                            "connected",
+                            Some(address.to_string()),
+                            Some(format!("Connected in {} ms", live.handshake_ms)),
+                        ));
                         sessions.push(Arc::new(live));
                         break;
                     }
                     Err(err) => {
+                        sources.push(source_state(
+                            &resolution,
+                            candidate,
+                            "relay",
+                            "failed",
+                            Some(address.to_string()),
+                            Some(err.to_string()),
+                        ));
                         tracing_log(&format!(
                             "mesh: relay to {} failed ({err})",
                             candidate.label
@@ -155,18 +269,25 @@ impl MeshContext {
 
         if sessions.is_empty() {
             endpoint.close();
-            return None;
+            return MeshPreparation::unavailable(
+                "No copy of this game could be reached. Direct node and relay connections both failed; check UDP 47820 on the node and UDP 47821 on the coordinator.",
+                sources,
+            );
         }
 
-        Some(Arc::new(Self {
-            endpoint,
-            sessions: Mutex::new(sessions),
-            pool: Mutex::new(pool),
-        }))
+        MeshPreparation {
+            context: Some(Arc::new(Self {
+                endpoint,
+                sessions: Mutex::new(sessions),
+                pool: Mutex::new(pool),
+            })),
+            sources,
+            failure: None,
+        }
     }
 
     /// Which source should serve the next chunk.
-    pub async fn pick(&self) -> String {
+    pub async fn pick(&self) -> Option<String> {
         self.pool.lock().await.pick()
     }
 
@@ -250,7 +371,7 @@ impl MeshContext {
             .collect();
 
         if live.is_empty() {
-            "Origin".to_string()
+            "no node".to_string()
         } else {
             live.join(", ")
         }
@@ -261,6 +382,37 @@ impl MeshContext {
             session.close();
         }
         self.endpoint.close();
+    }
+}
+
+fn source_state(
+    resolution: &MeshResolution,
+    candidate: &NodeCandidate,
+    route: &str,
+    status: &str,
+    endpoint: Option<String>,
+    detail: Option<String>,
+) -> DownloadSourceState {
+    let role = resolution
+        .nodes
+        .iter()
+        .find(|node| node.id == candidate.node_id)
+        .map(|node| node.role.as_str())
+        .unwrap_or("mirror");
+    let source_type = match role {
+        "origin" => "origin_node",
+        "peer" => "peer_client",
+        _ => "mirror_node",
+    };
+
+    DownloadSourceState {
+        node_id: Some(candidate.node_id.clone()),
+        label: candidate.label.clone(),
+        source_type: source_type.to_string(),
+        route: route.to_string(),
+        endpoint,
+        status: status.to_string(),
+        detail,
     }
 }
 
@@ -461,9 +613,8 @@ mod tests {
         // one from anywhere but the origin.
         let client = ApiClient::new("http://localhost:9", None).unwrap();
 
-        assert!(MeshContext::prepare(&client, "gam_1", false)
-            .await
-            .is_none());
+        let prepared = MeshContext::prepare(&client, "gam_1", false, true).await;
+        assert!(prepared.context.is_none());
     }
 
     #[tokio::test]
@@ -472,6 +623,8 @@ mod tests {
         // not as a failed download.
         let client = ApiClient::new("http://localhost:9", None).unwrap();
 
-        assert!(MeshContext::prepare(&client, "gam_1", true).await.is_none());
+        let prepared = MeshContext::prepare(&client, "gam_1", true, true).await;
+        assert!(prepared.context.is_none());
+        assert!(prepared.failure.is_some());
     }
 }

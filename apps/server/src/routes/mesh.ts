@@ -1,5 +1,6 @@
 import {
   MESH_HEARTBEAT_INTERVAL_SECONDS,
+  MESH_RELAY_DEFAULT_PORT,
   MESH_RENDEZVOUS_POLL_SECONDS,
   meshResolveSchema,
   meshEnrolmentSchema,
@@ -54,6 +55,29 @@ function observedAddress(request: FastifyRequest): string | undefined {
   // Only literals. A hostname would mean resolving names on a node's say-so,
   // and a bracketed IPv6 form would be stored in a shape the agent cannot use.
   return /^[0-9a-fA-F:.]+$/.test(candidate) ? candidate : undefined;
+}
+
+/**
+ * The relay shipped beside a coordinator listens on the same public host by
+ * default. RELAY_ENDPOINT remains an override for split-DNS and dedicated
+ * relay deployments; it is no longer mandatory for the ordinary compose
+ * topology.
+ */
+function relayForRequest(
+  request: FastifyRequest,
+  configured: { address: string; port: number } | null,
+): { address: string; port: number } {
+  if (configured) return configured;
+
+  // Fastify removes the port from `hostname`. Strip IPv6 URL brackets as the
+  // wire shape carries the address and port separately.
+  const hostname = request.hostname.replace(/^\[|\]$/g, '');
+  return { address: hostname, port: MESH_RELAY_DEFAULT_PORT };
+}
+
+function relayLabel(configured: { address: string; port: number } | null, coordinator: boolean) {
+  if (configured) return `${configured.address}:${configured.port}`;
+  return coordinator ? `automatic coordinator host:${MESH_RELAY_DEFAULT_PORT}` : null;
 }
 
 export async function meshRoutes(app: FastifyInstance): Promise<void> {
@@ -494,13 +518,7 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
 
     if (!settings.get().meshEnabled) throw ApiError.forbidden('The mesh is switched off');
 
-    const relay = config.relayEndpoint;
-    if (!relay) {
-      // Not an error worth dressing up: there is no relay, so there is nothing
-      // to offer, and a client told otherwise would fail at an address nothing
-      // is listening on.
-      throw new ApiError(503, 'no_relay', 'This server has no relay configured.');
-    }
+    const relay = relayForRequest(request, config.relayEndpoint);
 
     const node = mesh
       .nodesForGame(gameId, { excludeOwnerId: context.user.id })
@@ -586,9 +604,7 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
     const { days } = request.query as { days?: string };
     return mesh.analytics({
       days: Number(days) || 14,
-      relay: config.relayEndpoint
-        ? `${config.relayEndpoint.address}:${config.relayEndpoint.port}`
-        : null,
+      relay: relayLabel(config.relayEndpoint, !config.servesLocalFiles),
     });
   });
 
@@ -603,9 +619,7 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
     requireAdmin(request);
     return mesh.tunnelMap({
       label: settings.get().serverName,
-      relay: config.relayEndpoint
-        ? `${config.relayEndpoint.address}:${config.relayEndpoint.port}`
-        : null,
+      relay: relayLabel(config.relayEndpoint, !config.servesLocalFiles),
     });
   });
 

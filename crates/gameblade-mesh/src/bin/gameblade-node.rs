@@ -375,6 +375,74 @@ fn credential_rejected(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN
 }
 
+fn advertised_endpoints(endpoint: &MeshEndpoint) -> Vec<serde_json::Value> {
+    let mut endpoints = Vec::new();
+    if let Ok(local) = endpoint.local_addr() {
+        endpoints.push(serde_json::json!({
+            "kind": "local",
+            "address": local.ip().to_string(),
+            "port": local.port(),
+        }));
+    }
+    if let Some(reflexive) = endpoint.reflexive_addr() {
+        endpoints.push(serde_json::json!({
+            "kind": "observed",
+            "address": reflexive.ip().to_string(),
+            "port": reflexive.port(),
+        }));
+    }
+    endpoints
+}
+
+/// Mark the node alive, optionally replacing its advertised holdings.
+///
+/// A liveness-only heartbeat deliberately omits `games`: the coordinator then
+/// preserves the last accepted catalog while a large library is being checked.
+#[allow(clippy::too_many_arguments)]
+async fn send_heartbeat(
+    http: &reqwest::Client,
+    server_url: &str,
+    identity: &gameblade_mesh::NodeIdentity,
+    node_id: &str,
+    node_token: &Arc<RwLock<String>>,
+    endpoint: &MeshEndpoint,
+    state_path: &std::path::Path,
+    games: Option<Vec<serde_json::Value>>,
+) {
+    let mut body = serde_json::json!({ "endpoints": advertised_endpoints(endpoint) });
+    if let Some(games) = games {
+        body["games"] = serde_json::Value::Array(games);
+    }
+
+    let token = node_token.read().await.clone();
+    let sent = http
+        .post(format!("{server_url}/api/mesh/heartbeat"))
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-gameblade-node", node_id)
+        .json(&body)
+        .send()
+        .await;
+
+    match sent {
+        Ok(response) if response.status().is_success() => {}
+        Ok(response) if credential_rejected(response.status()) => {
+            eprintln!(
+                "the coordinator rejected this node's credential ({}); registering again",
+                response.status()
+            );
+            match reregister(http, server_url, identity, endpoint, state_path).await {
+                Ok(fresh) => {
+                    *node_token.write().await = fresh;
+                    println!("re-registered; the node is listed again");
+                }
+                Err(err) => eprintln!("could not register again: {err}"),
+            }
+        }
+        Ok(response) => eprintln!("heartbeat refused: {}", response.status()),
+        Err(err) => eprintln!("heartbeat did not reach the coordinator: {err}"),
+    }
+}
+
 async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, state_path: PathBuf) {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(40))
@@ -493,6 +561,22 @@ async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, stat
     loop {
         interval.tick().await;
 
+        // The first tick is immediate, so an already-enrolled node becomes
+        // Active as soon as its process starts. Do this before the catalog
+        // refresh: validating a large archive can take minutes and liveness
+        // must not wait behind disk work.
+        send_heartbeat(
+            &http,
+            &server_url,
+            &identity,
+            &node_id,
+            &node_token,
+            &endpoint,
+            &state_path,
+            None,
+        )
+        .await;
+
         // Refresh what this machine actually holds, then announce it. Done on
         // the heartbeat rather than once at startup so a library that gains a
         // game becomes servable without restarting anything.
@@ -516,69 +600,23 @@ async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, stat
             })
             .collect();
 
-        let mut endpoints = Vec::new();
-        if let Ok(local) = endpoint.local_addr() {
-            endpoints.push(serde_json::json!({
-                "kind": "local",
-                "address": local.ip().to_string(),
-                "port": local.port(),
-            }));
-        }
-        if let Some(reflexive) = endpoint.reflexive_addr() {
-            endpoints.push(serde_json::json!({
-                "kind": "observed",
-                "address": reflexive.ip().to_string(),
-                "port": reflexive.port(),
-            }));
-        }
-
-        let token = node_token.read().await.clone();
-        let sent = http
-            .post(format!("{server_url}/api/mesh/heartbeat"))
-            .header("authorization", format!("Bearer {token}"))
-            .header("x-gameblade-node", &node_id)
-            .json(&serde_json::json!({ "endpoints": &endpoints, "games": games }))
-            .send()
-            .await;
-
-        match sent {
-            Ok(response) if response.status().is_success() => {}
-
-            // The credential is no longer good, and this is recoverable
-            // without anybody being woken up.
-            //
-            // A node that is deleted and re-enrolled, a token rotated by a
-            // registration elsewhere, an operator who blocked it and changed
-            // their mind: all of these used to be permanent. The heartbeat
-            // logged "refused" every thirty seconds for ever, the coordinator
-            // marked the node stale, and it stopped being handed to clients —
-            // while the process sat there healthy, serving nothing, until
-            // somebody noticed and restarted it. Registering again with the
-            // key that has always been this node's identity is exactly what a
-            // restart would have done, minus the restart.
-            Ok(response) if credential_rejected(response.status()) => {
-                eprintln!(
-                    "the coordinator rejected this node's credential ({}); registering again",
-                    response.status()
-                );
-                match reregister(&http, &server_url, &identity, &endpoint, &state_path).await {
-                    Ok(fresh) => {
-                        *node_token.write().await = fresh;
-                        println!("re-registered; the node is listed again");
-                    }
-                    Err(err) => eprintln!("could not register again: {err}"),
-                }
-                continue;
-            }
-
-            Ok(response) => eprintln!("heartbeat refused: {}", response.status()),
-            Err(err) => eprintln!("heartbeat did not reach the coordinator: {err}"),
-        }
+        send_heartbeat(
+            &http,
+            &server_url,
+            &identity,
+            &node_id,
+            &node_token,
+            &endpoint,
+            &state_path,
+            Some(games),
+        )
+        .await;
 
         // Report what was served, so transfer allowances still mean something
         // when the bytes never crossed the server. A rejection here needs no
         // handling of its own: the next heartbeat is thirty seconds away and
         // deals with it, and the ledger keeps the report until it lands.
+        let token = node_token.read().await.clone();
         let pending = server.ledger().lock().await.pending_reports();
         for (nonce, bytes) in pending {
             let _ = http

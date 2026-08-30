@@ -17,7 +17,10 @@
 //!   rather than a corrupt hybrid stitched from two versions.
 
 use super::mesh::MeshContext;
-use super::{part_path_for, sanitise_relative_path, urlencode, DownloadState, DownloadStatus};
+use super::{
+    part_path_for, sanitise_relative_path, urlencode, DownloadSourceState, DownloadState,
+    DownloadStatus,
+};
 use crate::api::{ApiClient, ChunkRef, DownloadManifest, ManifestFile};
 use crate::error::{AppError, AppResult};
 use chrono::Utc;
@@ -340,15 +343,36 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
     // Set up once per game, not per file: the handshakes are worth paying for
     // once and pointless to repeat for every one of a folder game's files.
     //
-    // `None` covers every reason not to use nodes — mesh off, older server, no
-    // chunk hashes, nobody holding this game, nothing reachable — and none of
-    // them are errors. The download proceeds over HTTP exactly as before.
-    let mesh = MeshContext::prepare(
+    let prepared = MeshContext::prepare(
         &job.client,
         &job.game_id,
         manifest.chunk_bytes == Some(CHUNK_BYTES),
+        manifest.origin_available,
     )
     .await;
+    let mut sources = prepared.sources;
+    if manifest.origin_available {
+        sources.push(DownloadSourceState {
+            node_id: None,
+            label: "Coordinator".to_string(),
+            source_type: "coordinator".to_string(),
+            route: "https".to_string(),
+            endpoint: Some(job.client.endpoint("/")),
+            status: "available".to_string(),
+            detail: Some("HTTP fallback".to_string()),
+        });
+    }
+    {
+        let mut guard = job.state.lock().await;
+        guard.sources = sources;
+    }
+
+    let mesh = prepared.context;
+    if mesh.is_none() && !manifest.origin_available {
+        return Outcome::Fatal(AppError::Other(prepared.failure.unwrap_or_else(|| {
+            "No downloadable copy of this game is currently reachable.".to_string()
+        })));
+    }
 
     // Drive the progress event from one place so the UI gets a steady rate
     // reading rather than a spike per chunk.
@@ -417,6 +441,7 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
             job.connections,
             job.verify,
             manifest.chunk_bytes,
+            manifest.origin_available,
         )
         .await
         {
@@ -518,6 +543,7 @@ async fn download_file(
     connections: usize,
     verify: bool,
     chunk_bytes: Option<u64>,
+    origin_available: bool,
 ) -> FileOutcome {
     let relative = match sanitise_relative_path(&file.path) {
         Ok(relative) => relative,
@@ -595,6 +621,7 @@ async fn download_file(
             connections,
             chunk_hashes.as_deref(),
             mesh,
+            origin_available,
         )
         .await;
 
@@ -683,6 +710,7 @@ async fn fetch_all_chunks(
     connections: usize,
     chunk_hashes: Option<&[ChunkRef]>,
     mesh: Option<&Arc<MeshContext>>,
+    origin_available: bool,
 ) -> Result<(), Stop> {
     if file.size_bytes == 0 {
         return Ok(());
@@ -767,6 +795,7 @@ async fn fetch_all_chunks(
                         context: chunk_mesh,
                         game_id: game_id.to_string(),
                         file_id: file.id.clone(),
+                        origin_available,
                     },
                     permit,
                 )));
@@ -819,14 +848,14 @@ pub(crate) struct ChunkMesh {
     pub context: Option<Arc<MeshContext>>,
     pub game_id: String,
     pub file_id: String,
+    pub origin_available: bool,
 }
 
 impl ChunkMesh {
     /// Verified bytes from whichever node the pool picked, or nothing.
     ///
-    /// Nothing means "use HTTP for this chunk" and never means "give up". The
-    /// pool has already recorded why, and the origin cannot be retired, so a
-    /// caller that keeps falling through here still finishes the download.
+    /// Nothing means this node attempt did not deliver bytes. The caller uses
+    /// HTTP only when the manifest explicitly says an origin exists.
     async fn fetch(&self, index: u64, sha256: Option<&str>, length: u64) -> Option<Vec<u8>> {
         let context = self.context.as_ref()?;
         let sha256 = sha256?;
@@ -838,7 +867,7 @@ impl ChunkMesh {
             return None;
         }
 
-        let source = context.pick().await;
+        let source = context.pick().await?;
         if source == "origin" {
             return None;
         }
@@ -846,6 +875,13 @@ impl ChunkMesh {
         context
             .fetch_chunk(&source, &self.game_id, &self.file_id, index, sha256, length)
             .await
+    }
+
+    async fn has_live_node(&self) -> bool {
+        match &self.context {
+            Some(context) => context.has_live_node().await,
+            None => false,
+        }
     }
 }
 
@@ -942,6 +978,21 @@ async fn download_chunk(
                 // came from; the HTTP path would fail the same way.
                 Err(err) => return Err(Stop::Fatal(err)),
             }
+        }
+
+        // A coordinator has no HTTP bytes to try next. Retry another live node
+        // (or the same one while its transient-failure allowance remains), and
+        // fail with the actual topology problem once every node is retired.
+        if !mesh.origin_available {
+            if mesh.has_live_node().await {
+                attempt += 1;
+                tokio::time::sleep(backoff_delay(attempt)).await;
+                continue;
+            }
+            return Err(Stop::Fatal(AppError::Other(
+                "The connected nodes stopped responding and this coordinator has no local file fallback. Check the node and relay connection, then resume the download."
+                    .to_string(),
+            )));
         }
 
         // Fresh token, refreshed proactively near expiry so it never lapses

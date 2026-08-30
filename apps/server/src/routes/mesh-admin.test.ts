@@ -165,7 +165,8 @@ describe('the coordinator’s view of its fleet', () => {
     // a division by nothing on a fresh server used to render as "NaN%".
     expect(report.bytes.meshShare).toBe(0);
     expect(report.history).toHaveLength(7);
-    expect(report.relay.configured).toBe(false);
+    expect(report.relay.configured).toBe(true);
+    expect(report.relay.address).toBe('automatic coordinator host:47821');
   });
 
   it('draws a tunnel from the moment permission is issued', async () => {

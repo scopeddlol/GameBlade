@@ -389,11 +389,7 @@ describe('the split-role topology', () => {
     );
   });
 
-  it('says on the health page when a coordinator has no relay address', async () => {
-    // Not a reason to refuse to start — most connections punch, and for those
-    // players this changes nothing. But the ones it does affect cannot
-    // download at all, and it reads to them as a broken archive rather than as
-    // their own network, so it is said somewhere an operator looks.
+  it('uses the automatic same-host relay without reporting a missing configuration', async () => {
     const { app } = await boot({ ROLE: 'coordinator' });
     const admin = await signIn(app);
 
@@ -403,10 +399,7 @@ describe('the split-role topology', () => {
       headers: auth(admin),
     });
     const findings = (report.json() as { findings: { id: string; severity: string }[] }).findings;
-    const relay = findings.find((finding) => finding.id === 'no-relay-endpoint');
-
-    expect(relay).toBeDefined();
-    expect(relay?.severity).toBe('warning');
+    expect(findings.map((finding) => finding.id)).not.toContain('no-relay-endpoint');
   });
 
   it('says nothing about a relay once one is configured', async () => {
@@ -654,14 +647,17 @@ describe('the split-role topology', () => {
     const manifestBody = manifest.json() as {
       gameId: string;
       chunkBytes: number;
+      originAvailable: boolean;
       files: Array<{ path: string; chunks: Array<{ index: number; sizeBytes: number }> }>;
       sources: Array<{ kind: string; nodeId?: string }>;
     };
     expect(manifestBody).toMatchObject({
       gameId: target.id,
       chunkBytes: MESH_CHUNK_BYTES,
+      originAvailable: false,
       files: [{ path: 'game.bin', chunks: [{ index: 0, sizeBytes: 16 }] }],
     });
+    expect(manifestBody.sources).not.toContainEqual(expect.objectContaining({ kind: 'origin' }));
     expect(manifestBody.sources).toContainEqual(
       expect.objectContaining({ kind: 'node', nodeId: node.nodeId }),
     );

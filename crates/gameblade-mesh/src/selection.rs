@@ -6,10 +6,10 @@
 //! only what to try first, and everything after that comes from measurement.
 //!
 //! The rule is simple and deliberately not clever: prefer the source with the
-//! best recently-observed throughput, drop a source that keeps failing, and
-//! always keep the origin as the one that cannot be dropped. Elaborate
-//! schedulers lose to that more often than they beat it, because the thing that
-//! actually matters is noticing quickly when a source goes bad.
+//! best recently-observed throughput and drop a source that keeps failing. A
+//! standalone pool keeps its origin; a coordinator pool contains nodes only.
+//! Elaborate schedulers lose to that more often than they beat it, because the
+//! thing that actually matters is noticing quickly when a source goes bad.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -93,6 +93,19 @@ impl SourcePool {
         }
     }
 
+    /// Build a pool whose only possible sources are nodes.
+    ///
+    /// Coordinators hold no game files, so inventing an origin for them turns
+    /// a node outage into a request to a route that is guaranteed to return
+    /// 410. The empty pool honestly has no answer until a node is added.
+    pub fn nodes_only() -> Self {
+        Self {
+            sources: Vec::new(),
+            cursor: 0,
+            order: HashMap::new(),
+        }
+    }
+
     /// Add a node, in the coordinator's preference order.
     pub fn add_node(&mut self, id: &str, label: &str, priority: usize) {
         self.order.insert(id.to_string(), priority);
@@ -117,17 +130,16 @@ impl SourcePool {
 
     /// The source that should serve the next chunk.
     ///
-    /// Never returns `None`: the origin cannot be retired, so there is always an
-    /// answer. That is what makes the mesh an optimisation rather than a
-    /// dependency — every failure path here ends at the download that already
-    /// worked before any of this existed.
-    pub fn pick(&mut self) -> String {
+    /// Returns `None` when no source is usable. Standalone deployments always
+    /// have their origin; coordinator deployments are intentionally allowed to
+    /// have no answer once their last node is gone.
+    pub fn pick(&mut self) -> Option<String> {
         let usable: Vec<usize> = (0..self.sources.len())
             .filter(|index| self.is_usable(&self.sources[*index]))
             .collect();
 
         if usable.is_empty() {
-            return "origin".to_string();
+            return None;
         }
 
         // An unmeasured source is tried once before anything is concluded about
@@ -138,7 +150,7 @@ impl SourcePool {
             .copied()
             .find(|index| self.sources[*index].health == SourceHealth::Untried)
         {
-            return self.sources[index].id.clone();
+            return Some(self.sources[index].id.clone());
         }
 
         let best = usable
@@ -163,7 +175,7 @@ impl SourcePool {
 
         self.cursor = self.cursor.wrapping_add(1);
         let chosen = contenders[self.cursor % contenders.len()];
-        self.sources[chosen].id.clone()
+        Some(self.sources[chosen].id.clone())
     }
 
     /// Record a chunk that arrived, and how long it took.
@@ -263,7 +275,7 @@ mod tests {
         pool.record_failure("origin");
         pool.record_failure("origin");
 
-        assert_eq!(pool.pick(), "origin");
+        assert_eq!(pool.pick().as_deref(), Some("origin"));
     }
 
     #[test]
@@ -274,7 +286,7 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
 
         for _ in 0..3 {
-            let id = pool.pick();
+            let id = pool.pick().unwrap();
             seen.insert(id.clone());
             pool.record_success(&id, 1_000_000, Duration::from_millis(100));
         }
@@ -291,7 +303,7 @@ mod tests {
         pool.record_success("nod_2", 1_000_000, Duration::from_secs(1));
         pool.record_success("origin", 500_000, Duration::from_secs(1));
 
-        let picks: Vec<String> = (0..10).map(|_| pool.pick()).collect();
+        let picks: Vec<String> = (0..10).filter_map(|_| pool.pick()).collect();
         assert!(picks.iter().filter(|id| *id == "nod_1").count() >= 8);
     }
 
@@ -305,7 +317,8 @@ mod tests {
             pool.record_success("origin", 10_000_000, Duration::from_secs(1));
         }
 
-        let picks: std::collections::HashSet<String> = (0..12).map(|_| pool.pick()).collect();
+        let picks: std::collections::HashSet<String> =
+            (0..12).filter_map(|_| pool.pick()).collect();
         assert!(picks.len() >= 2);
     }
 
@@ -364,7 +377,18 @@ mod tests {
         pool.retire("nod_2");
 
         assert!(!pool.has_live_node());
-        assert_eq!(pool.pick(), "origin");
+        assert_eq!(pool.pick().as_deref(), Some("origin"));
+    }
+
+    #[test]
+    fn a_node_only_pool_never_invents_an_origin() {
+        let mut pool = SourcePool::nodes_only();
+        assert_eq!(pool.pick(), None);
+
+        pool.add_node("nod_1", "Home archive", 0);
+        assert_eq!(pool.pick().as_deref(), Some("nod_1"));
+        pool.retire("nod_1");
+        assert_eq!(pool.pick(), None);
     }
 
     #[test]

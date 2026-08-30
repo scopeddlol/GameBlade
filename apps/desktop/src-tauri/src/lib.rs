@@ -166,7 +166,7 @@ impl AppState {
         // is the only endpoint that publishes it.
         // No candidates: this is only fetching the coordinator's public key,
         // not setting up a transfer, so there is nobody to be punched toward.
-        let resolution = client.resolve_mesh("unknown", &[]).await;
+        let resolution = client.resolve_mesh("unknown", &[]).await.ok()?;
         resolution
             .coordinator_public_key
             .as_deref()

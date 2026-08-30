@@ -722,9 +722,9 @@
               </li>
               <li>
                 <strong>The relay is part of the coordinator's compose file</strong> and fetches
-                its own key, so there is nothing to look up and paste. Leaving
-                <code>RELAY_ENDPOINT</code> unset is now a warning at boot and a finding on the
-                health page rather than something a player finds out for you. See
+                its own key, so there is nothing to look up and paste. Clients use the
+                coordinator's public hostname and UDP port 47821 automatically; set
+                <code>RELAY_ENDPOINT</code> only when the relay is elsewhere. See
                 <a href="#relay">the relay</a>.
               </li>
             </ul>
@@ -1023,7 +1023,7 @@ cp .env.example .env</code></pre>
                 <tr><td><code>ROLE</code></td><td>from the image</td><td>Each image sets its own, so there is normally nothing to put here. Setting it overrides: <code>standalone</code>, <code>coordinator</code> or <code>node</code>. See <a href="#roles">the roles</a>.</td></tr>
                 <tr><td><code>COORDINATOR_URL</code></td><td>—</td><td>Where a node reports. Optional: leave it out and the node's <a href="#deploy-nodes">setup page</a> asks instead, remembering the answer. Set, it wins. No trailing slash needed — one is stripped.</td></tr>
                 <tr><td><code>ENROLMENT_TOKEN</code></td><td>—</td><td>The one-time code from <strong>Admin → Nodes</strong>. Optional for the same reason. Spent on first registration and not kept.</td></tr>
-                <tr><td><code>RELAY_ENDPOINT</code></td><td>—</td><td>The relay's public address as <code>host:port</code>, handed to clients by a coordinator. Set on the <em>coordinator</em>, not on the relay. A value with no port is refused rather than half-accepted.</td></tr>
+                <tr><td><code>RELAY_ENDPOINT</code></td><td>coordinator hostname:47821</td><td>Optional relay public-address override as <code>host:port</code>. Set it on the <em>coordinator</em>, not on the relay, only when the relay uses another public name or port. A value with no port is refused rather than half-accepted.</td></tr>
 
                 <tr><td colspan="3"><strong>Storage and listening</strong></td></tr>
                 <tr><td><code>LIBRARY_PATHS</code></td><td>the mounts, on a node</td><td>Comma- or semicolon-separated library roots <strong>inside the container</strong>. Registered automatically on first start. A node left without it reads its own mounts instead: <code>/library</code>, plus one root per directory under <code>/libraries</code> — so two drives is two volumes and no variable. Setting it names the roots exactly and nothing is discovered underneath it. See <a href="#deploy-libraries-several">a node with several drives</a>.</td></tr>
@@ -1503,10 +1503,10 @@ cp .env.example .env</code></pre>
           </div>
 
           <p>
-            Leaving <code>RELAY_ENDPOINT</code> unset means there is no relay, and a client that
-            cannot reach a node directly cannot download from it. Run <code>mesh-doctor</code> on
-            the node first: if it reports the connection punchable, most clients will reach it
-            without the relay ever being asked.
+            Leaving <code>RELAY_ENDPOINT</code> unset uses the coordinator request hostname and
+            UDP port 47821, matching the bundled compose file. Run <code>mesh-doctor</code> on the
+            node first: if it reports the connection punchable, most clients will reach it without
+            the relay ever being asked.
           </p>
 
           <h4 id="relay-running">Running one</h4>
@@ -1529,19 +1529,12 @@ cp .env.example .env</code></pre>
     ports:
       - '47821:47821/udp'</code></pre>
           <p>
-            The one thing you have to supply is on the coordinator, not here:
-            <code>RELAY_ENDPOINT</code> is what clients are told to dial, so it is your
-            <em>public</em> hostname and the relay's port &mdash; not <code>localhost</code>, not
-            the container name, and not the internal port if the published one differs.
+            Ordinarily there is nothing else to set: the coordinator tells clients to use the
+            hostname they already reached and UDP port 47821. If the relay has another public
+            address, set <code>RELAY_ENDPOINT</code> on the coordinator &mdash; not on the relay &mdash;
+            to that <code>host:port</code>.
           </p>
           <pre><code>RELAY_ENDPOINT=games.example.com:47821</code></pre>
-          <p>
-            Left empty, the coordinator still starts and the relay still runs &mdash; but no client
-            is ever told it exists, so it sits there doing nothing while the players who need it
-            cannot download. That is said at boot in the log and again on
-            <strong>Admin → Insights → Health</strong>, rather than being left to a player to
-            discover.
-          </p>
           <p>
             Then open <code>47821/udp</code> on the host firewall. The reverse proxy is not
             involved &mdash; this is UDP and it is not HTTP, so Caddy has nothing to do with it.
@@ -2213,11 +2206,9 @@ services:
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: '&lt;something long, used once&gt;'
 
-      # What clients are told to dial for the relay below: your public
-      # hostname and its port. The one line here you have to fill in — left
-      # empty the coordinator still starts and says so on the health page,
-      # and the relay runs with nobody being sent to it.
-      RELAY_ENDPOINT: games.example.com:47821
+      # Optional: omit this for the automatic coordinator hostname:47821.
+      # Set it only when the relay has a different public name or port.
+      # RELAY_ENDPOINT: relay.example.com:47821
     volumes:
       - ./data:/data
     ports:
@@ -4163,9 +4154,8 @@ services:
             does not: disks running out, games that have gone from disk, entries with no launch or
             save rule, games tracking achievements they cannot sync, files whose contents no longer
             match their recorded checksum, accounts that have hit their limit, unanswered bug reports,
-            when the library was last scanned, and &mdash; on a coordinator &mdash; whether
-            <a href="#relay">a relay address</a> is set, since without one some players cannot
-            download at all. Every finding links to where it is fixed. It is all
+            when the library was last scanned, and node coverage. Every finding links to where it
+            is fixed. It is all
             derived from rows already being written, so there is nothing to keep in step by hand.
           </p>
 

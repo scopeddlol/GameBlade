@@ -112,6 +112,40 @@ export function DownloadQueue({
                     <p className={clsx('muted', 'small', 'truncate')}>{download.current_file}</p>
                   ) : null}
 
+                  {download.sources?.length ? (
+                    <div className="download-sources" aria-label="Download connections">
+                      {download.sources.map((source, index) => (
+                        <div
+                          className={clsx(
+                            'download-source',
+                            source.status === 'failed' && 'failed',
+                          )}
+                          key={`${source.node_id ?? 'coordinator'}-${source.route}-${index}`}
+                        >
+                          <span className="download-source-state" aria-hidden />
+                          <div>
+                            <strong>{source.label}</strong>
+                            <span className="muted small">
+                              {' '}
+                              · {sourceTypeLabel(source.source_type)} · {routeLabel(source.route)}
+                              {source.endpoint ? ` · ${source.endpoint}` : ''}
+                            </span>
+                            {source.detail ? (
+                              <p
+                                className={clsx(
+                                  'small',
+                                  source.status === 'failed' ? 'error' : 'muted',
+                                )}
+                              >
+                                {source.detail}
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
                   {download.error ? <p className="error small">{download.error}</p> : null}
 
                   <div className="download-actions">
@@ -189,6 +223,19 @@ export function DownloadQueue({
       ) : null}
     </div>
   );
+}
+
+function sourceTypeLabel(sourceType: string): string {
+  if (sourceType === 'peer_client') return 'Desktop client';
+  if (sourceType === 'origin_node') return 'Origin node';
+  if (sourceType === 'mirror_node') return 'Mirror node';
+  return 'Coordinator';
+}
+
+function routeLabel(route: string): string {
+  if (route === 'direct') return 'Direct QUIC';
+  if (route === 'relay') return 'Relay QUIC';
+  return 'HTTPS';
 }
 
 /** Whether the download is still running, which decides the dialog's wording. */

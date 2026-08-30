@@ -154,6 +154,42 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.8 - August 30, 2026
+
+### Coordinator downloads use real sources only
+
+The Desktop transfer pool always inserted the coordinator as an HTTP origin,
+even though a coordinator deliberately holds no game files. Because every
+unmeasured source is sampled, an otherwise healthy node-backed download could
+send a first-wave chunk to that synthetic path and fail with “File is no longer
+available.” Manifests now state whether an HTTP origin really exists. A
+coordinator download uses nodes only, retries other live nodes when one chunk
+fails and reports a clear connectivity error instead of ever requesting the
+dead fallback.
+
+Direct QUIC remains first choice. If it cannot establish a path, the bundled
+relay is now discovered automatically at the coordinator request hostname and
+UDP port 47821; `RELAY_ENDPOINT` remains an override for deployments where the
+relay has another public address.
+
+### Download connections are visible
+
+The Downloads drawer now lists each attempted and active source: the node or
+Desktop client label, its role, whether the route is direct QUIC, relay QUIC or
+coordinator HTTPS, the endpoint and connection result. A failed direct route
+followed by a working relay is visible rather than hidden behind a generic file
+error.
+
+### Nodes become Active before scanning
+
+An enrolled node used to verify its entire library before sending its first
+heartbeat. Large archives could therefore remain stale in Admin for several
+minutes after the process was already running. The node now sends an immediate
+liveness-only heartbeat, preserving its last accepted holdings while the disk
+scan runs, then publishes the refreshed catalog.
+
+---
+
 ## Version 0.6.7 - August 30, 2026
 
 The node had the games and the client knew they existed, but two independent

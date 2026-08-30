@@ -601,12 +601,17 @@ export class MeshService {
   /**
    * The source list for a game's manifest.
    *
-   * The origin is always first and always present. Everything else is an
-   * optimisation the client may ignore — which is exactly what an older client
-   * does, and why adding nodes needs no client release.
+   * The origin is included only when this process actually serves files.
+   * Advertising a coordinator as an origin sends clients to a download route
+   * whose backing path cannot exist.
    */
-  sourcesFor(gameId: string, options: { chunked: boolean; excludeOwnerId?: string }): MeshSource[] {
-    const sources: MeshSource[] = [{ kind: 'origin', label: 'Origin', priority: 100 }];
+  sourcesFor(
+    gameId: string,
+    options: { chunked: boolean; includeOrigin: boolean; excludeOwnerId?: string },
+  ): MeshSource[] {
+    const sources: MeshSource[] = options.includeOrigin
+      ? [{ kind: 'origin', label: 'Origin', priority: 100 }]
+      : [];
 
     // Without chunk hashes a client cannot verify a piece, so it cannot safely
     // take one from anywhere but the origin. Offering nodes anyway would be
