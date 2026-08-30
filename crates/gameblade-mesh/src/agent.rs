@@ -77,6 +77,10 @@ pub struct AgentState {
     /// leaves nothing behind on disk afterwards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enrolment_token: Option<String>,
+
+    /// Last reason registration failed, for the node's local status page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration_error: Option<String>,
 }
 
 /// One file of one game, as the coordinator describes it.

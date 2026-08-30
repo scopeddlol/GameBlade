@@ -234,12 +234,40 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
 export const NODE_PAGE_SCRIPT = `(function () {
   var base = document.documentElement.getAttribute('data-base') || '';
   var refreshIn = Number(document.documentElement.getAttribute('data-refresh')) || 15000;
+  var form = document.getElementById('setup');
+  var initialSetup = form ? {
+    coordinatorUrl: form.elements.coordinatorUrl.value,
+    enrolmentToken: form.elements.enrolmentToken.value
+  } : null;
+  var timer;
+
+  function setupInProgress() {
+    if (!form || !initialSetup) return false;
+
+    // A status refresh must never steal focus or throw away an enrolment code.
+    // Compare with what the server rendered so a saved coordinator URL does
+    // not pause refreshes by itself while the node is still registering.
+    return form.contains(document.activeElement) ||
+      form.elements.coordinatorUrl.value !== initialSetup.coordinatorUrl ||
+      form.elements.enrolmentToken.value !== initialSetup.enrolmentToken;
+  }
+
+  function scheduleRefresh(delay) {
+    clearTimeout(timer);
+    timer = setTimeout(function refreshWhenIdle() {
+      if (setupInProgress()) {
+        timer = setTimeout(refreshWhenIdle, 1000);
+        return;
+      }
+      location.reload();
+    }, delay);
+  }
 
   // The page is a status readout, so it goes stale the moment it is drawn.
   // Reloading beats asking somebody to press F5 to find out whether the thing
   // they are waiting for has happened. The interval comes from the server,
   // which knows whether anything is currently moving.
-  var timer = setTimeout(function () { location.reload(); }, refreshIn);
+  scheduleRefresh(refreshIn);
 
   function post(path, onDone) {
     clearTimeout(timer);
@@ -286,7 +314,7 @@ export const NODE_PAGE_SCRIPT = `(function () {
         if (error) {
           say(error.message, 'bad');
           button.disabled = false;
-          timer = setTimeout(function () { location.reload(); }, 8000);
+          scheduleRefresh(8000);
           return;
         }
         say((data && data.message) || 'Done.', 'ok');
@@ -299,7 +327,6 @@ export const NODE_PAGE_SCRIPT = `(function () {
 
   /* ----------------------------------------------------------------- setup */
 
-  var form = document.getElementById('setup');
   if (!form) return;
 
   var message = document.getElementById('setup-msg');
@@ -345,7 +372,7 @@ export const NODE_PAGE_SCRIPT = `(function () {
         message.textContent = error.message;
         button.disabled = false;
         // Back to the slow refresh so a failed attempt is readable.
-        timer = setTimeout(function () { location.reload(); }, 15000);
+        scheduleRefresh(15000);
       });
   });
 })();
@@ -384,12 +411,14 @@ function setupPanel(status: NodeStatusSnapshot): string {
 
   const waiting = status.configured || status.enrolmentPending;
 
-  const banner = waiting
-    ? `<p class="msg warn"><span class="dot">●</span>Trying to enrol with
+  const banner = status.enrolmentError
+    ? `<p class="msg bad"><span class="dot">●</span>${escapeHtml(status.enrolmentError)}</p>`
+    : waiting
+      ? `<p class="msg warn"><span class="dot">●</span>Trying to enrol with
          ${status.coordinatorUrl ? `<code>${escapeHtml(status.coordinatorUrl)}</code>` : 'the coordinator'}.
          This page refreshes itself; if it stays here, check the address is reachable from this
          machine and that the code has not already been used.</p>`
-    : '';
+      : '';
 
   return `
       <section class="setup">
@@ -433,6 +462,9 @@ function setupPanel(status: NodeStatusSnapshot): string {
  */
 function enrolment(status: NodeStatusSnapshot): string {
   if (status.enrolled) return '<span class="ok"><span class="dot">●</span>enrolled</span>';
+  if (status.enrolmentError) {
+    return '<span class="bad"><span class="dot">●</span>enrolment failed — correct the form above and try again</span>';
+  }
   if (!status.keyPresent) {
     return '<span class="warn"><span class="dot">●</span>waiting for the mesh agent to generate this node’s key</span>';
   }

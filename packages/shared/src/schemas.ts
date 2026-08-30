@@ -186,12 +186,23 @@ export const meshEndpointSchema = z.object({
   port: z.number().int().min(1).max(65_535),
 });
 
-export const meshRegisterSchema = z.object({
-  enrolmentToken: z.string().trim().min(8).max(200),
-  publicKey: z.string().trim().min(32).max(200),
-  agentVersion: z.string().trim().max(64).optional(),
-  endpoints: z.array(meshEndpointSchema).max(16).default([]),
-});
+export const meshRegisterSchema = z
+  .object({
+    /** Required for a new node; a known node instead proves it still owns its key. */
+    enrolmentToken: z.string().trim().min(8).max(200).optional(),
+    publicKey: z.string().trim().min(32).max(200),
+    agentVersion: z.string().trim().max(64).optional(),
+    endpoints: z.array(meshEndpointSchema).max(16).default([]),
+    proof: z
+      .object({
+        challenge: z.string().trim().min(32).max(200),
+        signature: z.string().trim().min(80).max(200),
+      })
+      .optional(),
+  })
+  .refine((input) => Boolean(input.enrolmentToken || input.proof), {
+    message: 'An enrolment code or key proof is required',
+  });
 export type MeshRegisterInput = z.infer<typeof meshRegisterSchema>;
 
 export const meshHeartbeatSchema = z.object({

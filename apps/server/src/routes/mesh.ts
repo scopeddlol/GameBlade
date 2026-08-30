@@ -17,6 +17,15 @@ import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 
 /**
+ * A node catalog contains paths and chunk hashes for an entire archive.
+ *
+ * The ordinary API limit is 1 MiB, which is appropriate for interactive
+ * requests and far below a real catalog: a few hundred thousand files can
+ * describe tens of megabytes without carrying a single byte of game data.
+ */
+const MAX_NODE_CATALOG_BYTES = 128 * 1024 * 1024;
+
+/**
  * The address a request appears to come from.
  *
  * Behind Pangolin every request arrives from the tunnel, so the forwarded
@@ -78,6 +87,16 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
   }));
 
   /* ------------------------------------------------------------ node-facing */
+
+  /** A one-use challenge for a known node recovering its credential. */
+  app.get('/mesh/register/challenge', async (request) => {
+    const { publicKey } = request.query as { publicKey?: string };
+    const key = publicKey?.trim() ?? '';
+    if (key.length < 32 || key.length > 200) {
+      throw ApiError.badRequest('A valid node public key is required');
+    }
+    return mesh.createRegistrationChallenge(key);
+  });
 
   /**
    * Turn an enrolment code into a node, or re-register one that already exists.
@@ -227,6 +246,7 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
    * rather than the database going to look for it.
    */
   app.post('/mesh/catalog', {
+    bodyLimit: MAX_NODE_CATALOG_BYTES,
     // A full library report is large and infrequent; the abuse limiter reads
     // it as something to throttle.
     config: { rateLimit: false },

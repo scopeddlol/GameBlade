@@ -303,16 +303,23 @@ export function startSchedules(app: FastifyInstance): () => void {
      * started the next one on top of it.
      */
     let stopped = false;
+    let reportTimer: NodeJS.Timeout | null = null;
     const schedule = (delay: number) => {
-      const timer = setTimeout(() => {
+      if (stopped) return;
+
+      reportTimer = setTimeout(() => {
+        reportTimer = null;
         if (stopped) return;
         void publish().then(schedule);
       }, delay);
-      timer.unref();
-      timers.push(timer);
+      reportTimer.unref();
     };
     stoppers.push(() => {
       stopped = true;
+      if (reportTimer) {
+        clearTimeout(reportTimer);
+        reportTimer = null;
+      }
     });
 
     // The first attempt is delayed enough for the mesh agent beside this

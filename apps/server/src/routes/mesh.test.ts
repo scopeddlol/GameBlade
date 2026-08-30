@@ -1,3 +1,4 @@
+import { generateKeyPairSync, sign as signBytes, type KeyObject } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -82,6 +83,29 @@ describe('mesh coordinator', () => {
     authorization: `Bearer ${node.nodeToken}`,
     'x-gameblade-node': node.nodeId,
   });
+
+  function nodeIdentity(): { publicKey: string; privateKey: KeyObject } {
+    const pair = generateKeyPairSync('ed25519');
+    const spki = pair.publicKey.export({ format: 'der', type: 'spki' });
+    return {
+      publicKey: Buffer.from(spki.subarray(12)).toString('base64url'),
+      privateKey: pair.privateKey,
+    };
+  }
+
+  async function prove(identity: { publicKey: string; privateKey: KeyObject }) {
+    const issued = await app.inject({
+      method: 'GET',
+      url: `/api/mesh/register/challenge?publicKey=${encodeURIComponent(identity.publicKey)}`,
+    });
+    expect(issued.statusCode).toBe(200);
+    const challenge = (issued.json() as { challenge: string }).challenge;
+    const message = `gameblade-register-v1:${identity.publicKey}:${challenge}`;
+    return {
+      challenge,
+      signature: signBytes(null, Buffer.from(message), identity.privateKey).toString('base64url'),
+    };
+  }
 
   beforeAll(async () => {
     dataDir = await mkdtemp(path.join(tmpdir(), 'gameblade-mesh-test-'));
@@ -206,28 +230,30 @@ describe('mesh coordinator', () => {
     expect(second.statusCode).toBe(403);
   });
 
-  it('treats a known key as the same node coming back, not a conflict', async () => {
-    // An agent that lost its local state still holds its key. Refusing it would
-    // strand a working mirror behind a code its operator no longer has.
-    const first = await enrol('Home archive', 'z'.repeat(44));
+  it('treats a proven known key as the same node coming back, not a conflict', async () => {
+    // An agent that lost its replaceable token still holds its private key.
+    // Proving that key recovers the node without needing a second code.
+    const identity = nodeIdentity();
+    const first = await enrol('Home archive', identity.publicKey);
 
     const again = await app.inject({
       method: 'POST',
       url: '/api/mesh/register',
-      payload: { enrolmentToken: 'not-a-real-code', publicKey: 'z'.repeat(44), endpoints: [] },
+      payload: { publicKey: identity.publicKey, proof: await prove(identity), endpoints: [] },
     });
 
     expect(again.statusCode).toBe(200);
     expect((again.json() as { nodeId: string }).nodeId).toBe(first.nodeId);
   });
 
-  it('rotates the credential when a node re-registers', async () => {
-    const first = await enrol('Home archive', 'q'.repeat(44));
+  it('rotates the credential when a node proves its key and re-registers', async () => {
+    const identity = nodeIdentity();
+    const first = await enrol('Home archive', identity.publicKey);
 
     const again = await app.inject({
       method: 'POST',
       url: '/api/mesh/register',
-      payload: { enrolmentToken: 'unused-placeholder', publicKey: 'q'.repeat(44), endpoints: [] },
+      payload: { publicKey: identity.publicKey, proof: await prove(identity), endpoints: [] },
     });
     const rotated = again.json() as { nodeToken: string };
 
@@ -241,6 +267,46 @@ describe('mesh coordinator', () => {
       payload: { endpoints: [] },
     });
     expect(stale.statusCode).toBe(401);
+  });
+
+  it('will not let a disclosed public key impersonate its node', async () => {
+    // Every signed-in client resolving a game is handed this value. Repeating
+    // public information to the unauthenticated registration route must not
+    // mint the node's bearer credential.
+    const identity = nodeIdentity();
+    await enrol('Home archive', identity.publicKey);
+
+    const forged = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/register',
+      payload: {
+        enrolmentToken: 'not-a-real-code',
+        publicKey: identity.publicKey,
+        endpoints: [],
+      },
+    });
+
+    expect(forged.statusCode).toBe(403);
+  });
+
+  it('consumes a key challenge so its proof cannot be replayed', async () => {
+    const identity = nodeIdentity();
+    await enrol('Home archive', identity.publicKey);
+    const proof = await prove(identity);
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/register',
+      payload: { publicKey: identity.publicKey, proof, endpoints: [] },
+    });
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/register',
+      payload: { publicKey: identity.publicKey, proof, endpoints: [] },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(replay.statusCode).toBe(403);
   });
 
   it('refuses a node credential derived from the public key', async () => {
@@ -265,6 +331,38 @@ describe('mesh coordinator', () => {
       payload: { endpoints: [] },
     });
     expect(response.statusCode).toBe(401);
+  });
+
+  it('accepts a node catalog larger than the ordinary one-megabyte API limit', async () => {
+    // Catalogs carry metadata and hashes, not game bytes, but a real archive
+    // still has hundreds of thousands of paths. The global interactive-request
+    // limit rejected the whole report before this route or its schema saw it.
+    const node = await enrol('Large archive', 'l'.repeat(44));
+    const files = Array.from({ length: 300 }, (_, index) => ({
+      relPath: `${index}-${'x'.repeat(3_900)}`,
+      sizeBytes: 1,
+      modifiedAt: '2026-01-01T00:00:00.000Z',
+    }));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/catalog',
+      headers: nodeAuth(node),
+      payload: {
+        complete: true,
+        games: [
+          {
+            relPath: 'One game with many files',
+            kind: 'folder',
+            sizeBytes: files.length,
+            contentMtime: '2026-01-01T00:00:00.000Z',
+            files,
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
   });
 
   /* ------------------------------------------------------------ heartbeats */
