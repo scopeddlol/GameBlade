@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { MESH_CHUNK_BYTES, type ReportedFile, type ReportedGame } from '@gameblade/shared';
 import { eq, isNull } from 'drizzle-orm';
@@ -29,6 +30,39 @@ export interface ReporterConfig {
   coordinatorUrl: string | null;
   enrolmentToken: string | null;
   statePath: string;
+}
+
+/**
+ * Target size for one request in a large catalog report.
+ *
+ * The coordinator permits a larger outlier so a single enormous game can still
+ * arrive, but ordinary batches stay small enough to parse without a memory
+ * spike. Measured before the small report envelope is added.
+ */
+export const CATALOG_BATCH_TARGET_BYTES = 8 * 1024 * 1024;
+
+/** Split only between games, because one game's file list must be replaced atomically. */
+export function splitCatalogBatches(
+  games: ReportedGame[],
+  targetBytes = CATALOG_BATCH_TARGET_BYTES,
+): ReportedGame[][] {
+  const batches: ReportedGame[][] = [];
+  let current: ReportedGame[] = [];
+  let currentBytes = 0;
+
+  for (const game of games) {
+    const bytes = Buffer.byteLength(JSON.stringify(game), 'utf8') + (current.length > 0 ? 1 : 0);
+    if (current.length > 0 && currentBytes + bytes > targetBytes) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(game);
+    currentBytes += bytes;
+  }
+
+  if (current.length > 0 || batches.length === 0) batches.push(current);
+  return batches;
 }
 
 /**
@@ -120,48 +154,70 @@ export class CatalogReporter {
 
     const payload = this.collect();
 
+    const batches = splitCatalogBatches(payload);
+    const reportId = randomUUID();
+
     try {
-      const response = await fetch(`${coordinatorUrl}/api/mesh/catalog`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${this.state.nodeToken}`,
-          'x-gameblade-node': this.state.nodeId,
-        },
-        body: JSON.stringify({ complete: true, games: payload }),
-      });
-
-      /*
-       * A rejected credential is recoverable, and used to be permanent.
-       *
-       * The mesh agent beside this process re-registers when its own heartbeat
-       * is refused, which rotates the token in the state file — so the copy
-       * held here goes stale in the ordinary course of things, not only when
-       * something is wrong. Rereading the file is the whole fix: the agent has
-       * already put a working credential in it. Anything else — a node deleted
-       * and re-enrolled, a token rotated elsewhere — resolves the same way
-       * within one heartbeat, without a restart and without anybody noticing.
-       */
-      if (response.status === 401 || response.status === 403) {
-        this.logger.warn(
-          { status: response.status },
-          'the coordinator rejected this node’s credential; rereading the state file',
+      let accepted: Record<string, unknown> = {};
+      for (let index = 0; index < batches.length; index += 1) {
+        const games = batches[index] ?? [];
+        const batched = batches.length > 1;
+        const response = await fetch(
+          `${coordinatorUrl}/api/mesh/catalog${batched ? '/batch' : ''}`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              authorization: `Bearer ${this.state.nodeToken}`,
+              'x-gameblade-node': this.state.nodeId,
+            },
+            body: JSON.stringify(
+              batched
+                ? { reportId, index, final: index === batches.length - 1, games }
+                : { complete: true, games },
+            ),
+          },
         );
-        await this.loadState();
-        return false;
-      }
 
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        this.logger.error(
-          { status: response.status, body: text.slice(0, 400) },
-          'the coordinator refused this node’s catalog',
-        );
-        return false;
+        /*
+         * A rejected credential is recoverable, and used to be permanent.
+         *
+         * The mesh agent beside this process re-registers when its own heartbeat
+         * is refused, which rotates the token in the state file — so the copy
+         * held here goes stale in the ordinary course of things, not only when
+         * something is wrong. Rereading the file is the whole fix: the agent has
+         * already put a working credential in it. Anything else — a node deleted
+         * and re-enrolled, a token rotated elsewhere — resolves the same way
+         * within one heartbeat, without a restart and without anybody noticing.
+         */
+        if (response.status === 401 || response.status === 403) {
+          this.logger.warn(
+            { status: response.status },
+            'the coordinator rejected this node’s credential; rereading the state file',
+          );
+          await this.loadState();
+          return false;
+        }
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          this.logger.error(
+            {
+              status: response.status,
+              batch: index + 1,
+              batches: batches.length,
+              body: text.slice(0, 400),
+            },
+            'the coordinator refused this node’s catalog',
+          );
+          return false;
+        }
+
+        accepted = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       }
 
       this.logger.info(
-        { games: payload.length, ...((await response.json().catch(() => ({}))) as object) },
+        { games: payload.length, batches: batches.length, ...accepted },
         'catalog reported',
       );
       return true;

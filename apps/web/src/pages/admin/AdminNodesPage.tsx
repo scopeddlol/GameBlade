@@ -1,6 +1,7 @@
 import type { MeshNodeStats } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, HardDrive, Radio, ShieldOff, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { StatTile } from '../../components/charts.js';
 import { Badge, RowSkeleton } from '../../components/ui.js';
 import { api } from '../../lib/api.js';
@@ -68,20 +69,33 @@ export function AdminNodesPage() {
           value={`${Math.round((summary?.bytes.meshShare ?? 0) * 100)}%`}
           hint="of delivered bytes"
         />
-        <StatTile
-          label="Games with no node"
-          value={(summary?.coverage.uncovered ?? 0).toLocaleString('en')}
-          hint="every download costs this server"
-        />
+        <Link
+          to="/admin/catalog?nodeCoverage=uncovered"
+          className="rounded-xl transition hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2"
+          title="View games not held by an online node"
+        >
+          <StatTile
+            label="Games with no node"
+            value={(summary?.coverage.uncovered ?? 0).toLocaleString('en')}
+            hint="view affected games"
+          />
+        </Link>
       </div>
 
       {summary && summary.coverage.uncovered > 0 && summary.nodes.total > 0 ? (
         <p className="flex items-start gap-2 text-sm text-amber-400">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <span>
-            {summary.coverage.uncovered.toLocaleString('en')} games are not held by any online node,
-            so every download of one comes from this server. That is usually games whose files a
-            node has not finished hashing — start the pass from the node&rsquo;s own page.
+            {summary.coverage.uncovered.toLocaleString('en')} games are not held by any online node.
+            On a coordinator they cannot be downloaded. That is usually games whose files a node has
+            not finished hashing.{' '}
+            <Link
+              className="underline underline-offset-2"
+              to="/admin/catalog?nodeCoverage=uncovered"
+            >
+              View affected games
+            </Link>
+            .
           </span>
         </p>
       ) : null}

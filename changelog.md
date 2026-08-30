@@ -154,6 +154,46 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.7 - August 30, 2026
+
+The node had the games and the client knew they existed, but two independent
+control-plane failures sent every install to a coordinator that deliberately
+has no game files. This release repairs that path end to end.
+
+### Large hashed catalogs reach the coordinator
+
+A node used to send its entire catalog in one JSON request. A fully hashed
+archive includes every file and every chunk digest, so a real library could
+exceed even the catalog route's 128 MiB exception and Fastify rejected it with
+`FST_ERR_CTP_BODY_TOO_LARGE`. The node now divides large reports into bounded
+batches. The coordinator ingests each batch without declaring absent games
+missing until the final batch, then reconciles against the paths collected
+across the complete report. Small reports and older nodes retain the original
+single-request path.
+
+### Node-backed downloads resolve to the node
+
+The Admin Settings API omitted both mesh switches from reads and writes. The
+checkbox was visible, but saving it silently did nothing, so the desktop
+resolver returned no nodes and fell through to the coordinator's synthetic
+library path. That fallback produced the misleading “File is no longer
+available” message. Both switches now round-trip correctly. A successful node
+registration or catalog report also enables mesh downloads only when the
+operator has never stored a preference; an explicit off switch stays off.
+
+An integration test now exercises the failure as a player does: enroll an
+origin node, submit a multi-part hashed catalog, announce its content hashes,
+read the install manifest, resolve the source and receive a signed node grant.
+
+### Missing-node games are an actionable list
+
+The **Games with no node** count on Admin → Nodes now opens the catalog already
+filtered to games held by no online node. Those rows are labelled, can be
+selected normally and can be force-removed from the same view, with a warning
+that a future node report can import the folder again.
+
+---
+
 ## Version 0.6.6 - August 30, 2026
 
 Five things the client and the panel could not do, and one thing they did

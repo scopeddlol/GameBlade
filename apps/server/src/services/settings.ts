@@ -256,6 +256,26 @@ export class SettingsService {
     return this.get();
   }
 
+  /**
+   * Turn node-backed downloads on when an installation pairs its first node.
+   *
+   * An explicit stored value always wins, including `false`: an administrator
+   * who deliberately switched the mesh off must not have a reconnecting node
+   * switch it back on. Older releases failed to expose this setting through
+   * the admin API, though, so installations with paired nodes generally have
+   * no row at all. Their next successful registration or catalog report safely
+   * completes the pairing that was already intended.
+   */
+  enableMeshWhenUnconfigured(): RuntimeSettings {
+    const configured = this.db
+      .select({ key: settings.key })
+      .from(settings)
+      .where(eq(settings.key, 'meshEnabled'))
+      .get();
+
+    return configured ? this.get() : this.update({ meshEnabled: true });
+  }
+
   /** Drop a stored override so the environment value applies again. */
   clear(key: SettingKey): void {
     this.db.delete(settings).where(eq(settings.key, key)).run();

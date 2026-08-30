@@ -7,6 +7,7 @@ import {
   meshPeerRegisterSchema,
   meshRegisterSchema,
   meshReportSchema,
+  reportedCatalogBatchSchema,
   reportedCatalogSchema,
 } from '@gameblade/shared';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -24,6 +25,16 @@ import { newId } from '../lib/ids.js';
  * describe tens of megabytes without carrying a single byte of game data.
  */
 const MAX_NODE_CATALOG_BYTES = 128 * 1024 * 1024;
+
+/** An abandoned multi-request report is harmless and should not live forever. */
+const CATALOG_BATCH_SESSION_TTL_MS = 60 * 60_000;
+
+interface CatalogBatchSession {
+  nextIndex: number;
+  seen: Set<string>;
+  startedAt: number;
+  result: { added: number; updated: number; unchanged: number; missing: number };
+}
 
 /**
  * The address a request appears to come from.
@@ -48,6 +59,12 @@ function observedAddress(request: FastifyRequest): string | undefined {
 export async function meshRoutes(app: FastifyInstance): Promise<void> {
   const { db, mesh, settings, downloadTokens, chunks, bandwidth, catalogIngest, config } =
     app.gameblade;
+
+  // In memory on purpose. A coordinator restart between pieces makes the next
+  // piece fail safely and the node retries the whole report; persisting partial
+  // catalog state would make a half-finished report survive the process that
+  // knew how to finish it.
+  const catalogBatchSessions = new Map<string, CatalogBatchSession>();
 
   /**
    * Authenticate a node by its id and its enrolment-issued node token.
@@ -112,6 +129,8 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
       ...body,
       observedAddress: observedAddress(request),
     });
+
+    settings.enableMeshWhenUnconfigured();
 
     return {
       nodeId,
@@ -254,7 +273,84 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
       const { nodeId } = requireNode(request);
       const body = reportedCatalogSchema.parse(request.body);
 
+      settings.enableMeshWhenUnconfigured();
+
       return catalogIngest.ingest(nodeId, body.games, { complete: body.complete });
+    },
+  });
+
+  /**
+   * A large catalog, accepted in bounded pieces.
+   *
+   * Each piece is ingested as a partial report. Only the final one may mark old
+   * rows missing, and it does so against every path accumulated for this report,
+   * not merely the games in its own request body.
+   */
+  app.post('/mesh/catalog/batch', {
+    bodyLimit: MAX_NODE_CATALOG_BYTES,
+    config: { rateLimit: false },
+    handler: async (request) => {
+      const { nodeId } = requireNode(request);
+      const body = reportedCatalogBatchSchema.parse(request.body);
+      const now = Date.now();
+
+      for (const [key, session] of catalogBatchSessions) {
+        if (now - session.startedAt > CATALOG_BATCH_SESSION_TTL_MS) {
+          catalogBatchSessions.delete(key);
+        }
+      }
+
+      const key = `${nodeId}:${body.reportId}`;
+      let session = catalogBatchSessions.get(key);
+      if (!session) {
+        if (body.index !== 0) {
+          throw ApiError.conflict(
+            'That catalog report expired; start it again from the first batch',
+          );
+        }
+
+        // The reporter sends one report at a time. Retaining an older report
+        // from the same authenticated node would only hold memory until its
+        // timeout and let a buggy client accumulate many path sets.
+        for (const candidate of catalogBatchSessions.keys()) {
+          if (candidate.startsWith(`${nodeId}:`)) catalogBatchSessions.delete(candidate);
+        }
+
+        settings.enableMeshWhenUnconfigured();
+        session = {
+          nextIndex: 0,
+          seen: new Set(),
+          startedAt: now,
+          result: { added: 0, updated: 0, unchanged: 0, missing: 0 },
+        };
+        catalogBatchSessions.set(key, session);
+      }
+
+      if (body.index !== session.nextIndex) {
+        throw ApiError.conflict(
+          `Expected catalog batch ${session.nextIndex}, received ${body.index}`,
+        );
+      }
+
+      for (const game of body.games) session.seen.add(game.relPath);
+      const result = catalogIngest.ingest(nodeId, body.games, {
+        complete: body.final,
+        ...(body.final ? { seenRelPaths: session.seen } : {}),
+      });
+      session.result.added += result.added;
+      session.result.updated += result.updated;
+      session.result.unchanged += result.unchanged;
+      session.result.missing += result.missing;
+      session.nextIndex += 1;
+
+      const response = {
+        ...session.result,
+        entries: session.seen.size,
+        batches: session.nextIndex,
+        complete: body.final,
+      };
+      if (body.final) catalogBatchSessions.delete(key);
+      return response;
     },
   });
 

@@ -543,6 +543,142 @@ describe('the split-role topology', () => {
     expect(refused.statusCode).toBe(404);
   });
 
+  it('exposes and saves both mesh switches through admin settings', async () => {
+    const { app } = await boot({ ROLE: 'coordinator' });
+    const admin = await signIn(app);
+
+    const saved = await app.inject({
+      method: 'PATCH',
+      url: '/api/admin/settings',
+      headers: auth(admin),
+      payload: { meshEnabled: true, meshSeedingEnabled: true },
+    });
+
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ meshEnabled: true, meshSeedingEnabled: true });
+
+    const reloaded = await app.inject({
+      method: 'GET',
+      url: '/api/admin/settings',
+      headers: auth(admin),
+    });
+    expect(reloaded.json()).toMatchObject({ meshEnabled: true, meshSeedingEnabled: true });
+  });
+
+  it('turns a batched hashed catalog into a node-backed desktop manifest', async () => {
+    const { app } = await boot({ ROLE: 'coordinator' });
+    const admin = await signIn(app);
+    const db = app.gameblade.db;
+
+    const enrolment = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/enrolments',
+      headers: auth(admin),
+      payload: { label: 'Archive node', role: 'origin' },
+    });
+    const registered = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/register',
+      payload: {
+        enrolmentToken: (enrolment.json() as { token: string }).token,
+        publicKey: 'd'.repeat(43),
+        endpoints: [{ kind: 'local', address: '10.0.0.20', port: 47820 }],
+      },
+    });
+    const node = registered.json() as { nodeId: string; nodeToken: string };
+    const nodeHeaders = {
+      authorization: `Bearer ${node.nodeToken}`,
+      'x-gameblade-node': node.nodeId,
+    };
+    const reportId = '00000000-0000-4000-8000-000000000067';
+    const reported = (relPath: string, fill: string) => ({
+      relPath,
+      kind: 'folder' as const,
+      sizeBytes: 16,
+      contentMtime: '2026-08-30T00:00:00.000Z',
+      files: [
+        {
+          relPath: 'game.bin',
+          sizeBytes: 16,
+          modifiedAt: '2026-08-30T00:00:00.000Z',
+          sha256: fill.repeat(64),
+          chunks: [{ index: 0, sha256: fill.repeat(64), sizeBytes: 16 }],
+        },
+      ],
+    });
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/catalog/batch',
+      headers: nodeHeaders,
+      payload: { reportId, index: 0, final: false, games: [reported('Companion Game', 'a')] },
+    });
+    const final = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/catalog/batch',
+      headers: nodeHeaders,
+      payload: { reportId, index: 1, final: true, games: [reported('Downloadable Game', 'b')] },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(final.statusCode).toBe(200);
+
+    const catalog = db
+      .select({ id: games.id, relPath: games.relPath })
+      .from(games)
+      .all()
+      .sort((a, b) => a.relPath.localeCompare(b.relPath));
+    expect(catalog.map((game) => game.relPath)).toEqual(['Companion Game', 'Downloadable Game']);
+
+    const announced = catalog.map((game) => ({
+      gameId: game.id,
+      contentHash: app.gameblade.mesh.contentHashFor(game.id),
+    }));
+    const heartbeat = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/heartbeat',
+      headers: nodeHeaders,
+      payload: {
+        endpoints: [{ kind: 'local', address: '10.0.0.20', port: 47820 }],
+        games: announced,
+      },
+    });
+    expect(heartbeat.statusCode).toBe(200);
+
+    const target = catalog.find((game) => game.relPath === 'Downloadable Game')!;
+    const manifest = await app.inject({
+      method: 'GET',
+      url: `/api/games/${target.id}/manifest`,
+      headers: auth(admin),
+    });
+    expect(manifest.statusCode).toBe(200);
+    const manifestBody = manifest.json() as {
+      gameId: string;
+      chunkBytes: number;
+      files: Array<{ path: string; chunks: Array<{ index: number; sizeBytes: number }> }>;
+      sources: Array<{ kind: string; nodeId?: string }>;
+    };
+    expect(manifestBody).toMatchObject({
+      gameId: target.id,
+      chunkBytes: MESH_CHUNK_BYTES,
+      files: [{ path: 'game.bin', chunks: [{ index: 0, sizeBytes: 16 }] }],
+    });
+    expect(manifestBody.sources).toContainEqual(
+      expect.objectContaining({ kind: 'node', nodeId: node.nodeId }),
+    );
+
+    const resolved = await app.inject({
+      method: 'POST',
+      url: `/api/mesh/resolve/${target.id}`,
+      headers: auth(admin),
+      payload: { endpoints: [] },
+    });
+    expect(resolved.statusCode).toBe(200);
+    expect(resolved.json()).toMatchObject({
+      nodes: [{ id: node.nodeId }],
+      grants: [{ nodeId: node.nodeId }],
+    });
+  });
+
   /* --------------------------------------------------- what a node is told */
 
   it('tells a node about its own library and nobody else’s', async () => {

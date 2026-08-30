@@ -138,6 +138,7 @@ export function AdminCatalogPage() {
   const matchStatus = params.get('matchStatus') ?? '';
   const missing = params.get('missing') ?? '';
   const missingFilesOnly = params.get('missingFiles') === 'true';
+  const uncoveredByNodes = params.get('nodeCoverage') === 'uncovered';
 
   /** Every filter here is a URL parameter, so a triage view is a shareable link. */
   const setParam = (key: string, value: string) =>
@@ -177,6 +178,7 @@ export function AdminCatalogPage() {
           missing: missing || undefined,
           includeMissing: true,
           missingFilesOnly,
+          nodeCoverage: uncoveredByNodes ? 'uncovered' : undefined,
           sort: 'title',
           limit: 100,
         })}`,
@@ -245,6 +247,15 @@ export function AdminCatalogPage() {
             onChange={(e) => setParam('missingFiles', e.target.checked ? 'true' : '')}
           />
           Missing game files
+        </label>
+
+        <label className="flex items-center gap-2 pb-2 text-sm">
+          <input
+            type="checkbox"
+            checked={uncoveredByNodes}
+            onChange={(e) => setParam('nodeCoverage', e.target.checked ? 'uncovered' : '')}
+          />
+          No online node
         </label>
 
         <Field
@@ -331,12 +342,13 @@ export function AdminCatalogPage() {
                 </div>
 
                 <ReadinessPills game={game} />
+                {uncoveredByNodes ? <Badge tone="danger">No online node</Badge> : null}
                 {game.isMissing ? <Badge tone="danger">Missing</Badge> : null}
                 <MatchBadge status={game.matchStatus} />
               </button>
 
               <div className="pr-3 pl-2">
-                <DeleteGameButton game={game} />
+                <DeleteGameButton game={game} uncoveredByNodes={uncoveredByNodes} />
               </div>
             </div>
           ))}
@@ -356,7 +368,13 @@ export function AdminCatalogPage() {
  * download". A game still present on disk needs the extra confirmation,
  * because a scan will simply add it back without its metadata.
  */
-function DeleteGameButton({ game }: { game: GameSummary }) {
+function DeleteGameButton({
+  game,
+  uncoveredByNodes = false,
+}: {
+  game: GameSummary;
+  uncoveredByNodes?: boolean;
+}) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
 
@@ -379,7 +397,9 @@ function DeleteGameButton({ game }: { game: GameSummary }) {
       title={
         game.isMissing
           ? 'Remove this entry — the game is gone from disk'
-          : 'Remove this entry from the catalog'
+          : uncoveredByNodes
+            ? 'Remove this entry — no online node currently holds it'
+            : 'Remove this entry from the catalog'
       }
       aria-label={`Remove ${game.title} from the catalog`}
       className="text-ink-500 gb-hover-danger rounded p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
@@ -387,9 +407,11 @@ function DeleteGameButton({ game }: { game: GameSummary }) {
       onClick={() => {
         const question = game.isMissing
           ? `Remove "${game.title}" from the catalog? It is already gone from disk, and its playtime and achievements go with it.`
-          : `"${game.title}" is still on disk, so the next scan will add it back without its metadata. Remove the entry anyway?`;
+          : uncoveredByNodes
+            ? `Remove "${game.title}" from the catalog? No online node currently holds it. If a node still has the files, a later catalog report can add it back.`
+            : `"${game.title}" is still on disk, so the next scan will add it back without its metadata. Remove the entry anyway?`;
         if (!confirm(question)) return;
-        remove.mutate(!game.isMissing);
+        remove.mutate(!game.isMissing || uncoveredByNodes);
       }}
     >
       {remove.isPending ? (

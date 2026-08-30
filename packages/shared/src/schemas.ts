@@ -134,6 +134,8 @@ export const gameQuerySchema = z.object({
   includeMissing: z.coerce.boolean().default(false),
   /** Only entries whose source files disappeared since the last library scan. */
   missingFilesOnly: z.coerce.boolean().default(false),
+  /** Only entries that no online mesh node currently claims to hold. */
+  nodeCoverage: z.enum(['uncovered']).optional(),
   sort: z
     .enum(['title', 'added', 'released', 'size', 'rating', 'played', 'playtime'])
     .default('title'),
@@ -285,6 +287,23 @@ export const reportedCatalogSchema = z.object({
   games: z.array(reportedGameSchema).max(20_000),
 });
 export type ReportedCatalogInput = z.infer<typeof reportedCatalogSchema>;
+
+/**
+ * One bounded piece of a catalog report.
+ *
+ * Chunk hashes make a large archive's complete JSON description much larger
+ * than an ordinary API request. The node uses this shape only when the legacy
+ * single-request report would be too large; `reportId` and the strict index let
+ * the coordinator join the pieces without ever treating a partial report as a
+ * complete view of the library.
+ */
+export const reportedCatalogBatchSchema = z.object({
+  reportId: z.string().uuid(),
+  index: z.number().int().min(0).max(100_000),
+  final: z.boolean(),
+  games: z.array(reportedGameSchema).max(20_000),
+});
+export type ReportedCatalogBatchInput = z.infer<typeof reportedCatalogBatchSchema>;
 
 export const meshReportSchema = z.object({
   nonce: z.string().trim().min(4).max(64),

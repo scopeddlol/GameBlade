@@ -71,7 +71,7 @@ export class CatalogIngestService {
   ingest(
     nodeId: string,
     reported: ReportedGame[],
-    options: { complete: boolean } = { complete: true },
+    options: { complete: boolean; seenRelPaths?: ReadonlySet<string> } = { complete: true },
   ): IngestResult {
     const node = this.db.select().from(meshNodes).where(eq(meshNodes.id, nodeId)).get();
     if (!node) throw ApiError.notFound('Unknown node');
@@ -200,8 +200,13 @@ export class CatalogIngestService {
     // Only a complete report may mark games missing. A partial one says
     // nothing about what it did not mention, and reading silence as absence
     // would flag an entire catalog because a node sent it in pieces.
+    // A batched report carries only one slice here. Its route accumulates every
+    // path from the preceding slices and hands that complete set to the final
+    // ingest; without it, finalising batch 12 would mark everything from batches
+    // 0–11 missing.
+    const completeSeen = options.seenRelPaths ?? seen;
     const vanished = options.complete
-      ? [...existing.keys()].filter((relPath) => !seen.has(relPath))
+      ? [...existing.keys()].filter((relPath) => !completeSeen.has(relPath))
       : [];
     result.missing = vanished.length;
 
@@ -231,7 +236,9 @@ export class CatalogIngestService {
       tx.update(meshNodes)
         .set({
           catalogReportedAt: now,
-          catalogStatus: `ok: ${reported.length} entries`,
+          catalogStatus: options.complete
+            ? `ok: ${completeSeen.size} entries`
+            : `receiving: ${reported.length} entries`,
         })
         .where(eq(meshNodes.id, nodeId))
         .run();

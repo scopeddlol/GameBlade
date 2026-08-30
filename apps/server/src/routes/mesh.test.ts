@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CSRF_HEADER, MESH_CHUNK_BYTES } from '@gameblade/shared';
+import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
@@ -365,6 +366,56 @@ describe('mesh coordinator', () => {
     expect(response.statusCode).toBe(200);
   });
 
+  it('joins a large catalog from bounded batches before marking anything missing', async () => {
+    const node = await enrol('Batched archive', 'q'.repeat(44));
+    const reportId = '00000000-0000-4000-8000-000000000001';
+    const reported = (relPath: string) => ({
+      relPath,
+      kind: 'folder' as const,
+      sizeBytes: 1,
+      contentMtime: '2026-01-01T00:00:00.000Z',
+      files: [
+        {
+          relPath: 'game.bin',
+          sizeBytes: 1,
+          modifiedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/catalog/batch',
+      headers: nodeAuth(node),
+      payload: { reportId, index: 0, final: false, games: [reported('First Game')] },
+    });
+    const final = await app.inject({
+      method: 'POST',
+      url: '/api/mesh/catalog/batch',
+      headers: nodeAuth(node),
+      payload: { reportId, index: 1, final: true, games: [reported('Second Game')] },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(final.statusCode).toBe(200);
+    expect(final.json()).toMatchObject({ entries: 2, batches: 2, complete: true });
+
+    const assigned = app.gameblade.db
+      .select({ libraryId: meshNodes.libraryId })
+      .from(meshNodes)
+      .where(eq(meshNodes.id, node.nodeId))
+      .get();
+    const rows = app.gameblade.db
+      .select({ relPath: games.relPath, missingAt: games.missingAt })
+      .from(games)
+      .where(eq(games.libraryId, assigned!.libraryId!))
+      .all();
+    expect(rows).toEqual([
+      { relPath: 'First Game', missingAt: null },
+      { relPath: 'Second Game', missingAt: null },
+    ]);
+  });
+
   /* ------------------------------------------------------------ heartbeats */
 
   it('replaces endpoints rather than accumulating them', async () => {
@@ -502,6 +553,31 @@ describe('mesh coordinator', () => {
       gameId,
       nodeId: node.nodeId,
     });
+  });
+
+  it('filters the admin catalog to games no online node currently holds', async () => {
+    const uncovered = await app.inject({
+      method: 'GET',
+      url: '/api/games?search=Demo%20Game&nodeCoverage=uncovered',
+      headers: auth(admin),
+    });
+    expect(uncovered.json()).toMatchObject({ total: 1 });
+
+    const node = await enrol('Home archive', 'u'.repeat(44));
+    const contentHash = app.gameblade.mesh.contentHashFor(gameId);
+    await app.inject({
+      method: 'POST',
+      url: '/api/mesh/heartbeat',
+      headers: nodeAuth(node),
+      payload: { endpoints: [], games: [{ gameId, contentHash }] },
+    });
+
+    const covered = await app.inject({
+      method: 'GET',
+      url: '/api/games?search=Demo%20Game&nodeCoverage=uncovered',
+      headers: auth(admin),
+    });
+    expect(covered.json()).toMatchObject({ total: 0 });
   });
 
   it('offers no nodes while the mesh is switched off', async () => {

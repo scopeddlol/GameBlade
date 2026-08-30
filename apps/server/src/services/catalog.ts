@@ -282,6 +282,16 @@ export class CatalogService {
 
     if (!query.includeMissing) conditions.push(isNull(games.missingAt));
     if (query.missingFilesOnly) conditions.push(sql`${games.missingAt} IS NOT NULL`);
+    if (query.nodeCoverage === 'uncovered') {
+      // This is the same definition as Admin → Nodes uses for its uncovered
+      // count: present catalog rows with no holder that is online right now.
+      // Keeping it server-side makes the linked worklist exact across pages.
+      conditions.push(sql`(${games.missingAt} IS NULL AND NOT EXISTS (
+        SELECT 1 FROM mesh_node_games ng
+        INNER JOIN mesh_nodes n ON n.id = ng.node_id
+        WHERE ng.game_id = ${games.id} AND n.status = 'online'
+      ))`);
+    }
 
     if (query.search) {
       const term = `%${query.search.replace(/[%_]/g, '')}%`;

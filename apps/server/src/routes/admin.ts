@@ -776,6 +776,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       steamApiKeySet: Boolean(current.steamApiKey),
       downloadSpeedLimitKbps: current.downloadSpeedLimitKbps,
       monthlyQuotaMb: current.monthlyQuotaMb,
+      meshEnabled: current.meshEnabled,
+      meshSeedingEnabled: current.meshSeedingEnabled,
       installer: installer.info(),
     };
   }
@@ -801,6 +803,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         ? { downloadSpeedLimitKbps: input.downloadSpeedLimitKbps }
         : {}),
       ...(input.monthlyQuotaMb !== undefined ? { monthlyQuotaMb: input.monthlyQuotaMb } : {}),
+      ...(input.meshEnabled !== undefined ? { meshEnabled: input.meshEnabled } : {}),
+      ...(input.meshSeedingEnabled !== undefined
+        ? { meshSeedingEnabled: input.meshSeedingEnabled }
+        : {}),
     });
 
     return describeSettings();

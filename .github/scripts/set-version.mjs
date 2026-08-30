@@ -2,12 +2,12 @@
 /**
  * Stamp one version across every manifest that carries one.
  *
- * Seven files, read by five different tools, all of which have to agree: the
+ * Ten files, read by five different tools, all of which have to agree: the
  * five `package.json` files, the Tauri config that names the installer, the
- * desktop crate, the mesh crate, and both Cargo lockfiles that record their own
- * crate's version. A release where they disagree is not a broken build — it is
- * an installer that reports the wrong version to the update check, which is
- * worse, because it ships.
+ * desktop crate, the mesh crate, and both Cargo lockfiles that record the local
+ * crates they contain. A release where they disagree is not a broken build —
+ * it is an installer that reports the wrong version to the update check, which
+ * is worse, because it ships.
  *
  * This lives under `.github/` on purpose. It is CI's, not a build script an
  * operator is expected to run: releases come from the Publish workflow and
@@ -46,6 +46,9 @@ const CARGO_MANIFESTS = ['apps/desktop/src-tauri/Cargo.toml', 'crates/gameblade-
  */
 const CARGO_LOCKS = [
   { path: 'apps/desktop/src-tauri/Cargo.lock', crate: 'gameblade-desktop' },
+  // The desktop consumes the local mesh crate by path, so its lockfile carries
+  // that workspace version as well as its own.
+  { path: 'apps/desktop/src-tauri/Cargo.lock', crate: 'gameblade-mesh' },
   { path: 'crates/gameblade-mesh/Cargo.lock', crate: 'gameblade-mesh' },
 ];
 
@@ -101,11 +104,7 @@ for (const manifest of CARGO_MANIFESTS) {
 for (const lock of CARGO_LOCKS) {
   // Anchored to the crate's own [[package]] block: a lockfile holds a version
   // for every dependency, and a loose match would rewrite whichever came first.
-  stamp(
-    lock.path,
-    new RegExp(`(name = "${lock.crate}"\\nversion = ")[^"]*(")`),
-    `$1${version}$2`,
-  );
+  stamp(lock.path, new RegExp(`(name = "${lock.crate}"\\nversion = ")[^"]*(")`), `$1${version}$2`);
 }
 
 if (disagreed > 0) {

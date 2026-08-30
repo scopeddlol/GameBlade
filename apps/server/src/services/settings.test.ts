@@ -82,4 +82,13 @@ describe('SettingsService', () => {
     expect(result.allowSelfRegistration).toBe(true);
     expect(result.downloadUrl).toBeNull();
   });
+
+  it('enables a newly paired mesh without overriding an explicit off switch', () => {
+    const settings = buildService();
+
+    expect(settings.enableMeshWhenUnconfigured().meshEnabled).toBe(true);
+
+    settings.update({ meshEnabled: false });
+    expect(settings.enableMeshWhenUnconfigured().meshEnabled).toBe(false);
+  });
 });
