@@ -331,7 +331,20 @@ export interface ClientButton {
 export interface LocalGameMatch {
   /** The folder name that was searched for. */
   name: string;
-  matches: Array<{ gameId: string; title: string; score: number }>;
+  matches: Array<{
+    gameId: string;
+    title: string;
+    score: number;
+    /**
+     * Where this game keeps its saves, when an administrator has said.
+     *
+     * Carried on the match so the importer can look for a save on disk without
+     * a request per candidate: somebody re-importing a drive is matching a
+     * hundred folders at once, and the whole point is that it happens in one
+     * pass rather than a hundred.
+     */
+    saveRule: SaveRule | null;
+  }>;
 }
 
 /**

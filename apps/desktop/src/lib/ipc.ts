@@ -64,6 +64,19 @@ export interface InstallCandidate {
   executableCount: number;
 }
 
+/** One folder the import scan looked in, and what it found there. */
+export interface ImportRoot {
+  path: string;
+  /** False for a configured folder that is not on this machine any more. */
+  exists: boolean;
+  found: number;
+}
+
+export interface ImportScan {
+  roots: ImportRoot[];
+  candidates: InstallCandidate[];
+}
+
 export interface RunningGame {
   gameId: string;
   title: string;
@@ -226,6 +239,17 @@ export const ipc = {
   /** Folders that look like games, for linking a copy the user already has. */
   scanInstallCandidates: (roots?: string[]) =>
     invoke<InstallCandidate[]>('scan_install_candidates', { roots }),
+  /**
+   * The same walk, over every mapped game folder, with the roots reported back.
+   *
+   * What the re-import tool runs. Somebody staring at an empty result has to be
+   * able to see which folders were searched before they can tell "nothing
+   * there" from "you looked in the wrong place".
+   */
+  scanForImport: (roots?: string[]) => invoke<ImportScan>('scan_for_import', { roots }),
+  /** Whether a save exists on this disk, asked before anything is linked. */
+  inspectLocalSave: (rule: SaveRulePayload, installDir: string) =>
+    invoke<LocalSave | null>('inspect_local_save', { rule, installDir }),
   /** Registers a folder already on disk; nothing is copied or moved. */
   linkInstalled: (gameId: string, title: string, path: string) =>
     invoke<InstalledGame>('link_installed', { gameId, title, path }),

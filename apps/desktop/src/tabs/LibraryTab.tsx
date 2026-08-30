@@ -256,7 +256,7 @@ export function LibraryTab({
           type="button"
           className="btn btn-ghost"
           onClick={() => setImporting(true)}
-          title="Link games you already have on this PC instead of downloading them again"
+          title="Find games and saves already on this PC — the way back after a reinstall"
         >
           <FolderSearch size={15} aria-hidden />
           Import

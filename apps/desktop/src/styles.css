@@ -2537,6 +2537,65 @@ textarea::placeholder {
   color: #6ee7b7;
 }
 
+/* The folders the import scan searched, listed above the results so an empty
+   result is obviously "nothing there" rather than "you looked somewhere else". */
+.import-roots {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+.import-roots li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.import-roots .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-roots .missing-root {
+  color: #fbbf24;
+}
+
+.import-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--ink-700);
+  border-radius: 10px;
+  background: var(--ink-850);
+}
+.import-toggle > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* A save found beside a candidate. Green because it is the good news on this
+   screen: the progress somebody thought they had lost is still on the disk. */
+.import-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #6ee7b7;
+}
+.import-save-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  opacity: 0.85;
+}
+
 /* ------------------------------------------------------------------ themes */
 
 /*
