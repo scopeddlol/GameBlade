@@ -1,20 +1,20 @@
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { gameFiles, games, libraries } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { assertRealPathWithin, resolveWithin } from '../lib/paths.js';
+import {
+  HashPool,
+  RateMeter,
+  defaultHashConcurrency,
+  etaFrom,
+  idleHashProgress,
+  type HashProgress,
+} from './hashing.js';
 import type { Logger } from './metadata/service.js';
 
-export interface ChecksumProgress {
-  gameId: string | null;
-  state: 'idle' | 'hashing' | 'error';
-  processed: number;
-  total: number;
-  currentFile: string | null;
-  error: string | null;
-}
+/** What the integrity pass is doing, in the same shape the chunk pass reports. */
+export type ChecksumProgress = HashProgress;
 
 /**
  * Computes SHA-256 for a game's files so the desktop client can verify what it
@@ -22,31 +22,49 @@ export interface ChecksumProgress {
  *
  * Hashing is deliberately opt-in per game rather than part of a scan: it reads
  * every byte in the library, which is far too expensive to do automatically for
- * a multi-terabyte archive that is usually only browsed.
+ * a multi-terabyte archive that is usually only browsed. What it does not have
+ * to be is sequential — the files are read several at a time, on worker threads
+ * where there are any, so the pass is limited by the disk rather than by one
+ * core of one process.
  */
 export class ChecksumService {
-  private progress: ChecksumProgress = {
-    gameId: null,
-    state: 'idle',
-    processed: 0,
-    total: 0,
-    currentFile: null,
-    error: null,
-  };
+  private progress: ChecksumProgress = idleHashProgress();
 
   private running: Promise<void> | null = null;
+
+  private readonly concurrency: number;
+  private readonly pool: HashPool;
+  private readonly rate = new RateMeter();
 
   constructor(
     private readonly db: Db,
     private readonly logger: Logger,
-  ) {}
+    concurrency = defaultHashConcurrency(),
+  ) {
+    this.concurrency = Math.max(1, concurrency);
+    this.pool = new HashPool(this.concurrency, (error) =>
+      this.logger.warn({ err: error }, 'a hashing worker stopped'),
+    );
+  }
 
   getProgress(): ChecksumProgress {
-    return { ...this.progress };
+    const remaining = Math.max(0, this.progress.bytesTotal - this.progress.bytesProcessed);
+    const bytesPerSecond = this.progress.state === 'hashing' ? this.rate.rate() : 0;
+    return {
+      ...this.progress,
+      bytesPerSecond,
+      etaSeconds: this.progress.state === 'hashing' ? etaFrom(remaining, bytesPerSecond) : null,
+      currentFiles: [...this.progress.currentFiles],
+    };
   }
 
   get isRunning(): boolean {
     return this.running !== null;
+  }
+
+  /** Releases the worker threads. Called when the server shuts down. */
+  async close(): Promise<void> {
+    await this.pool.close();
   }
 
   /**
@@ -100,24 +118,27 @@ export class ChecksumService {
         : files.filter((file) => file.sha256 === null);
 
     this.progress = {
+      ...idleHashProgress(),
       gameId,
+      gameTitle: row.game.title,
       state: 'hashing',
-      processed: 0,
       total: pending.length,
-      currentFile: null,
-      error: null,
+      bytesTotal: pending.reduce((sum, file) => sum + file.sizeBytes, 0),
+      startedAt: new Date().toISOString(),
+      concurrency: this.concurrency,
+      threaded: this.pool.threaded,
     };
 
     const gameRoot = resolveWithin(row.libraryPath, row.game.relPath);
 
-    for (const file of pending) {
-      this.progress = { ...this.progress, currentFile: file.relPath };
+    const hashOne = async (file: (typeof pending)[number]): Promise<void> => {
+      this.openFile(file.relPath);
 
       try {
         const candidate =
           row.game.kind === 'archive' ? gameRoot : resolveWithin(gameRoot, file.relPath);
         const absolute = await assertRealPathWithin(row.libraryPath, candidate);
-        const digest = await hashFile(absolute);
+        const digest = await this.pool.whole(absolute, (bytes) => this.readBytes(bytes));
 
         if (verify) {
           this.db
@@ -144,24 +165,56 @@ export class ChecksumService {
         this.logger.warn({ err: error, file: file.relPath }, 'could not hash file');
       }
 
-      this.progress = { ...this.progress, processed: this.progress.processed + 1 };
-    }
+      this.closeFile(file.relPath);
+    };
+
+    await runWithConcurrency(pending, this.concurrency, hashOne);
 
     this.progress = {
       ...this.progress,
       state: 'idle',
+      currentFiles: [],
       currentFile: null,
+      bytesPerSecond: 0,
+      etaSeconds: null,
     };
+  }
+
+  private openFile(relPath: string): void {
+    const currentFiles = [...this.progress.currentFiles, relPath];
+    this.progress = { ...this.progress, currentFiles, currentFile: currentFiles[0] ?? null };
+  }
+
+  private closeFile(relPath: string): void {
+    const currentFiles = this.progress.currentFiles.filter((name) => name !== relPath);
+    this.progress = {
+      ...this.progress,
+      currentFiles,
+      currentFile: currentFiles[0] ?? null,
+      processed: this.progress.processed + 1,
+    };
+  }
+
+  private readBytes(bytes: number): void {
+    this.rate.add(bytes);
+    this.progress = { ...this.progress, bytesProcessed: this.progress.bytesProcessed + bytes };
   }
 }
 
-function hashFile(absolutePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = createHash('sha256');
-    // Streamed so a 50 GB file never lands in memory.
-    const stream = createReadStream(absolutePath, { highWaterMark: 1024 * 1024 });
-    stream.on('data', (chunk) => hash.update(chunk));
-    stream.on('error', reject);
-    stream.on('end', () => resolve(hash.digest('hex')));
+/** Runs `fn` over every item, `limit` at a time. */
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      await fn(items[index] as T);
+    }
   });
+  await Promise.all(workers);
 }

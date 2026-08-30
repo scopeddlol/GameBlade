@@ -164,6 +164,11 @@ export function LibraryTab({
           unlockedCount: 0,
           hasLaunchRule: false,
           hasSaveRule: false,
+          // Offline, whether the server could serve it is unknowable and
+          // beside the point: this list exists so installed games can be
+          // launched, and every entry in it is already on this disk.
+          availability: 'ready',
+          availabilityNote: null,
         }))
       : [];
 
@@ -251,7 +256,7 @@ export function LibraryTab({
           type="button"
           className="btn btn-ghost"
           onClick={() => setImporting(true)}
-          title="Link games you already have on this PC instead of downloading them again"
+          title="Find games and saves already on this PC — the way back after a reinstall"
         >
           <FolderSearch size={15} aria-hidden />
           Import

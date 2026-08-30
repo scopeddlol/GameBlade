@@ -15,6 +15,7 @@ import {
   type DownloadManifest,
   type LocalGameMatch,
   type GameFileEntry,
+  type SaveRule,
   MESH_CHUNK_BYTES,
 } from '@gameblade/shared';
 import { eq, isNull } from 'drizzle-orm';
@@ -121,6 +122,15 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     if (!game) throw ApiError.notFound('Game not found');
     if (game.missingAt) {
       throw ApiError.gone('This game is no longer present on disk');
+    }
+
+    // The store already shows this one as coming soon rather than offering a
+    // button, so reaching here means a stale page or a scripted client. Saying
+    // exactly what is missing beats the ENOENT or empty-sources failure that
+    // used to happen several minutes into a download.
+    const availability = catalog.availabilityOf(game.id);
+    if (availability.state !== 'ready') {
+      throw ApiError.conflict(availability.note ?? 'This game cannot be installed yet');
     }
 
     const files = db.select().from(gameFiles).where(eq(gameFiles.gameId, id)).all();
@@ -275,6 +285,16 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
       .where(isNull(games.missingAt))
       .all();
 
+    // Save rules for the whole catalog, in one pass for the same reason the
+    // titles are: the importer wants to know where every match keeps its saves,
+    // and a query per candidate would undo the point of batching at all.
+    const saveRules = new Map<string, SaveRule>();
+    for (const row of db.select().from(gameSaveRules).all()) {
+      // One rule per game is what the editor writes; if an older database has
+      // two, the first is the one every other reader here takes.
+      if (!saveRules.has(row.gameId)) saveRules.set(row.gameId, toSaveRule(row));
+    }
+
     const results: LocalGameMatch[] = input.names.map((name) => {
       // A folder is named the way a release is named — version tags, repack
       // group, bracketed junk — so it goes through the same parser the
@@ -290,7 +310,8 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
         }))
         .filter((candidate) => candidate.score >= input.threshold)
         .sort((a, b) => b.score - a.score)
-        .slice(0, input.limit);
+        .slice(0, input.limit)
+        .map((candidate) => ({ ...candidate, saveRule: saveRules.get(candidate.gameId) ?? null }));
 
       return { name, matches: scored };
     });

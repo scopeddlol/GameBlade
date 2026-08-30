@@ -900,6 +900,93 @@ async fn scan_install_candidates(
         .map_err(|err| AppError::Other(format!("Could not scan that folder: {err}")))
 }
 
+/// What one import scan looked at, and what it found.
+///
+/// The roots travel back with the candidates because the whole point of the
+/// re-import path is that it runs over the folders this client already knows
+/// about — and somebody staring at an empty result needs to know *which*
+/// folders were searched before they can tell "nothing there" from "you looked
+/// in the wrong place".
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportScan {
+    roots: Vec<ImportRoot>,
+    candidates: Vec<InstallCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportRoot {
+    path: PathBuf,
+    /// False for a configured folder that is not on this machine any more.
+    exists: bool,
+    /// Folders offered from this root, so a dead drive is obvious in the list.
+    found: usize,
+}
+
+/// Scans the mapped game folders — or ones named explicitly — for candidates.
+///
+/// The re-import counterpart to `scan_install_candidates`. Same walk, but it
+/// reports the roots alongside the results and it scans every configured
+/// storage location by default, which is what somebody who lost their library
+/// and wants it back is asking for.
+#[tauri::command]
+async fn scan_for_import(
+    state: State<'_, AppState>,
+    roots: Option<Vec<String>>,
+) -> AppResult<ImportScan> {
+    let roots: Vec<PathBuf> = match roots {
+        Some(paths) if !paths.is_empty() => paths.into_iter().map(PathBuf::from).collect(),
+        _ => state.settings.read().await.all_install_dirs(),
+    };
+
+    // Walking several drives is slow and fully synchronous, so it goes to the
+    // blocking pool rather than stalling every other command.
+    tokio::task::spawn_blocking(move || {
+        let mut described = Vec::with_capacity(roots.len());
+        let mut candidates: Vec<InstallCandidate> = Vec::new();
+
+        for root in &roots {
+            // Scanned one root at a time so each can be counted separately;
+            // `scan_for_games` already de-duplicates within a root, and the
+            // pass below removes anything two roots both reached.
+            let found = install::scan_for_games(std::slice::from_ref(root));
+            described.push(ImportRoot {
+                path: root.clone(),
+                exists: root.is_dir(),
+                found: found.len(),
+            });
+            candidates.extend(found);
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        candidates.retain(|candidate| seen.insert(candidate.path.clone()));
+        candidates.sort_by_cached_key(|candidate| candidate.name.to_lowercase());
+
+        ImportScan {
+            roots: described,
+            candidates,
+        }
+    })
+    .await
+    .map_err(|err| AppError::Other(format!("Could not scan those folders: {err}")))
+}
+
+/// Looks for a save on this machine, without asking the server anything.
+///
+/// The import list needs this before a game is linked — and before linking,
+/// there is no registry entry for `save_status` to resolve an install folder
+/// from, so the folder is passed in. A save found here is the answer to the
+/// question that actually matters to somebody rebuilding a lost library: is my
+/// progress still on this disk?
+#[tauri::command]
+async fn inspect_local_save(rule: SaveRule, install_dir: String) -> AppResult<Option<LocalSave>> {
+    let root = PathBuf::from(install_dir);
+    tokio::task::spawn_blocking(move || saves::inspect(&rule, &root))
+        .await
+        .map_err(|err| AppError::Other(format!("Could not read the save folder: {err}")))?
+}
+
 /// Registers a folder already on disk as an installed game.
 ///
 /// The counterpart to `finish_install` for a copy the user obtained some other
@@ -1317,6 +1404,64 @@ async fn upload_media(
         .await
 }
 
+/// The largest pasted image the client will send.
+///
+/// A clipboard image crosses the IPC bridge as base64 and is held in memory
+/// twice on the way through. Eight megabytes is far more than a screenshot of
+/// any monitor and small enough that the round trip is not the thing somebody
+/// notices.
+const MAX_PASTED_BYTES: usize = 8 * 1024 * 1024;
+
+/// Uploads an image straight from the clipboard, without it touching the disk.
+///
+/// Pasting a picture into a message used to mean saving it somewhere first and
+/// picking it with the file dialog, which leaves a copy of whatever was on the
+/// clipboard — a screenshot of a password manager, somebody else's private
+/// message — in a folder nobody remembers to clear. The bytes come from the
+/// webview's paste event and go straight to the server.
+#[tauri::command]
+async fn upload_media_bytes(
+    state: State<'_, AppState>,
+    data: String,
+    content_type: String,
+    kind: String,
+) -> AppResult<serde_json::Value> {
+    use base64::Engine as _;
+
+    // Checked before decoding: base64 is four characters per three bytes, so
+    // this refuses an oversized paste without first allocating it.
+    if data.len() / 4 * 3 > MAX_PASTED_BYTES {
+        return Err(AppError::Other(
+            "That image is too large to paste — save it and attach it instead".to_string(),
+        ));
+    }
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|_| AppError::Other("That paste could not be read".to_string()))?;
+
+    if bytes.is_empty() {
+        return Err(AppError::Other("There was nothing to paste".to_string()));
+    }
+
+    // An allow-list rather than "whatever the clipboard called it": the value
+    // becomes the Content-Type on a request the server stores and later serves
+    // back, and a type nobody checked is a type a browser will guess at.
+    let content_type = match content_type.as_str() {
+        "image/png" => "image/png",
+        "image/jpeg" | "image/jpg" => "image/jpeg",
+        "image/webp" => "image/webp",
+        "image/gif" => "image/gif",
+        other => return Err(AppError::Other(format!("GameBlade cannot paste a {other}"))),
+    };
+
+    state
+        .client()
+        .await?
+        .upload_bytes(&format!("/media?kind={kind}"), bytes, content_type)
+        .await
+}
+
 /* ------------------------------------------------------------------ helpers */
 
 fn content_type_for(path: &std::path::Path) -> Option<&'static str> {
@@ -1491,6 +1636,8 @@ pub fn run() {
             list_installed,
             finish_install,
             scan_install_candidates,
+            scan_for_import,
+            inspect_local_save,
             link_installed,
             unlink_installed,
             open_install_folder,
@@ -1503,6 +1650,7 @@ pub fn run() {
             push_save,
             pull_save,
             upload_media,
+            upload_media_bytes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GameBlade");

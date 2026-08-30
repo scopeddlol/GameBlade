@@ -1069,6 +1069,28 @@ textarea::placeholder {
   width: 100%;
 }
 
+/*
+ * The stand-in where Install would be on a game the server cannot serve yet.
+ *
+ * Deliberately not a disabled button: a disabled control reads as "you did
+ * something wrong", and this is the archive's state rather than the player's.
+ * It is a label, it carries the reason as a tooltip, and it does not take the
+ * pointer.
+ */
+.coming-soon {
+  cursor: default;
+  opacity: 0.75;
+  border-style: dashed;
+}
+.coming-soon:hover {
+  background: transparent;
+}
+.coming-soon-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .result-count {
   margin: 0;
 }
@@ -2513,6 +2535,65 @@ textarea::placeholder {
   flex-shrink: 0;
   font-size: 12px;
   color: #6ee7b7;
+}
+
+/* The folders the import scan searched, listed above the results so an empty
+   result is obviously "nothing there" rather than "you looked somewhere else". */
+.import-roots {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+.import-roots li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.import-roots .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-roots .missing-root {
+  color: #fbbf24;
+}
+
+.import-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--ink-700);
+  border-radius: 10px;
+  background: var(--ink-850);
+}
+.import-toggle > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* A save found beside a candidate. Green because it is the good news on this
+   screen: the progress somebody thought they had lost is still on the disk. */
+.import-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #6ee7b7;
+}
+.import-save-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  opacity: 0.85;
 }
 
 /* ------------------------------------------------------------------ themes */
@@ -4536,6 +4617,220 @@ textarea::placeholder {
   height: 100%;
 }
 
+/* ------------------------------------------- replies, reactions and mutes */
+
+/* The quoted line above a reply. Bordered on the leading edge rather than
+   boxed: it belongs to the bubble it sits in, and a second box inside a
+   bubble reads as a separate message. */
+.message-quote {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding-left: 7px;
+  border-left: 2px solid color-mix(in srgb, var(--blade-500) 60%, transparent);
+  font-size: 11.5px;
+  line-height: 1.4;
+  opacity: 0.9;
+}
+.message-quote strong {
+  flex-shrink: 0;
+}
+.message-quote > .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.reaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--ink-700);
+  border-radius: 999px;
+  background: var(--ink-850);
+  color: var(--ink-300);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.reaction-chip:hover {
+  border-color: var(--ink-600);
+}
+/* Yours is filled, so a glance says whether you are in the count. */
+.reaction-chip.mine {
+  border-color: var(--blade-500);
+  background: color-mix(in srgb, var(--blade-500) 22%, var(--ink-850));
+  color: var(--ink-100);
+}
+
+/* The emoji strip above the items in a message's right-click menu. */
+.context-menu-header {
+  display: flex;
+  gap: 2px;
+  padding: 4px 4px 6px;
+  border-bottom: 1px solid var(--ink-800);
+  margin-bottom: 4px;
+}
+.reaction-picker {
+  display: flex;
+  gap: 2px;
+}
+.reaction-pick {
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.reaction-pick:hover {
+  background: var(--ink-800);
+}
+.reaction-pick.mine {
+  border-color: var(--blade-500);
+  background: color-mix(in srgb, var(--blade-500) 22%, transparent);
+}
+
+/* A muted person's message, folded to one line. Full width rather than a
+   bubble: it is a gap in the conversation, not a thing somebody said. */
+.message-row.muted-row {
+  max-width: 100%;
+}
+.message-muted {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px dashed var(--ink-700);
+  border-radius: 999px;
+  background: none;
+  color: var(--ink-500);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.message-muted:hover {
+  color: var(--ink-300);
+  border-color: var(--ink-600);
+}
+
+/* A game recommended into a conversation. */
+.message-game {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+  padding: 7px;
+  border: 1px solid var(--ink-700);
+  border-radius: 10px;
+  background: var(--ink-850);
+}
+.message-game-cover {
+  width: 40px;
+  height: 54px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  object-fit: cover;
+}
+.message-game-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.message-game-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-game-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.share-game-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--ink-850);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.share-game-option:hover {
+  border-color: var(--ink-600);
+}
+.share-game-option > span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.share-game-option strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-game-cover {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+/* The muted-people list in Settings → Privacy. */
+.settings-subsection {
+  padding-top: 10px;
+  border-top: 1px solid var(--ink-800);
+}
+.settings-subheading {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-400);
+}
+.muted-people {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.muted-people li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--ink-850);
+}
+
 /* --------------------------------------------------------- the composer */
 
 /* Pinned to the bottom edge of the window, always the same height until
@@ -4591,6 +4886,31 @@ textarea::placeholder {
   border-radius: var(--radius-sm);
   background: var(--ink-850);
   font-size: 11px;
+}
+/* A pasted image has no filename to show, so it shows itself. */
+.composer-pasted img {
+  width: 26px;
+  height: 20px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
+/* The strip above the composer while a reply is being written. */
+.composer-reply {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-left: 2px solid var(--blade-500);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--ink-850);
+}
+.composer-reply > .muted {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .member-verify-list,

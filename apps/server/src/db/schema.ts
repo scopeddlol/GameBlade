@@ -6,6 +6,7 @@ import {
   sqliteTable,
   text,
   uniqueIndex,
+  type AnySQLiteColumn,
 } from 'drizzle-orm/sqlite-core';
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
@@ -1356,8 +1357,70 @@ export const messages = sqliteTable(
      * gone — one that missed the event would otherwise go on showing it.
      */
     deletedAt: text('deleted_at'),
+    /**
+     * The message this one is answering.
+     *
+     * `set null` rather than cascade: a reply is still a message somebody
+     * wrote, and losing it because the thing it answered was withdrawn would
+     * delete somebody else's words on the author's behalf.
+     */
+    replyToId: text('reply_to_id').references((): AnySQLiteColumn => messages.id, {
+      onDelete: 'set null',
+    }),
+    /** A game recommended into the conversation, shown as a card. */
+    sharedGameId: text('shared_game_id').references(() => games.id, { onDelete: 'set null' }),
   },
-  (t) => [index('messages_conversation_idx').on(t.conversationId, t.createdAt)],
+  (t) => [
+    index('messages_conversation_idx').on(t.conversationId, t.createdAt),
+    index('messages_reply_idx').on(t.replyToId),
+  ],
+);
+
+/**
+ * One person's reaction to one message.
+ *
+ * Keyed on all three columns so reacting twice with the same emoji is a no-op
+ * at the database level rather than something every caller has to remember.
+ */
+export const messageReactions = sqliteTable(
+  'message_reactions',
+  {
+    messageId: text('message_id')
+      .notNull()
+      .references(() => messages.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    emoji: text('emoji').notNull(),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [
+    primaryKey({ columns: [t.messageId, t.userId, t.emoji] }),
+    index('message_reactions_message_idx').on(t.messageId),
+  ],
+);
+
+/**
+ * Somebody whose messages this account would rather not see.
+ *
+ * Deliberately not blocking. A block is a statement about a relationship and
+ * it ends the friendship; muting is a statement about a feed — the group chat
+ * carries on, everyone else in it is unaffected, and the muted person is never
+ * told. Kept per-account rather than per-conversation because "I do not want
+ * to read this person" is a fact about the person, not about one room.
+ */
+export const mutedUsers = sqliteTable(
+  'muted_users',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    mutedUserId: text('muted_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: text('created_at').notNull().default(now),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.mutedUserId] })],
 );
 
 export const messageMedia = sqliteTable(
@@ -1380,3 +1443,4 @@ export const messageMedia = sqliteTable(
 export type Conversation = typeof conversations.$inferSelect;
 export type ConversationMember = typeof conversationMembers.$inferSelect;
 export type Message = typeof messages.$inferSelect;
+export type MessageReaction = typeof messageReactions.$inferSelect;

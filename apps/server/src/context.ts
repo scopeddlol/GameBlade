@@ -131,8 +131,11 @@ export function createContext(
   const discord = new DiscordService(db, settings, config.basePath, logger);
   const backups = new BackupService(config.dataDir, sqlite);
   const scanner = new ScannerService(db, metadata, logger);
-  const checksums = new ChecksumService(db, logger);
-  const chunks = new ChunkService(db, logger);
+  // Zero is the "work it out" default, and `undefined` is what the services
+  // read as that — passing 0 straight through would clamp to one file at a time.
+  const hashConcurrency = config.hashConcurrency > 0 ? config.hashConcurrency : undefined;
+  const checksums = new ChecksumService(db, logger, hashConcurrency);
+  const chunks = new ChunkService(db, logger, hashConcurrency);
   const mesh = new MeshService(db, logger);
   const catalogIngest = new CatalogIngestService(db, logger);
   const nodeStatus = new NodeStatusService(db, config, scanner, chunks);
@@ -156,7 +159,7 @@ export function createContext(
   const friends = new FriendService(db, profiles, notifications, activity, realtime);
   const media = new MediaStore(db, config, logger);
   const social = new SocialService(db, config, profiles, friends, media, notifications, activity);
-  const messaging = new MessagingService(db, profiles, friends, media, realtime);
+  const messaging = new MessagingService(db, config, profiles, friends, media, realtime);
   // After profiles and media: `/profile` reads both.
   const discordBot = new DiscordBotService(db, settings, discord, profiles, media, logger);
   const playtime = new PlaytimeService(db, config, presence, activity);
@@ -178,6 +181,7 @@ export function createContext(
     presence,
     activity,
     gameRequests,
+    mesh,
   );
 
   const cookiePath = config.basePath === '' ? '/' : config.basePath;

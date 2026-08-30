@@ -1,9 +1,35 @@
 import type { GameSummary } from '@gameblade/shared';
 import clsx from 'clsx';
-import { Check, Download, Play, Trophy } from 'lucide-react';
+import { Check, Clock, Download, Play, Trophy } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { formatBytes, formatPlaytime, formatYear } from '../lib/format.js';
 import { Artwork, GameCapabilities } from './ui.js';
+
+/**
+ * Whether the primary button should be an action or an explanation.
+ *
+ * A game the server cannot serve yet is still worth showing — the archive is
+ * the point of a store — but offering "Install" on one is how a player ends up
+ * staring at an error five minutes into a download. `add` stays live either
+ * way: putting something in your library is a bookmark, and bookmarking a game
+ * that is not ready yet is exactly what you would want to do with it.
+ */
+export function isComingSoon(game: GameSummary): boolean {
+  return game.availability === 'coming-soon';
+}
+
+/** The button shown in place of Install while a game is not ready. */
+function ComingSoon({ game, className }: { game: GameSummary; className?: string }) {
+  return (
+    <span
+      className={clsx('btn btn-ghost coming-soon', className)}
+      title={game.availabilityNote ?? 'Not ready to install yet.'}
+    >
+      <Clock size={14} aria-hidden />
+      Coming soon
+    </span>
+  );
+}
 
 /**
  * The poster tile used across Home, Library and Store.
@@ -45,7 +71,18 @@ export function GameCard({
       >
         <Artwork path={game.art.cover} alt={game.title} className="cover" />
 
-        {game.unlockedCount > 0 ? (
+        {/* On the poster rather than only on the button, because the Store's
+            button says "Add to library" — which stays available — and the
+            player still needs to know before they open it. */}
+        {isComingSoon(game) ? (
+          <span
+            className="card-chip coming-soon-chip"
+            title={game.availabilityNote ?? 'Not ready to install yet.'}
+          >
+            <Clock size={12} aria-hidden />
+            Coming soon
+          </span>
+        ) : game.unlockedCount > 0 ? (
           <span className="card-chip" title="Achievements unlocked">
             <Trophy size={12} aria-hidden />
             {game.unlockedCount}/{game.achievementCount}
@@ -72,7 +109,9 @@ export function GameCard({
         />
       </div>
 
-      {onPrimary && primaryLabel ? (
+      {onPrimary && primaryLabel === 'install' && isComingSoon(game) ? (
+        <ComingSoon game={game} className="card-cta" />
+      ) : onPrimary && primaryLabel ? (
         <button
           type="button"
           className={clsx('btn', primaryLabel === 'play' ? 'btn-primary' : 'btn-ghost', 'card-cta')}
@@ -193,11 +232,19 @@ export function GameRow({
         </span>
 
         <span className="game-row-meta">
-          {installed ? <span className="row-chip installed">Installed</span> : null}
+          {installed ? (
+            <span className="row-chip installed">Installed</span>
+          ) : isComingSoon(game) ? (
+            <span className="row-chip coming-soon-chip" title={game.availabilityNote ?? undefined}>
+              Coming soon
+            </span>
+          ) : null}
         </span>
       </button>
 
-      {onPrimary && primaryLabel ? (
+      {onPrimary && primaryLabel === 'install' && isComingSoon(game) ? (
+        <ComingSoon game={game} />
+      ) : onPrimary && primaryLabel ? (
         <button
           type="button"
           className={clsx('btn', primaryLabel === 'play' ? 'btn-primary' : 'btn-ghost')}
@@ -277,6 +324,11 @@ export function GameDetailedRow({
           </button>
           {installed ? <span className="row-chip installed">Installed</span> : null}
           {game.isMissing ? <span className="row-chip missing-chip">Missing</span> : null}
+          {!game.isMissing && isComingSoon(game) ? (
+            <span className="row-chip coming-soon-chip" title={game.availabilityNote ?? undefined}>
+              Coming soon
+            </span>
+          ) : null}
         </div>
 
         <p className="game-detailed-facts muted small">{facts.join(' · ')}</p>
@@ -300,27 +352,31 @@ export function GameDetailedRow({
 
       {onPrimary && primaryLabel ? (
         <div className="game-detailed-action">
-          <button
-            type="button"
-            className={clsx('btn', primaryLabel === 'play' ? 'btn-primary' : 'btn-ghost')}
-            onClick={() => onPrimary(game)}
-            disabled={busy}
-          >
-            {primaryLabel === 'play' ? (
-              <>
-                <Play size={14} aria-hidden /> Play
-              </>
-            ) : primaryLabel === 'install' ? (
-              <>
-                <Download size={14} aria-hidden /> {installed ? 'Installed' : 'Install'}
-              </>
-            ) : (
-              <>
-                {game.inLibrary ? <Check size={14} aria-hidden /> : null}
-                {game.inLibrary ? 'In library' : 'Add'}
-              </>
-            )}
-          </button>
+          {primaryLabel === 'install' && isComingSoon(game) ? (
+            <ComingSoon game={game} />
+          ) : (
+            <button
+              type="button"
+              className={clsx('btn', primaryLabel === 'play' ? 'btn-primary' : 'btn-ghost')}
+              onClick={() => onPrimary(game)}
+              disabled={busy}
+            >
+              {primaryLabel === 'play' ? (
+                <>
+                  <Play size={14} aria-hidden /> Play
+                </>
+              ) : primaryLabel === 'install' ? (
+                <>
+                  <Download size={14} aria-hidden /> {installed ? 'Installed' : 'Install'}
+                </>
+              ) : (
+                <>
+                  {game.inLibrary ? <Check size={14} aria-hidden /> : null}
+                  {game.inLibrary ? 'In library' : 'Add'}
+                </>
+              )}
+            </button>
+          )}
         </div>
       ) : null}
     </div>

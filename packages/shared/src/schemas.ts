@@ -816,6 +816,38 @@ export const applySaveSuggestionsSchema = z.object({
 });
 export type ApplySaveSuggestionsInput = z.infer<typeof applySaveSuggestionsSchema>;
 
+/**
+ * Launch rules confirmed in bulk from the Launch Rules tab.
+ *
+ * An empty `executable` clears the rule rather than storing a blank one: an
+ * empty string is what the client would try to run, and "no rule" is what the
+ * operator means when they empty the field.
+ */
+export const applyLaunchRulesSchema = z.object({
+  rules: z
+    .array(
+      z.object({
+        gameId: z.string().trim().min(1).max(64),
+        executable: z.string().trim().max(500),
+        args: z.string().trim().max(500).nullable().optional(),
+        workingDir: z.string().trim().max(500).nullable().optional(),
+      }),
+    )
+    .min(1)
+    .max(2000),
+});
+export type ApplyLaunchRulesInput = z.infer<typeof applyLaunchRulesSchema>;
+
+/** What the Launch Rules tab is asking to see. */
+export const launchRuleQuerySchema = z.object({
+  search: z.string().trim().max(120).optional(),
+  /** `missing` is the default because it is the work; `set` is the review pass. */
+  status: z.enum(['missing', 'set', 'all']).default('missing'),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type LaunchRuleQuery = z.infer<typeof launchRuleQuerySchema>;
+
 /** One achievement rule, as an administrator writes it. */
 export const achievementRuleSchema = z.object({
   achievementKey: z.string().trim().min(1).max(120),

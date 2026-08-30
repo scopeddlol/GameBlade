@@ -5,7 +5,7 @@ import { MULTI_LIBRARY_ROOT, type Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import { gameFiles, games, libraries } from '../db/schema.js';
 import { VERSION } from '../lib/version.js';
-import type { SweepProgress } from './chunks.js';
+import type { ChunkProgress, SweepProgress } from './chunks.js';
 
 /**
  * What the node agent beside this process wrote about itself.
@@ -68,6 +68,14 @@ export interface NodeStatusSnapshot {
   scanning: boolean;
   scan: ScanProgress;
   hashing: SweepProgress;
+  /**
+   * The game being hashed right now, file by file.
+   *
+   * The sweep above counts games; this says which one and which of its files
+   * are open, which is the difference between a bar that moves once an hour
+   * and a page you can tell is alive.
+   */
+  hashingGame: ChunkProgress;
   lastReport: ReportAttempt | null;
   startedAt: string;
 }
@@ -110,7 +118,10 @@ export class NodeStatusService {
     private readonly db: Db,
     private readonly config: Config,
     private readonly scanner: { readonly isRunning: boolean; getProgress(): ScanProgress },
-    private readonly chunks: { getSweepProgress(): SweepProgress },
+    private readonly chunks: {
+      getSweepProgress(): SweepProgress;
+      getProgress(): ChunkProgress;
+    },
   ) {}
 
   /** Called by the reporter loop after every attempt, successful or not. */
@@ -203,6 +214,7 @@ export class NodeStatusService {
       scanning: this.scanner.isRunning,
       scan: this.scanner.getProgress(),
       hashing: this.chunks.getSweepProgress(),
+      hashingGame: this.chunks.getProgress(),
       lastReport: this.lastReport,
       startedAt: this.startedAt,
     };

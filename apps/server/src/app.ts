@@ -76,6 +76,10 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
 
   app.addHook('onClose', async () => {
     context.realtime.stop();
+    // Hashing runs on worker threads, and a live worker keeps the process
+    // alive: without this a clean shutdown waits for a pass that reads a
+    // multi-terabyte archive to finish.
+    await Promise.all([context.chunks.close(), context.checksums.close()]);
     // Closed cleanly rather than left to time out, so the bot goes offline in
     // Discord the moment the server does instead of lingering as a ghost.
     context.discordBot.shutdown();

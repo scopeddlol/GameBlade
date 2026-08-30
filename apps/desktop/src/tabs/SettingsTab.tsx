@@ -45,6 +45,7 @@ import {
   SectionHeader,
   CardSkeleton,
 } from '../components/ui.js';
+import { useMuteMutations, useMutedUsers } from '../hooks/useMessages.js';
 import { useSession } from '../hooks/useSession.js';
 import { themeStyle } from '../hooks/useTheme.js';
 import { formatBytes, formatRelative } from '../lib/format.js';
@@ -241,6 +242,8 @@ export function SettingsTab() {
                 checked={draft.minimizeOnLaunch}
                 onChange={(minimizeOnLaunch) => update({ minimizeOnLaunch })}
               />
+
+              <MutedPeople />
             </section>
           ) : null}
 
@@ -859,6 +862,50 @@ function SaveUsage() {
       {data.usage.versions} versions kept)
       {data.quotaBytes > 0 ? ` of ${formatBytes(data.quotaBytes)}` : ''}.
     </p>
+  );
+}
+
+/**
+ * People whose messages this account has folded away.
+ *
+ * Muting happens where it is wanted — right-clicking what somebody wrote — but
+ * it has to be undoable somewhere findable, or it is a setting that can only be
+ * reversed by going looking for a message from a person you stopped seeing.
+ */
+function MutedPeople() {
+  const mutedQuery = useMutedUsers();
+  const mute = useMuteMutations();
+  const muted = mutedQuery.data ?? [];
+
+  return (
+    <div className="settings-subsection">
+      <h3 className="settings-subheading">Muted people</h3>
+      {muted.length === 0 ? (
+        <p className="muted small">
+          Nobody. Right-click anything somebody wrote in Messages to mute them — their messages fold
+          away and stop counting towards your unread badge. They are never told.
+        </p>
+      ) : (
+        <ul className="muted-people">
+          {muted.map((person) => (
+            <li key={person.userId}>
+              <span>
+                <strong>{person.displayName}</strong>
+                <span className="muted small"> @{person.username}</span>
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={mute.isPending}
+                onClick={() => mute.mutate({ userId: person.userId, muted: false })}
+              >
+                Unmute
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

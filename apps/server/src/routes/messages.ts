@@ -2,6 +2,7 @@ import {
   addMembersSchema,
   createConversationSchema,
   messageQuerySchema,
+  reactToMessageSchema,
   renameConversationSchema,
   sendMessageSchema,
 } from '@gameblade/shared';
@@ -85,6 +86,42 @@ export async function messageRoutes(app: FastifyInstance): Promise<void> {
     const { messageId } = request.params as { messageId: string };
     messaging.remove(context.user.id, messageId);
     return { ok: true };
+  });
+
+  /**
+   * Adds a reaction, or takes it back when it is already there.
+   *
+   * One route rather than a POST and a DELETE: the gesture is one click on an
+   * emoji that is either lit or not, and splitting it would make the client
+   * decide which — from state that may be stale by the time the click lands.
+   */
+  app.post('/messages/:messageId/reactions', async (request) => {
+    const context = requireUser(request);
+    const { messageId } = request.params as { messageId: string };
+    const input = reactToMessageSchema.parse(request.body);
+    return { reactions: messaging.react(context.user.id, messageId, input.emoji) };
+  });
+
+  /* -------------------------------------------------------------- muting */
+
+  /** Who this account has muted, for the list in settings. */
+  app.get('/messages/mutes', async (request) => {
+    const context = requireUser(request);
+    return { muted: messaging.listMuted(context.user.id) };
+  });
+
+  app.put('/messages/mutes/:userId', async (request) => {
+    const context = requireUser(request);
+    const { userId } = request.params as { userId: string };
+    messaging.setMuted(context.user.id, userId, true);
+    return { ok: true, muted: true };
+  });
+
+  app.delete('/messages/mutes/:userId', async (request) => {
+    const context = requireUser(request);
+    const { userId } = request.params as { userId: string };
+    messaging.setMuted(context.user.id, userId, false);
+    return { ok: true, muted: false };
   });
 
   /** The badge on the tab. */

@@ -5,7 +5,9 @@ import {
   announcementSchema,
   bugQuerySchema,
   bugTriageSchema,
+  applyLaunchRulesSchema,
   applySaveSuggestionsSchema,
+  launchRuleQuerySchema,
   createInviteSchema,
   clientButtonSchema,
   decideGameRequestSchema,
@@ -35,6 +37,7 @@ import {
   type LandingBlock,
   type ThemePreset,
   type InviteInfo,
+  type LaunchRuleRow,
   type LibraryInfo,
   type PublicUser,
   type ServerSettings,
@@ -49,7 +52,7 @@ import {
   discordTicketSettingsSchema,
   MAX_DISCORD_ATTACHMENT_BYTES,
 } from '@gameblade/shared';
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, like, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -62,6 +65,7 @@ import {
   discordReactionRoles,
   gameAchievementRules,
   gameFiles,
+  gameLaunchRules,
   gameSaveRules,
   games,
   invites,
@@ -73,7 +77,59 @@ import { ApiError } from '../lib/errors.js';
 import { isLikelyGameExecutable, listZipExecutables, sortCandidates } from '../lib/executables.js';
 import { newId, newInviteCode } from '../lib/ids.js';
 import { isoNow } from '../lib/time.js';
+import { toLaunchRule } from './mappers.js';
 import { matchCatalog } from '../services/saveManifest.js';
+
+/**
+ * A game with no usable launch rule.
+ *
+ * A row whose executable is null or empty is worse than no row at all — it
+ * looks set from a distance and launches nothing — so both count as missing,
+ * exactly as the catalog's own `launch-rule` gap filter already does.
+ */
+const GAMES_WITHOUT_LAUNCH_RULE: SQL = sql`NOT EXISTS (SELECT 1 FROM game_launch_rules r
+      WHERE r.game_id = ${games.id} AND r.executable IS NOT NULL AND r.executable <> '')`;
+
+/** How many executables one row offers before the list stops being a help. */
+const MAX_LAUNCH_CANDIDATES = 12;
+
+/**
+ * Which executable to offer for a game, given what is in its folder.
+ *
+ * Name first, size second — the same order the desktop client's own detection
+ * uses, so the suggestion here and the fallback there agree about what a game's
+ * entry point is. Matching the title exactly beats being the biggest binary; a
+ * game shipping a 400 MB launcher beside a 12 MB `Game.exe` is common enough
+ * that size alone gets it wrong.
+ */
+function suggestExecutable(
+  title: string,
+  candidates: Array<{ path: string; sizeBytes: number }>,
+): string | null {
+  if (candidates.length === 0) return null;
+
+  const normalise = (value: string) => value.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  const wanted = normalise(title);
+
+  const named = candidates.find((candidate) => {
+    const stem =
+      candidate.path
+        .split(/[/\\]/)
+        .pop()
+        ?.replace(/\.exe$/i, '') ?? '';
+    return normalise(stem) === wanted;
+  });
+  if (named) return named.path;
+
+  // Shallower wins among equals: a game's entry point sits at the root far
+  // more often than three folders down.
+  const depth = (candidate: { path: string }) => candidate.path.split(/[/\\]/).length;
+  const shallowest = Math.min(...candidates.map(depth));
+  const atTop = candidates.filter((candidate) => depth(candidate) === shallowest);
+
+  // Already sorted largest first, so the head of either list is the answer.
+  return (atTop[0] ?? candidates[0])?.path ?? null;
+}
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
   const {
@@ -559,6 +615,137 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       .filter((file) => isLikelyGameExecutable(file.relPath))
       .map((file) => ({ path: file.relPath, sizeBytes: file.sizeBytes }));
     return { candidates: sortCandidates(candidates) };
+  });
+
+  /**
+   * The Launch Rules tab: every game, what it is set to run, and what it could.
+   *
+   * The candidates come back with the rows on purpose. Setting a launch rule
+   * by hand means knowing what is inside the folder, and an operator doing a
+   * hundred of them from memory will type paths that are subtly wrong — which
+   * nobody discovers until a player presses Play. A folder game's files were
+   * indexed by the last scan, so the whole page costs two queries.
+   *
+   * An archive is the exception: only the zip itself has a `game_files` row, so
+   * listing its executables means opening it. Those rows come back flagged and
+   * fetch their own candidates when the operator opens them.
+   */
+  app.get('/admin/launch-rules', async (request) => {
+    const query = launchRuleQuerySchema.parse(request.query ?? {});
+
+    const conditions: SQL[] = [isNull(games.missingAt)];
+    if (query.search) {
+      const term = `%${query.search.replace(/[%_]/g, '')}%`;
+      const match = or(like(games.title, term), like(games.searchTitle, term));
+      if (match) conditions.push(match);
+    }
+    if (query.status === 'missing') conditions.push(GAMES_WITHOUT_LAUNCH_RULE);
+    if (query.status === 'set') conditions.push(sql`NOT (${GAMES_WITHOUT_LAUNCH_RULE})`);
+
+    const where = and(...conditions);
+
+    const total =
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(games)
+        .where(where)
+        .get()?.n ?? 0;
+
+    const rows = db
+      .select({ id: games.id, title: games.title, kind: games.kind })
+      .from(games)
+      .where(where)
+      .orderBy(asc(games.sortTitle))
+      .limit(query.limit)
+      .offset(query.offset)
+      .all();
+
+    const ids = rows.map((row) => row.id);
+    const rules = new Map(
+      (ids.length === 0
+        ? []
+        : db.select().from(gameLaunchRules).where(inArray(gameLaunchRules.gameId, ids)).all()
+      ).map((row) => [row.gameId, toLaunchRule(row)]),
+    );
+
+    // One query for every candidate on the page. `.exe` is filtered in SQL so
+    // a folder game of ten thousand assets does not travel here to be thrown
+    // away in JavaScript.
+    const byGame = new Map<string, Array<{ path: string; sizeBytes: number }>>();
+    if (ids.length > 0) {
+      for (const file of db
+        .select({
+          gameId: gameFiles.gameId,
+          relPath: gameFiles.relPath,
+          sizeBytes: gameFiles.sizeBytes,
+        })
+        .from(gameFiles)
+        .where(and(inArray(gameFiles.gameId, ids), like(gameFiles.relPath, '%.exe')))
+        .all()) {
+        if (!isLikelyGameExecutable(file.relPath)) continue;
+        const list = byGame.get(file.gameId) ?? [];
+        list.push({ path: file.relPath, sizeBytes: file.sizeBytes });
+        byGame.set(file.gameId, list);
+      }
+    }
+
+    const items: LaunchRuleRow[] = rows.map((row) => {
+      const candidates = sortCandidates(byGame.get(row.id) ?? []).slice(0, MAX_LAUNCH_CANDIDATES);
+      return {
+        gameId: row.id,
+        title: row.title,
+        kind: row.kind,
+        rule: rules.get(row.id) ?? null,
+        candidates,
+        suggestion: suggestExecutable(row.title, candidates),
+        needsArchiveScan: row.kind === 'archive' && candidates.length === 0,
+      };
+    });
+
+    return { items, total, offset: query.offset, limit: query.limit };
+  });
+
+  /** Writes a page of launch rules in one go. */
+  app.post('/admin/launch-rules/apply', async (request) => {
+    const input = applyLaunchRulesSchema.parse(request.body);
+    let applied = 0;
+    let cleared = 0;
+
+    db.transaction((tx) => {
+      for (const entry of input.rules) {
+        const game = tx
+          .select({ id: games.id })
+          .from(games)
+          .where(eq(games.id, entry.gameId))
+          .get();
+        if (!game) continue;
+
+        // One rule per game, as everywhere else: a save replaces rather than
+        // adds, so the client is never left choosing between two.
+        tx.delete(gameLaunchRules).where(eq(gameLaunchRules.gameId, entry.gameId)).run();
+
+        // An empty executable means "no rule", not "run nothing".
+        if (entry.executable === '') {
+          cleared += 1;
+          continue;
+        }
+
+        tx.insert(gameLaunchRules)
+          .values({
+            id: newId('lnr'),
+            gameId: entry.gameId,
+            executable: entry.executable,
+            args: entry.args || null,
+            workingDir: entry.workingDir || null,
+            note: null,
+            createdAt: isoNow(),
+          })
+          .run();
+        applied += 1;
+      }
+    });
+
+    return { applied, cleared };
   });
 
   app.post('/admin/scan/match-pending', async (request, reply) => {

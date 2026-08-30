@@ -1,6 +1,6 @@
 import type { LandingBlock } from './landing.js';
 import type { ChunkRef, MeshSource } from './mesh.js';
-import type { MessageInfo } from './messaging.js';
+import type { MessageInfo, MessageReactionInfo } from './messaging.js';
 import type { ThemePreset, ThemeTokens } from './theme.js';
 import type {
   ACHIEVEMENT_SOURCE,
@@ -103,7 +103,23 @@ export interface GameSummary {
   hasLaunchRule: boolean;
   /** Whether this game's saves are covered by a cloud-sync rule. */
   hasSaveRule: boolean;
+
+  /**
+   * Whether this can actually be installed right now.
+   *
+   * A store that offers a game the server cannot serve is worse than one that
+   * says "not yet": the player picks a drive, waits, and gets an error that
+   * reads like their fault. An entry whose files are still being hashed, or
+   * whose node is offline, is shown as coming soon instead — visible, listed,
+   * and honest about why the button is not there.
+   */
+  availability: GameAvailability;
+  /** Why it is not installable, in words a player can read. Null when ready. */
+  availabilityNote: string | null;
 }
+
+export const GAME_AVAILABILITY = ['ready', 'coming-soon'] as const;
+export type GameAvailability = (typeof GAME_AVAILABILITY)[number];
 
 export interface GameDetail extends GameSummary {
   libraryId: string;
@@ -312,10 +328,54 @@ export interface ClientButton {
  * One folder on a player's machine that might already hold a game from the
  * catalog, offered for linking rather than re-downloading.
  */
+/**
+ * One game as the Launch Rules tab sees it.
+ *
+ * The candidates travel with the row so the page is a list of dropdowns rather
+ * than a list of text fields: an operator setting a hundred launch rules should
+ * be picking from what is actually in each folder, not typing paths from memory
+ * and finding out they were wrong when a player presses Play.
+ */
+export interface LaunchRuleRow {
+  gameId: string;
+  title: string;
+  kind: GameKind;
+  rule: LaunchRule | null;
+  /** Executables found in this game's own files, largest first. */
+  candidates: Array<{ path: string; sizeBytes: number }>;
+  /**
+   * The one to offer, chosen by name first and size second.
+   *
+   * Null where nothing in the folder looks like a game binary.
+   */
+  suggestion: string | null;
+  /**
+   * True for an archive, whose contents are not indexed.
+   *
+   * The zip's central directory has to be read to list its executables, which
+   * is a per-game cost the list will not pay for every row up front — so those
+   * rows fetch their own candidates when they are opened.
+   */
+  needsArchiveScan: boolean;
+}
+
 export interface LocalGameMatch {
   /** The folder name that was searched for. */
   name: string;
-  matches: Array<{ gameId: string; title: string; score: number }>;
+  matches: Array<{
+    gameId: string;
+    title: string;
+    score: number;
+    /**
+     * Where this game keeps its saves, when an administrator has said.
+     *
+     * Carried on the match so the importer can look for a save on disk without
+     * a request per candidate: somebody re-importing a drive is matching a
+     * hundred folders at once, and the whole point is that it happens in one
+     * pass rather than a hundred.
+     */
+    saveRule: SaveRule | null;
+  }>;
 }
 
 /**
@@ -779,6 +839,13 @@ export type RealtimeEvent =
   | { type: 'achievement'; achievement: AchievementProgress }
   | { type: 'message'; message: MessageInfo }
   | { type: 'message-removed'; conversationId: string; messageId: string }
+  /** Reactions changed on one message — the row redraws, the thread does not. */
+  | {
+      type: 'message-reactions';
+      conversationId: string;
+      messageId: string;
+      reactions: MessageReactionInfo[];
+    }
   /** Membership, the name, or the keys changed — refetch the conversation. */
   | { type: 'conversation'; conversationId: string }
   | { type: 'pong'; serverTime: string };

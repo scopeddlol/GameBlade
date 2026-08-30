@@ -39,10 +39,17 @@ interface Position {
 export function ContextMenu({
   position,
   items,
+  header,
   onClose,
 }: {
   position: Position;
   items: MenuItem[];
+  /**
+   * A strip above the items — the reaction row on a message, and nothing else
+   * so far. Kept as a slot rather than a menu item kind because it is laid out
+   * across rather than down, which no item type could express.
+   */
+  header?: ReactNode;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -104,6 +111,8 @@ export function ContextMenu({
       // should not open the webview's own one on top of it.
       onContextMenu={(event) => event.preventDefault()}
     >
+      {header ? <div className="context-menu-header">{header}</div> : null}
+
       {visible.map((item, index) =>
         item.kind === 'separator' ? (
           // eslint-disable-next-line react/no-array-index-key -- separators have no identity

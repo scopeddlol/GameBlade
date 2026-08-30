@@ -7,6 +7,7 @@ import type {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
+  Clock,
   CloudDownload,
   CloudUpload,
   Download,
@@ -39,6 +40,7 @@ import {
   ProgressBar,
   Spinner,
 } from './ui.js';
+import { isComingSoon } from './GameCard.js';
 import { InstallDialog } from './InstallDialog.js';
 import { MediaViewer, type MediaItem } from './MediaViewer.js';
 
@@ -128,6 +130,11 @@ export function GameDetailPanel({
   // Always ask. A single configured drive is still a choice worth confirming
   // when the answer is tens of gigabytes landing somewhere.
   const startInstall = () => setShowStoragePicker(true);
+
+  // Held back rather than hidden: the page still shows the artwork, the blurb
+  // and the achievements, so a player can decide they want it and add it to
+  // their library while the server catches up.
+  const notReady = game !== undefined && isComingSoon(game);
 
   const launchMutation = useMutation({
     mutationFn: async () => {
@@ -246,6 +253,13 @@ export function GameDetailPanel({
                     <Play size={16} aria-hidden />
                     {launchMutation.isPending ? 'Starting…' : 'Play'}
                   </button>
+                ) : notReady && !isInstalling ? (
+                  // Not a greyed-out Install: the reason is the archive's, not
+                  // the player's, and saying which is the whole point.
+                  <span className="btn btn-lg coming-soon" title={game.availabilityNote ?? ''}>
+                    <Clock size={16} aria-hidden />
+                    Coming soon
+                  </span>
                 ) : (
                   <button
                     type="button"
