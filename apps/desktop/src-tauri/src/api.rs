@@ -360,6 +360,39 @@ impl ApiClient {
         Ok(serde_json::from_str(&text)?)
     }
 
+    /// Uploads bytes already in memory as a raw body.
+    ///
+    /// The counterpart to `upload_file` for content that never was a file. An
+    /// image pasted from the clipboard is the case that matters: writing it to
+    /// disk first, uploading it and deleting it again leaves a copy of whatever
+    /// somebody copied — a password manager screenshot, a private message —
+    /// sitting in a temp folder for as long as it takes to notice. Buffered
+    /// rather than streamed because a clipboard image is bounded by what a
+    /// screen can hold.
+    pub async fn upload_bytes(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> AppResult<serde_json::Value> {
+        let length = bytes.len() as u64;
+
+        let request = self.authorised(
+            self.http
+                .post(self.endpoint(path))
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .header(reqwest::header::CONTENT_LENGTH, length)
+                .body(bytes),
+        )?;
+
+        let response = check_status(request.send().await?).await?;
+        let text = response.text().await?;
+        if text.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
     /// Downloads to a path, returning the SHA-256 the server declared for it.
     pub async fn download_file(
         &self,

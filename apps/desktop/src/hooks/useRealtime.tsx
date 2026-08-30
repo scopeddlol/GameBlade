@@ -1,4 +1,4 @@
-import type { RealtimeEvent } from '@gameblade/shared';
+import type { MessageInfo, RealtimeEvent } from '@gameblade/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { listen } from '@tauri-apps/api/event';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -109,6 +109,24 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
             void queryClient.invalidateQueries({
               queryKey: ['messages', 'thread', frame.conversationId],
             });
+            break;
+          // Reactions arrive with their new tallies, so the row is patched in
+          // place. Refetching the whole thread for a thumbs-up would scroll a
+          // conversation somebody is reading.
+          case 'message-reactions':
+            queryClient.setQueryData<{ messages: MessageInfo[] }>(
+              ['messages', 'thread', frame.conversationId],
+              (current) =>
+                current
+                  ? {
+                      messages: current.messages.map((message) =>
+                        message.id === frame.messageId
+                          ? { ...message, reactions: frame.reactions }
+                          : message,
+                      ),
+                    }
+                  : current,
+            );
             break;
           case 'conversation':
             void queryClient.invalidateQueries({ queryKey: ['messages', 'conversations'] });

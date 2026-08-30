@@ -1404,6 +1404,55 @@ async fn upload_media(
         .await
 }
 
+/// The largest pasted image the client will send.
+///
+/// A clipboard image arrives as a base64 string over the IPC bridge, so it is
+/// held in memory twice on the way through. Eight megabytes is far more than a
+/// screenshot of any monitor and small enough that the round trip is not the
+/// thing somebody notices.
+const MAX_PASTED_BYTES: usize = 8 * 1024 * 1024;
+
+/// Uploads an image straight from the clipboard, without it touching the disk.
+///
+/// Pasting a picture into a message used to mean saving it somewhere first and
+/// picking it with the file dialog, which leaves a copy of whatever was on the
+/// clipboard — a screenshot of a password manager, somebody else's private
+/// message — in a folder nobody remembers to clear. The bytes come from the
+/// webview's paste event and go straight to the server.
+#[tauri::command]
+async fn upload_media_bytes(
+    state: State<'_, AppState>,
+    bytes: Vec<u8>,
+    content_type: String,
+    kind: String,
+) -> AppResult<serde_json::Value> {
+    if bytes.is_empty() {
+        return Err(AppError::Other("There was nothing to paste".to_string()));
+    }
+    if bytes.len() > MAX_PASTED_BYTES {
+        return Err(AppError::Other(
+            "That image is too large to paste — save it and attach it instead".to_string(),
+        ));
+    }
+
+    // An allow-list rather than "whatever the clipboard called it": the value
+    // becomes the Content-Type on a request the server stores and later serves
+    // back, and a type nobody checked is a type a browser will guess at.
+    let content_type = match content_type.as_str() {
+        "image/png" => "image/png",
+        "image/jpeg" | "image/jpg" => "image/jpeg",
+        "image/webp" => "image/webp",
+        "image/gif" => "image/gif",
+        other => return Err(AppError::Other(format!("GameBlade cannot paste a {other}"))),
+    };
+
+    state
+        .client()
+        .await?
+        .upload_bytes(&format!("/media?kind={kind}"), bytes, content_type)
+        .await
+}
+
 /* ------------------------------------------------------------------ helpers */
 
 fn content_type_for(path: &std::path::Path) -> Option<&'static str> {
@@ -1592,6 +1641,7 @@ pub fn run() {
             push_save,
             pull_save,
             upload_media,
+            upload_media_bytes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GameBlade");

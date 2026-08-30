@@ -1,5 +1,6 @@
 import {
   MAX_GROUP_MEMBERS,
+  REPLY_EXCERPT_LENGTH,
   type AddMembersInput,
   type ConversationInfo,
   type ConversationMemberInfo,
@@ -7,16 +8,23 @@ import {
   type MessageAttachmentInfo,
   type MessageInfo,
   type MessageQuery,
+  type MessageReactionInfo,
+  type MessageReplyInfo,
   type SendMessageInput,
+  type SharedGameInfo,
 } from '@gameblade/shared';
-import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
+import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import {
   conversationMembers,
   conversations,
+  games,
   media,
   messageMedia,
+  messageReactions,
   messages,
+  mutedUsers,
   userProfiles,
   users,
 } from '../db/schema.js';
@@ -44,6 +52,7 @@ const PREVIEW_LENGTH = 80;
 export class MessagingService {
   constructor(
     private readonly db: Db,
+    private readonly config: Config,
     private readonly profiles: ProfileService,
     private readonly friends: FriendService,
     private readonly mediaStore: MediaStore,
@@ -255,6 +264,31 @@ export class MessagingService {
       this.mediaStore.assertOwned(userId, input.mediaIds);
     }
 
+    // A reply has to point at a message in *this* conversation. Without the
+    // check, an id from a room the sender is not in would be quoted into one
+    // they are — which is a way to read a private thread one line at a time.
+    let replyToId: string | null = null;
+    if (input.replyToId) {
+      const target = this.db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(eq(messages.id, input.replyToId), eq(messages.conversationId, conversationId)))
+        .get();
+      if (!target) throw ApiError.badRequest('That message is not in this conversation');
+      replyToId = target.id;
+    }
+
+    let sharedGameId: string | null = null;
+    if (input.gameId) {
+      const game = this.db
+        .select({ id: games.id })
+        .from(games)
+        .where(eq(games.id, input.gameId))
+        .get();
+      if (!game) throw ApiError.badRequest('That game is not in the catalog');
+      sharedGameId = game.id;
+    }
+
     const id = newId('msg');
     const now = isoNow();
 
@@ -268,6 +302,8 @@ export class MessagingService {
           createdAt: now,
           editedAt: null,
           deletedAt: null,
+          replyToId,
+          sharedGameId,
         })
         .run();
 
@@ -292,9 +328,140 @@ export class MessagingService {
         .run();
     });
 
-    const info = this.messageInfo(id);
-    this.notify(conversationId, userId, { type: 'message', message: info });
+    const info = this.messageInfo(id, userId);
+    // Pushed per recipient rather than broadcast: `muted` is the reader's own
+    // answer, and one frame cannot carry two.
+    for (const memberId of this.memberIds(conversationId)) {
+      if (memberId === userId) continue;
+      this.realtime.send(memberId, { type: 'message', message: this.messageInfo(id, memberId) });
+    }
     return info;
+  }
+
+  /* ------------------------------------------------------------ reactions */
+
+  /**
+   * Adds a reaction, or takes it back when it is already there.
+   *
+   * One call rather than an add and a remove: the gesture in the client is one
+   * click on an emoji that is either lit or not, and splitting it into two
+   * routes means the client has to know which — from state that may be stale by
+   * the time the click lands.
+   */
+  react(userId: string, messageId: string, emoji: string): MessageReactionInfo[] {
+    const row = this.db.select().from(messages).where(eq(messages.id, messageId)).get();
+    if (!row) throw ApiError.notFound('That message no longer exists');
+    this.assertMember(userId, row.conversationId);
+
+    const existing = this.db
+      .select({ emoji: messageReactions.emoji })
+      .from(messageReactions)
+      .where(
+        and(
+          eq(messageReactions.messageId, messageId),
+          eq(messageReactions.userId, userId),
+          eq(messageReactions.emoji, emoji),
+        ),
+      )
+      .get();
+
+    if (existing) {
+      this.db
+        .delete(messageReactions)
+        .where(
+          and(
+            eq(messageReactions.messageId, messageId),
+            eq(messageReactions.userId, userId),
+            eq(messageReactions.emoji, emoji),
+          ),
+        )
+        .run();
+    } else {
+      this.db
+        .insert(messageReactions)
+        .values({ messageId, userId, emoji, createdAt: isoNow() })
+        .run();
+    }
+
+    // Everyone gets the same tallies; only `mine` differs, and each client
+    // knows whether it was the one that just clicked.
+    for (const memberId of this.memberIds(row.conversationId)) {
+      this.realtime.send(memberId, {
+        type: 'message-reactions',
+        conversationId: row.conversationId,
+        messageId,
+        reactions: this.reactionsFor([messageId], memberId).get(messageId) ?? [],
+      });
+    }
+
+    return this.reactionsFor([messageId], userId).get(messageId) ?? [];
+  }
+
+  /* ---------------------------------------------------------------- mutes */
+
+  /** Everyone this account has muted. */
+  mutedIds(userId: string): Set<string> {
+    return new Set(
+      this.db
+        .select({ mutedUserId: mutedUsers.mutedUserId })
+        .from(mutedUsers)
+        .where(eq(mutedUsers.userId, userId))
+        .all()
+        .map((row) => row.mutedUserId),
+    );
+  }
+
+  /** Who is muted, with enough to render a list of them in settings. */
+  listMuted(userId: string): Array<{ userId: string; username: string; displayName: string }> {
+    return this.db
+      .select({
+        userId: mutedUsers.mutedUserId,
+        username: users.username,
+        displayName: userProfiles.displayName,
+      })
+      .from(mutedUsers)
+      .innerJoin(users, eq(users.id, mutedUsers.mutedUserId))
+      .leftJoin(userProfiles, eq(userProfiles.userId, mutedUsers.mutedUserId))
+      .where(eq(mutedUsers.userId, userId))
+      .all()
+      .map((row) => ({
+        userId: row.userId,
+        username: row.username,
+        displayName: row.displayName ?? row.username,
+      }));
+  }
+
+  /**
+   * Mutes somebody, or unmutes them.
+   *
+   * Silent on their side, always. A mute that the muted person can detect is a
+   * mute nobody uses, because using it becomes a statement — and the point of
+   * having this beside blocking is that it is not one.
+   */
+  setMuted(userId: string, targetId: string, muted: boolean): void {
+    if (targetId === userId) throw ApiError.badRequest('You cannot mute yourself');
+
+    if (muted) {
+      const exists = this.db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.id, targetId))
+        .get();
+      if (!exists) throw ApiError.notFound('That account does not exist');
+
+      this.db
+        .insert(mutedUsers)
+        .values({ userId, mutedUserId: targetId, createdAt: isoNow() })
+        // Muting twice is the same as muting once, and the second click should
+        // not be an error the UI has to explain.
+        .onConflictDoNothing()
+        .run();
+    } else {
+      this.db
+        .delete(mutedUsers)
+        .where(and(eq(mutedUsers.userId, userId), eq(mutedUsers.mutedUserId, targetId)))
+        .run();
+    }
   }
 
   /** A page of history, newest last so the client can append without sorting. */
@@ -316,9 +483,22 @@ export class MessagingService {
       .limit(query.limit)
       .all();
 
-    const attachments = this.attachmentsFor(rows.map((row) => row.id));
+    const ids = rows.map((row) => row.id);
+    const attachments = this.attachmentsFor(ids);
+    const reactions = this.reactionsFor(ids, userId);
+    const replies = this.repliesFor(rows.map((row) => row.replyToId));
+    const shared = this.sharedGamesFor(rows.map((row) => row.sharedGameId));
+    const muted = this.mutedIds(userId);
 
-    return rows.reverse().map((row) => this.toMessageInfo(row, attachments.get(row.id) ?? []));
+    return rows.reverse().map((row) =>
+      this.toMessageInfo(row, {
+        attachments: attachments.get(row.id) ?? [],
+        reactions: reactions.get(row.id) ?? [],
+        replyTo: row.replyToId ? (replies.get(row.replyToId) ?? null) : null,
+        game: row.sharedGameId ? (shared.get(row.sharedGameId) ?? null) : null,
+        muted: row.senderId !== null && muted.has(row.senderId),
+      }),
+    );
   }
 
   /**
@@ -364,8 +544,16 @@ export class MessagingService {
       .run();
   }
 
-  /** Unread across every conversation, for the tab's badge. */
+  /**
+   * Unread across every conversation, for the tab's badge.
+   *
+   * Muted senders do not count. A mute that still lights the badge is a mute
+   * that does nothing: the whole reason to reach for it is to stop being
+   * pulled back to a conversation.
+   */
   unreadTotal(userId: string): number {
+    const muted = [...this.mutedIds(userId)];
+
     const row = this.db
       .select({ count: sql<number>`count(*)` })
       .from(messages)
@@ -379,6 +567,7 @@ export class MessagingService {
           isNull(conversationMembers.leftAt),
           isNull(messages.deletedAt),
           ne(messages.senderId, userId),
+          ...(muted.length > 0 ? [notInArray(messages.senderId, muted)] : []),
           or(
             isNull(conversationMembers.lastReadAt),
             sql`${messages.createdAt} > ${conversationMembers.lastReadAt}`,
@@ -495,6 +684,7 @@ export class MessagingService {
     }));
 
     const self = memberRows.find((row) => row.userId === viewerId);
+    const muted = [...this.mutedIds(viewerId)];
 
     const unread =
       this.db
@@ -505,6 +695,9 @@ export class MessagingService {
             eq(messages.conversationId, conversation.id),
             isNull(messages.deletedAt),
             ne(messages.senderId, viewerId),
+            // Same reasoning as `unreadTotal`: a muted sender should not put a
+            // number on the sidebar row either.
+            ...(muted.length > 0 ? [notInArray(messages.senderId, muted)] : []),
             self?.lastReadAt ? sql`${messages.createdAt} > ${self.lastReadAt}` : sql`1 = 1`,
           ),
         )
@@ -570,10 +763,115 @@ export class MessagingService {
     return grouped;
   }
 
-  private messageInfo(messageId: string): MessageInfo {
+  /**
+   * Tallies per message, for a specific reader.
+   *
+   * `mine` is the reader's own answer, so this takes a viewer rather than being
+   * cached once per message — two people looking at the same reaction see a
+   * different button.
+   */
+  private reactionsFor(messageIds: string[], viewerId: string): Map<string, MessageReactionInfo[]> {
+    const grouped = new Map<string, MessageReactionInfo[]>();
+    if (messageIds.length === 0) return grouped;
+
+    const rows = this.db
+      .select({
+        messageId: messageReactions.messageId,
+        emoji: messageReactions.emoji,
+        count: sql<number>`count(*)`,
+        mine: sql<number>`sum(case when ${messageReactions.userId} = ${viewerId} then 1 else 0 end)`,
+      })
+      .from(messageReactions)
+      .where(inArray(messageReactions.messageId, messageIds))
+      .groupBy(messageReactions.messageId, messageReactions.emoji)
+      .all();
+
+    for (const row of rows) {
+      const list = grouped.get(row.messageId) ?? [];
+      list.push({ emoji: row.emoji, count: Number(row.count), mine: Number(row.mine) > 0 });
+      grouped.set(row.messageId, list);
+    }
+    return grouped;
+  }
+
+  /** The quoted lines above each reply, keyed by the message being answered. */
+  private repliesFor(replyToIds: Array<string | null>): Map<string, MessageReplyInfo> {
+    const wanted = [...new Set(replyToIds.filter((id): id is string => id !== null))];
+    const found = new Map<string, MessageReplyInfo>();
+    if (wanted.length === 0) return found;
+
+    const rows = this.db
+      .select({
+        id: messages.id,
+        senderId: messages.senderId,
+        body: messages.body,
+        deletedAt: messages.deletedAt,
+        sharedGameId: messages.sharedGameId,
+        username: users.username,
+        displayName: userProfiles.displayName,
+        attachments: sql<number>`(SELECT count(*) FROM message_media m WHERE m.message_id = ${messages.id})`,
+      })
+      .from(messages)
+      .leftJoin(users, eq(users.id, messages.senderId))
+      .leftJoin(userProfiles, eq(userProfiles.userId, messages.senderId))
+      .where(inArray(messages.id, wanted))
+      .all();
+
+    for (const row of rows) {
+      found.set(row.id, {
+        id: row.id,
+        senderId: row.senderId,
+        senderName: row.displayName ?? row.username ?? 'Someone',
+        excerpt: excerpt(row),
+        deleted: row.deletedAt !== null,
+      });
+    }
+    return found;
+  }
+
+  /** The cards for games shared into a thread. */
+  private sharedGamesFor(gameIds: Array<string | null>): Map<string, SharedGameInfo> {
+    const wanted = [...new Set(gameIds.filter((id): id is string => id !== null))];
+    const found = new Map<string, SharedGameInfo>();
+    if (wanted.length === 0) return found;
+
+    for (const row of this.db
+      .select({
+        id: games.id,
+        title: games.title,
+        coverImageId: games.coverImageId,
+        releaseDate: games.releaseDate,
+        genres: games.genres,
+      })
+      .from(games)
+      .where(inArray(games.id, wanted))
+      .all()) {
+      found.set(row.id, {
+        gameId: row.id,
+        title: row.title,
+        coverUrl: row.coverImageId
+          ? `${this.config.basePath}/api/images/${row.coverImageId}`
+          : null,
+        releaseYear: row.releaseDate ? Number(row.releaseDate.slice(0, 4)) || null : null,
+        genres: (row.genres ?? []).slice(0, 3),
+      });
+    }
+    return found;
+  }
+
+  private messageInfo(messageId: string, viewerId: string): MessageInfo {
     const row = this.db.select().from(messages).where(eq(messages.id, messageId)).get();
     if (!row) throw ApiError.notFound('That message no longer exists');
-    return this.toMessageInfo(row, this.attachmentsFor([messageId]).get(messageId) ?? []);
+
+    return this.toMessageInfo(row, {
+      attachments: this.attachmentsFor([messageId]).get(messageId) ?? [],
+      reactions: this.reactionsFor([messageId], viewerId).get(messageId) ?? [],
+      replyTo: row.replyToId ? (this.repliesFor([row.replyToId]).get(row.replyToId) ?? null) : null,
+      game: row.sharedGameId
+        ? (this.sharedGamesFor([row.sharedGameId]).get(row.sharedGameId) ?? null)
+        : null,
+      muted: row.senderId !== null && this.mutedIds(viewerId).has(row.senderId),
+    });
   }
 
   private toMessageInfo(
@@ -586,17 +884,27 @@ export class MessagingService {
       editedAt: string | null;
       deletedAt: string | null;
     },
-    attachments: MessageAttachmentInfo[],
+    extras: {
+      attachments: MessageAttachmentInfo[];
+      reactions: MessageReactionInfo[];
+      replyTo: MessageReplyInfo | null;
+      game: SharedGameInfo | null;
+      muted: boolean;
+    },
   ): MessageInfo {
     return {
       id: row.id,
       conversationId: row.conversationId,
       senderId: row.senderId,
       body: row.body,
-      attachments,
+      attachments: extras.attachments,
       createdAt: row.createdAt,
       editedAt: row.editedAt,
       deleted: row.deletedAt !== null,
+      reactions: extras.reactions,
+      replyTo: extras.replyTo,
+      game: extras.game,
+      muted: extras.muted,
     };
   }
 
@@ -621,8 +929,35 @@ function preview(input: SendMessageInput): string {
       ? `${collapsed.slice(0, PREVIEW_LENGTH - 1)}…`
       : collapsed;
   }
+  if (input.gameId) return 'Shared a game';
   // A message that is only attachments still needs a line, and "sent a
   // picture" is what every other chat says because it is what happened.
   const count = input.mediaIds.length;
   return count === 1 ? 'Sent an attachment' : `Sent ${count} attachments`;
+}
+
+/**
+ * The line quoted above a reply.
+ *
+ * A withdrawn message, a picture and a shared game all have to say something —
+ * a blank quote reads as a rendering bug rather than as "they sent a picture".
+ */
+function excerpt(row: {
+  body: string;
+  deletedAt: string | null;
+  sharedGameId: string | null;
+  attachments: number;
+}): string {
+  if (row.deletedAt !== null) return 'Message withdrawn';
+
+  const flat = row.body.replace(/\s+/g, ' ').trim();
+  if (flat) {
+    return flat.length > REPLY_EXCERPT_LENGTH
+      ? `${flat.slice(0, REPLY_EXCERPT_LENGTH - 1)}…`
+      : flat;
+  }
+
+  if (row.sharedGameId) return 'Shared a game';
+  if (row.attachments > 1) return `${row.attachments} attachments`;
+  return row.attachments === 1 ? 'An attachment' : 'Empty message';
 }

@@ -1183,4 +1183,49 @@ export const migrations: Migration[] = [
       ALTER TABLE mesh_enrollments ADD COLUMN library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL;
     `,
   },
+  {
+    id: '0028_chat_replies_reactions_mutes',
+    sql: /* sql */ `
+      -- Replying to a message, rather than answering into the void and hoping
+      -- everyone still remembers which line you meant.
+      --
+      -- SET NULL rather than CASCADE: a reply is a message somebody wrote, and
+      -- deleting it because the thing it answered was withdrawn would remove
+      -- their words on the author's behalf.
+      ALTER TABLE messages ADD COLUMN reply_to_id TEXT REFERENCES messages(id) ON DELETE SET NULL;
+
+      -- A game recommended into a conversation, rendered as a card the other
+      -- person can open. The reference is nulled rather than cascaded so a
+      -- game leaving the catalog does not delete the conversation about it.
+      ALTER TABLE messages ADD COLUMN shared_game_id TEXT REFERENCES games(id) ON DELETE SET NULL;
+
+      CREATE INDEX messages_reply_idx ON messages(reply_to_id);
+
+      -- One person's reaction to one message. All three columns are the key,
+      -- so reacting twice with the same emoji is a no-op here rather than
+      -- something every caller has to remember to check.
+      CREATE TABLE message_reactions (
+        message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        emoji TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        PRIMARY KEY (message_id, user_id, emoji)
+      );
+      CREATE INDEX message_reactions_message_idx ON message_reactions(message_id);
+
+      -- Somebody whose messages this account would rather not see.
+      --
+      -- Deliberately not a block. A block ends a friendship and is a statement
+      -- about a relationship; a mute is about a feed — the group chat carries
+      -- on, everyone else in it is unaffected, and the muted person is never
+      -- told. Per account rather than per conversation, because "I do not want
+      -- to read this person" is a fact about the person.
+      CREATE TABLE muted_users (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        muted_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        PRIMARY KEY (user_id, muted_user_id)
+      );
+    `,
+  },
 ];

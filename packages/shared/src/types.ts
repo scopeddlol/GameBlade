@@ -1,6 +1,6 @@
 import type { LandingBlock } from './landing.js';
 import type { ChunkRef, MeshSource } from './mesh.js';
-import type { MessageInfo } from './messaging.js';
+import type { MessageInfo, MessageReactionInfo } from './messaging.js';
 import type { ThemePreset, ThemeTokens } from './theme.js';
 import type {
   ACHIEVEMENT_SOURCE,
@@ -839,6 +839,13 @@ export type RealtimeEvent =
   | { type: 'achievement'; achievement: AchievementProgress }
   | { type: 'message'; message: MessageInfo }
   | { type: 'message-removed'; conversationId: string; messageId: string }
+  /** Reactions changed on one message — the row redraws, the thread does not. */
+  | {
+      type: 'message-reactions';
+      conversationId: string;
+      messageId: string;
+      reactions: MessageReactionInfo[];
+    }
   /** Membership, the name, or the keys changed — refetch the conversation. */
   | { type: 'conversation'; conversationId: string }
   | { type: 'pong'; serverTime: string };

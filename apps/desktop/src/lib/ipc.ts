@@ -296,6 +296,20 @@ export const ipc = {
 
   uploadMedia: (filePath: string, kind: 'image' | 'clip' | 'avatar' | 'banner') =>
     invoke<{ id: string; url: string; kind: string }>('upload_media', { filePath, kind }),
+
+  /**
+   * Uploads bytes straight from the clipboard, without them touching the disk.
+   *
+   * Pasting a picture used to mean saving it somewhere first and picking it
+   * with the file dialog, which leaves a copy of whatever was on the clipboard
+   * in a folder nobody remembers to clear.
+   */
+  uploadMediaBytes: (bytes: number[], contentType: string, kind: 'image' | 'clip') =>
+    invoke<{ id: string; url: string; kind: string }>('upload_media_bytes', {
+      bytes,
+      contentType,
+      kind,
+    }),
 };
 
 /** The server's own sync verdict, echoed back through the Rust side. */

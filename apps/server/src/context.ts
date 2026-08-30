@@ -159,7 +159,7 @@ export function createContext(
   const friends = new FriendService(db, profiles, notifications, activity, realtime);
   const media = new MediaStore(db, config, logger);
   const social = new SocialService(db, config, profiles, friends, media, notifications, activity);
-  const messaging = new MessagingService(db, profiles, friends, media, realtime);
+  const messaging = new MessagingService(db, config, profiles, friends, media, realtime);
   // After profiles and media: `/profile` reads both.
   const discordBot = new DiscordBotService(db, settings, discord, profiles, media, logger);
   const playtime = new PlaytimeService(db, config, presence, activity);

@@ -31,6 +31,20 @@ export const MAX_MESSAGE_LENGTH = 4000;
 /** How many attachments one message may carry. */
 export const MAX_MESSAGE_ATTACHMENTS = 6;
 
+/**
+ * The reactions offered on the right-click menu.
+ *
+ * A fixed set rather than a picker. An arbitrary-emoji field means storing and
+ * rendering whatever anybody's keyboard produces — including sequences that
+ * render as a wall of nothing on another machine — for a feature whose whole
+ * value is being instant. Six covers what people actually use.
+ */
+export const MESSAGE_REACTIONS = ['👍', '❤️', '😂', '🎉', '😮', '😢'] as const;
+export type MessageReactionEmoji = (typeof MESSAGE_REACTIONS)[number];
+
+/** How much of a replied-to message is quoted above the reply. */
+export const REPLY_EXCERPT_LENGTH = 120;
+
 export interface ConversationMemberInfo {
   userId: string;
   username: string;
@@ -67,6 +81,39 @@ export interface MessageAttachmentInfo {
   height: number | null;
 }
 
+/** One emoji's tally on a message, and whether the reader is in it. */
+export interface MessageReactionInfo {
+  emoji: string;
+  count: number;
+  /** Whether the caller is one of the people who reacted. */
+  mine: boolean;
+}
+
+/**
+ * Just enough of the message being answered to render the quote above a reply.
+ *
+ * Not the whole `MessageInfo`: that would recurse, and a chain of fifty
+ * replies would carry fifty copies of the history behind it.
+ */
+export interface MessageReplyInfo {
+  id: string;
+  senderId: string | null;
+  senderName: string;
+  /** Trimmed body, or a stand-in describing what the message was. */
+  excerpt: string;
+  /** True when the original has since been withdrawn. */
+  deleted: boolean;
+}
+
+/** A game shared into a conversation, as the card renders it. */
+export interface SharedGameInfo {
+  gameId: string;
+  title: string;
+  coverUrl: string | null;
+  releaseYear: number | null;
+  genres: string[];
+}
+
 export interface MessageInfo {
   id: string;
   conversationId: string;
@@ -77,6 +124,19 @@ export interface MessageInfo {
   editedAt: string | null;
   /** True once withdrawn; the body is cleared rather than merely hidden. */
   deleted: boolean;
+  reactions: MessageReactionInfo[];
+  /** The message this one answers, when it answers one. */
+  replyTo: MessageReplyInfo | null;
+  /** A game recommended into the conversation. */
+  game: SharedGameInfo | null;
+  /**
+   * True when the sender is somebody the reader has muted.
+   *
+   * Sent rather than resolved client-side so every surface agrees, and shown
+   * as a collapsed row rather than dropped: a thread with silent holes in it
+   * reads as a bug, and a muted person's message is sometimes worth unfolding.
+   */
+  muted: boolean;
 }
 
 /* ------------------------------------------------------------------ input */
@@ -93,14 +153,24 @@ export const sendMessageSchema = z
   .object({
     body: z.string().trim().max(MAX_MESSAGE_LENGTH).default(''),
     mediaIds: z.array(z.string().trim().max(64)).max(MAX_MESSAGE_ATTACHMENTS).default([]),
+    /** The message being answered, if this is a reply. */
+    replyToId: z.string().trim().max(64).nullable().optional(),
+    /** A game to recommend, rendered as a card rather than pasted as a name. */
+    gameId: z.string().trim().max(64).nullable().optional(),
   })
   // An empty message with nothing attached is a stray Enter, not something to
-  // store and show everybody.
+  // store and show everybody. A shared game counts as content in its own
+  // right — "look at this" with the card under it needs no words.
   .refine(
-    (input) => input.body.length > 0 || input.mediaIds.length > 0,
-    'Write something, or attach a picture',
+    (input) => input.body.length > 0 || input.mediaIds.length > 0 || Boolean(input.gameId),
+    'Write something, attach a picture, or share a game',
   );
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
+
+export const reactToMessageSchema = z.object({
+  emoji: z.enum(MESSAGE_REACTIONS),
+});
+export type ReactToMessageInput = z.infer<typeof reactToMessageSchema>;
 
 export const messageQuerySchema = z.object({
   /** Everything older than this message id, for scrolling back. */
