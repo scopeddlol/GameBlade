@@ -1,21 +1,23 @@
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { MESH_CHUNK_BYTES, chunkCountFor, type ChunkRef } from '@gameblade/shared';
-import { and, eq, gt, inArray, isNull, or, ne } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, or, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { gameFileChunks, gameFiles, games, libraries } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { assertRealPathWithin, resolveWithin } from '../lib/paths.js';
+import {
+  HashPool,
+  RateMeter,
+  defaultHashConcurrency,
+  etaFrom,
+  hashFileByChunk,
+  idleHashProgress,
+  type FileDigest,
+  type HashProgress,
+} from './hashing.js';
 import type { Logger } from './metadata/service.js';
 
-export interface ChunkProgress {
-  gameId: string | null;
-  state: 'idle' | 'hashing' | 'error';
-  processed: number;
-  total: number;
-  currentFile: string | null;
-  error: string | null;
-}
+/** What one game's hashing pass is doing. */
+export type ChunkProgress = HashProgress;
 
 /**
  * The state of the pass over everything that is not hashed yet.
@@ -37,14 +39,17 @@ export interface SweepProgress {
   remaining: number;
   /** Games this run set out to hash, so a percentage means something. */
   total: number;
+  /** The game being read right now, named rather than left as an id. */
+  currentGameId: string | null;
+  currentGameTitle: string | null;
+  /** Bytes read this run, and bytes the run set out to read. */
+  bytesHashed: number;
+  bytesTotal: number;
+  /** Read speed over the last few seconds, and what is left at that rate. */
+  bytesPerSecond: number;
+  etaSeconds: number | null;
   /** Why the last run stopped, when it was not simply finished. */
   note: string | null;
-}
-
-/** What one pass over a file produced. */
-interface FileDigest {
-  whole: string;
-  chunks: ChunkRef[];
 }
 
 /**
@@ -61,40 +66,52 @@ interface FileDigest {
  * enabling the mesh for a game does not read a multi-terabyte archive twice.
  */
 export class ChunkService {
-  private progress: ChunkProgress = {
-    gameId: null,
-    state: 'idle',
-    processed: 0,
-    total: 0,
-    currentFile: null,
-    error: null,
-  };
+  private progress: ChunkProgress = idleHashProgress();
 
   private running: Promise<void> | null = null;
 
-  private sweep: SweepProgress = {
-    running: false,
-    stopping: false,
-    startedAt: null,
-    finishedAt: null,
-    hashed: 0,
-    failed: 0,
-    remaining: 0,
-    total: 0,
-    note: null,
-  };
+  private sweep: SweepProgress = idleSweep();
 
   /** Set while a sweep is in flight, so a second request joins rather than races. */
   private sweeping: Promise<void> | null = null;
   private stopSweepRequested = false;
 
+  /** Files read at once. Shared by the per-game pass and the sweep around it. */
+  private readonly concurrency: number;
+  private readonly pool: HashPool;
+
+  /** Live read rate for the current game, and for the sweep as a whole. */
+  private readonly gameRate = new RateMeter();
+  private readonly sweepRate = new RateMeter();
+
   constructor(
     private readonly db: Db,
     private readonly logger: Logger,
-  ) {}
+    concurrency = defaultHashConcurrency(),
+  ) {
+    this.concurrency = Math.max(1, concurrency);
+    this.pool = new HashPool(this.concurrency, (error) =>
+      this.logger.warn({ err: error }, 'a hashing worker stopped'),
+    );
+  }
 
   getProgress(): ChunkProgress {
-    return { ...this.progress };
+    // The rate and the estimate are read at the moment they are asked for
+    // rather than written on every buffer: the meter already holds the window,
+    // and recomputing here keeps a stalled pass from reporting a stale speed.
+    const remaining = Math.max(0, this.progress.bytesTotal - this.progress.bytesProcessed);
+    const bytesPerSecond = this.progress.state === 'hashing' ? this.gameRate.rate() : 0;
+    return {
+      ...this.progress,
+      bytesPerSecond,
+      etaSeconds: this.progress.state === 'hashing' ? etaFrom(remaining, bytesPerSecond) : null,
+      currentFiles: [...this.progress.currentFiles],
+    };
+  }
+
+  /** Releases the worker threads. Called when the server shuts down. */
+  async close(): Promise<void> {
+    await this.pool.close();
   }
 
   get isRunning(): boolean {
@@ -106,7 +123,37 @@ export class ChunkService {
     // Counted live so the number falls as work lands, rather than only at the
     // end of a run that takes hours.
     const remaining = this.sweep.running ? this.unhashedGameIds().length : this.sweep.remaining;
-    return { ...this.sweep, remaining };
+    const bytesPerSecond = this.sweep.running ? this.sweepRate.rate() : 0;
+    const bytesLeft = Math.max(0, this.sweep.bytesTotal - this.sweep.bytesHashed);
+    return {
+      ...this.sweep,
+      remaining,
+      bytesPerSecond,
+      etaSeconds: this.sweep.running ? etaFrom(bytesLeft, bytesPerSecond) : null,
+    };
+  }
+
+  /**
+   * Bytes still to read across every game that is not hashed yet.
+   *
+   * The count of games left says nothing about how long that is: one archive
+   * can be larger than four hundred small titles. This is the number an
+   * estimate has to be built on, and it is one query rather than a walk.
+   */
+  unhashedBytes(): number {
+    const row = this.db
+      .select({ bytes: sql<number>`coalesce(sum(${gameFiles.sizeBytes}), 0)` })
+      .from(gameFiles)
+      .innerJoin(games, eq(games.id, gameFiles.gameId))
+      .where(
+        and(
+          isNull(games.missingAt),
+          gt(gameFiles.sizeBytes, 0),
+          or(isNull(gameFiles.chunkBytes), ne(gameFiles.chunkBytes, MESH_CHUNK_BYTES)),
+        ),
+      )
+      .get();
+    return Number(row?.bytes ?? 0);
   }
 
   /** The chunk table for one file, in index order. Empty when never hashed. */
@@ -237,15 +284,12 @@ export class ChunkService {
     const pending = this.unhashedGameIds();
 
     this.sweep = {
+      ...idleSweep(),
       running: true,
-      stopping: false,
       startedAt: new Date().toISOString(),
-      finishedAt: null,
-      hashed: 0,
-      failed: 0,
       remaining: pending.length,
       total: pending.length,
-      note: null,
+      bytesTotal: this.unhashedBytes(),
     };
 
     let hashed = 0;
@@ -274,7 +318,13 @@ export class ChunkService {
           failed += 1;
         }
 
-        this.sweep = { ...this.sweep, hashed, failed };
+        this.sweep = {
+          ...this.sweep,
+          hashed,
+          failed,
+          currentGameId: null,
+          currentGameTitle: null,
+        };
       }
     } finally {
       this.stopSweepRequested = false;
@@ -282,6 +332,8 @@ export class ChunkService {
         ...this.sweep,
         running: false,
         stopping: false,
+        currentGameId: null,
+        currentGameTitle: null,
         finishedAt: new Date().toISOString(),
         hashed,
         failed,
@@ -379,24 +431,34 @@ export class ChunkService {
     const pending = force ? files : files.filter((file) => file.chunkBytes !== MESH_CHUNK_BYTES);
 
     this.progress = {
+      ...idleHashProgress(),
       gameId,
+      gameTitle: row.game.title,
       state: 'hashing',
-      processed: 0,
       total: pending.length,
-      currentFile: null,
-      error: null,
+      bytesTotal: pending.reduce((sum, file) => sum + file.sizeBytes, 0),
+      startedAt: new Date().toISOString(),
+      concurrency: this.concurrency,
+      threaded: this.pool.threaded,
+    };
+
+    this.sweep = {
+      ...this.sweep,
+      currentGameId: gameId,
+      currentGameTitle: row.game.title,
     };
 
     const gameRoot = resolveWithin(row.libraryPath, row.game.relPath);
 
-    for (const file of pending) {
-      this.progress = { ...this.progress, currentFile: file.relPath };
+    /** One file, start to finish. Several of these are in flight at once. */
+    const hashOne = async (file: (typeof pending)[number]): Promise<void> => {
+      this.openFile(file.relPath);
 
       try {
         const candidate =
           row.game.kind === 'archive' ? gameRoot : resolveWithin(gameRoot, file.relPath);
         const absolute = await assertRealPathWithin(row.libraryPath, candidate);
-        const digest = await hashFileByChunk(absolute);
+        const digest = await this.pool.chunked(absolute, (bytes) => this.readBytes(bytes));
         this.store(file.id, digest);
       } catch (error) {
         // One unreadable file should not abandon the rest of the game; it just
@@ -404,10 +466,53 @@ export class ChunkService {
         this.logger.warn({ err: error, file: file.relPath }, 'could not chunk-hash file');
       }
 
-      this.progress = { ...this.progress, processed: this.progress.processed + 1 };
-    }
+      this.closeFile(file.relPath);
+    };
 
-    this.progress = { ...this.progress, state: 'idle', currentFile: null };
+    await runWithConcurrency(pending, this.concurrency, hashOne);
+
+    this.progress = {
+      ...this.progress,
+      state: 'idle',
+      currentFiles: [],
+      currentFile: null,
+      etaSeconds: null,
+      bytesPerSecond: 0,
+    };
+  }
+
+  /* --------------------------------------------------------- progress bookkeeping */
+
+  /** Names a file as open, so the readout can say what is being read. */
+  private openFile(relPath: string): void {
+    const currentFiles = [...this.progress.currentFiles, relPath];
+    this.progress = { ...this.progress, currentFiles, currentFile: currentFiles[0] ?? null };
+  }
+
+  private closeFile(relPath: string): void {
+    const currentFiles = this.progress.currentFiles.filter((name) => name !== relPath);
+    this.progress = {
+      ...this.progress,
+      currentFiles,
+      currentFile: currentFiles[0] ?? null,
+      processed: this.progress.processed + 1,
+    };
+  }
+
+  /**
+   * Bytes just read, counted against both the game and the sweep.
+   *
+   * Counted as they arrive rather than a file at a time: a game can be one
+   * 60 GB archive, and a bar that only moves when a file finishes would sit
+   * still for the whole of it.
+   */
+  private readBytes(bytes: number): void {
+    this.gameRate.add(bytes);
+    this.sweepRate.add(bytes);
+    this.progress = { ...this.progress, bytesProcessed: this.progress.bytesProcessed + bytes };
+    if (this.sweep.running) {
+      this.sweep = { ...this.sweep, bytesHashed: this.sweep.bytesHashed + bytes };
+    }
   }
 
   /**
@@ -449,58 +554,57 @@ export class ChunkService {
 }
 
 /**
- * One streamed pass producing the whole-file hash and every chunk hash.
+ * Re-exported so the chunk grid still has one obvious home.
  *
- * The read stream's buffers have nothing to do with the chunk grid, so the
- * bytes are cut here rather than trusted to arrive aligned. Getting this wrong
- * is not a crash — it is a set of hashes that look fine and match nothing any
- * other implementation computes, so the split is deliberately explicit.
+ * The implementation moved next to the worker pool that calls it; every caller
+ * and every test that already knew where to find it still does.
  */
-export function hashFileByChunk(absolutePath: string): Promise<FileDigest> {
-  return new Promise((resolve, reject) => {
-    const whole = createHash('sha256');
-    let chunkHash = createHash('sha256');
-    let chunkFilled = 0;
-    let index = 0;
-    const chunks: ChunkRef[] = [];
-
-    const closeChunk = () => {
-      chunks.push({ index, sha256: chunkHash.digest('hex'), sizeBytes: chunkFilled });
-      index += 1;
-      chunkHash = createHash('sha256');
-      chunkFilled = 0;
-    };
-
-    // Streamed, and never larger than one chunk in memory, so a 50 GB file
-    // costs the same as a 50 MB one.
-    const stream = createReadStream(absolutePath, { highWaterMark: 1024 * 1024 });
-
-    stream.on('data', (buffer: string | Buffer) => {
-      const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
-      whole.update(bytes);
-
-      let consumed = 0;
-      while (consumed < bytes.length) {
-        const room = MESH_CHUNK_BYTES - chunkFilled;
-        const take = Math.min(room, bytes.length - consumed);
-        chunkHash.update(bytes.subarray(consumed, consumed + take));
-        chunkFilled += take;
-        consumed += take;
-
-        if (chunkFilled === MESH_CHUNK_BYTES) closeChunk();
-      }
-    });
-
-    stream.on('error', reject);
-
-    stream.on('end', () => {
-      // A trailing partial chunk still counts. An empty file gets none at all,
-      // which is what `chunkCountFor` says it should have.
-      if (chunkFilled > 0) closeChunk();
-      resolve({ whole: whole.digest('hex'), chunks });
-    });
-  });
-}
+export { hashFileByChunk };
 
 /** Exported for tests: what the grid says a file of this size should produce. */
 export const expectedChunkCount = chunkCountFor;
+
+/** A sweep that has not started, or has finished and been read. */
+function idleSweep(): SweepProgress {
+  return {
+    running: false,
+    stopping: false,
+    startedAt: null,
+    finishedAt: null,
+    hashed: 0,
+    failed: 0,
+    remaining: 0,
+    total: 0,
+    currentGameId: null,
+    currentGameTitle: null,
+    bytesHashed: 0,
+    bytesTotal: 0,
+    bytesPerSecond: 0,
+    etaSeconds: null,
+    note: null,
+  };
+}
+
+/**
+ * Runs `fn` over every item, `limit` at a time.
+ *
+ * A plain `Promise.all` would open every file at once, which on a folder game
+ * of ten thousand files is a way to run out of descriptors rather than a way
+ * to go faster.
+ */
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      await fn(items[index] as T);
+    }
+  });
+  await Promise.all(workers);
+}

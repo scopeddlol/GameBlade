@@ -515,6 +515,36 @@ export class MeshService {
   }
 
   /**
+   * Which of these games at least one online node is currently offering.
+   *
+   * One query for a whole page, rather than `nodesForGame` per row: that
+   * fingerprints the game first, which reads every file row it has — fine once
+   * on an install, ruinous a hundred and twenty times to draw a store page.
+   * The fingerprint check is skipped here on purpose. This decides whether a
+   * card says "coming soon"; the manifest still does the strict comparison
+   * when somebody actually installs, so a stale announcement costs a slightly
+   * optimistic badge rather than a bad download.
+   */
+  offeredGameIds(gameIds: string[]): Set<string> {
+    const offered = new Set<string>();
+    if (gameIds.length === 0) return offered;
+
+    // SQLite caps a statement at 999 bound parameters by default.
+    for (let offset = 0; offset < gameIds.length; offset += 400) {
+      const batch = gameIds.slice(offset, offset + 400);
+      const rows = this.db
+        .selectDistinct({ gameId: meshNodeGames.gameId })
+        .from(meshNodeGames)
+        .innerJoin(meshNodes, eq(meshNodes.id, meshNodeGames.nodeId))
+        .where(and(inArray(meshNodeGames.gameId, batch), eq(meshNodes.status, 'online')))
+        .all();
+      for (const row of rows) offered.add(row.gameId);
+    }
+
+    return offered;
+  }
+
+  /**
    * Nodes currently able to serve this game, best first.
    *
    * "Best" here is only a starting order — role first, then how recently the

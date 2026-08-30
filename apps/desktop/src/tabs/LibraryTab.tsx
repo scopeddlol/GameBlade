@@ -164,6 +164,11 @@ export function LibraryTab({
           unlockedCount: 0,
           hasLaunchRule: false,
           hasSaveRule: false,
+          // Offline, whether the server could serve it is unknowable and
+          // beside the point: this list exists so installed games can be
+          // launched, and every entry in it is already on this disk.
+          availability: 'ready',
+          availabilityNote: null,
         }))
       : [];
 

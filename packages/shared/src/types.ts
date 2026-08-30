@@ -103,7 +103,23 @@ export interface GameSummary {
   hasLaunchRule: boolean;
   /** Whether this game's saves are covered by a cloud-sync rule. */
   hasSaveRule: boolean;
+
+  /**
+   * Whether this can actually be installed right now.
+   *
+   * A store that offers a game the server cannot serve is worse than one that
+   * says "not yet": the player picks a drive, waits, and gets an error that
+   * reads like their fault. An entry whose files are still being hashed, or
+   * whose node is offline, is shown as coming soon instead — visible, listed,
+   * and honest about why the button is not there.
+   */
+  availability: GameAvailability;
+  /** Why it is not installable, in words a player can read. Null when ready. */
+  availabilityNote: string | null;
 }
+
+export const GAME_AVAILABILITY = ['ready', 'coming-soon'] as const;
+export type GameAvailability = (typeof GAME_AVAILABILITY)[number];
 
 export interface GameDetail extends GameSummary {
   libraryId: string;

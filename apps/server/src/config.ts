@@ -144,6 +144,17 @@ const envSchema = z.object({
    */
   AUTO_CHUNK_HASH: booleanish.default(true),
 
+  /**
+   * How many files are hashed at once.
+   *
+   * Zero means "work it out from the machine", which is what almost every
+   * deployment should leave it as. It is here for the two cases the default
+   * cannot know about: an archive on a single spinning disk, where parallel
+   * reads turn a sequential scan into seek thrash and one is genuinely faster,
+   * and a box whose cores are wanted for something else.
+   */
+  HASH_CONCURRENCY: z.coerce.number().int().min(0).max(32).default(0),
+
   SCAN_ON_START: booleanish.default(true),
   SCAN_INTERVAL_MINUTES: z.coerce.number().int().min(0).max(10080).default(360),
   SCAN_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
@@ -310,6 +321,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     scanOnStart: e.SCAN_ON_START,
     scanIntervalMinutes: e.SCAN_INTERVAL_MINUTES,
     scanConcurrency: e.SCAN_CONCURRENCY,
+    /** Zero means "decide from the machine"; see the schema above. */
+    hashConcurrency: e.HASH_CONCURRENCY,
 
     rateLimitMax: e.RATE_LIMIT_MAX,
     rateLimitWindowMinutes: e.RATE_LIMIT_WINDOW_MINUTES,

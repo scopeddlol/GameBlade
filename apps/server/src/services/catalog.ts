@@ -1,18 +1,21 @@
-import type {
-  CatalogGap,
-  FeaturedEntry,
-  FeaturedInput,
-  GameQuery,
-  GameSummary,
-  HomeFeed,
-  Paginated,
-  StoreFacets,
+import {
+  MESH_CHUNK_BYTES,
+  type CatalogGap,
+  type FeaturedEntry,
+  type FeaturedInput,
+  type GameAvailability,
+  type GameQuery,
+  type GameSummary,
+  type HomeFeed,
+  type Paginated,
+  type StoreFacets,
 } from '@gameblade/shared';
 import { and, asc, desc, eq, gte, inArray, isNull, like, or, sql, type SQL } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import {
   featuredGames,
+  gameFiles,
   gameLaunchRules,
   games,
   gameSaveRules,
@@ -30,6 +33,7 @@ import type { AchievementService } from './achievements.js';
 import type { ActivityService } from './activity.js';
 import type { GameRequestService } from './gameRequests.js';
 import type { PresenceService } from './presence.js';
+import type { MeshService } from './mesh.js';
 import type { PlaytimeService } from './playtime.js';
 import type { ProfileService } from './profiles.js';
 
@@ -111,6 +115,7 @@ export class CatalogService {
     private readonly presence: PresenceService,
     private readonly activity: ActivityService,
     private readonly gameRequests: GameRequestService,
+    private readonly mesh: Pick<MeshService, 'offeredGameIds'>,
   ) {}
 
   /** Turns rows into summaries with everything the client renders. */
@@ -144,6 +149,7 @@ export class CatalogService {
 
     const stats = this.playtime.statsFor(userId, ids);
     const achievementCounts = this.achievements.countsFor(userId, ids);
+    const availability = this.availabilityFor(rows);
 
     // Two more set lookups over the page, in the same spirit as the ones
     // above: the admin catalog shows at a glance which entries a player could
@@ -199,8 +205,75 @@ export class CatalogService {
         unlockedCount: counts?.unlocked ?? 0,
         hasLaunchRule: withLaunchRule.has(game.id),
         hasSaveRule: withSaveRule.has(game.id),
+        availability: availability.get(game.id)?.state ?? 'ready',
+        availabilityNote: availability.get(game.id)?.note ?? null,
       };
     });
+  }
+
+  /** One game's verdict, for the routes that have to enforce it. */
+  availabilityOf(gameId: string): { state: GameAvailability; note: string | null } {
+    const game = this.db.select().from(games).where(eq(games.id, gameId)).get();
+    if (!game) return { state: 'coming-soon', note: 'That game is not in the catalog.' };
+    return (
+      this.availabilityFor([game]).get(gameId) ?? {
+        state: 'coming-soon',
+        note: 'That game is not ready to install yet.',
+      }
+    );
+  }
+
+  /**
+   * Whether each of these games can actually be installed right now.
+   *
+   * Worked out for a whole page in two queries rather than per row, because
+   * every store and library listing runs it.
+   *
+   * What "installable" means depends on where the bytes live. A standalone
+   * server has the files on its own disk and can stream them whether or not
+   * anything has been hashed, so only a game that is missing or has never been
+   * indexed is held back. A coordinator has no files at all: every byte comes
+   * from a node, a node can only serve a game whose every file carries chunk
+   * hashes, and a node that is offline serves nothing. Those are exactly the
+   * three ways an install fails with an error that looks like the player's
+   * fault, and each one now says so on the card instead.
+   */
+  private availabilityFor(
+    rows: Game[],
+  ): Map<string, { state: GameAvailability; note: string | null }> {
+    const result = new Map<string, { state: GameAvailability; note: string | null }>();
+    const ids = rows.map((row) => row.id);
+    if (ids.length === 0) return result;
+
+    // A zero-byte file has no chunks and never will, so it never counts as
+    // unhashed — the same rule the hashing sweep itself applies.
+    const fileStats = new Map<string, { files: number; unhashed: number }>();
+    for (let offset = 0; offset < ids.length; offset += 400) {
+      const batch = ids.slice(offset, offset + 400);
+      const stats = this.db
+        .select({
+          gameId: gameFiles.gameId,
+          files: sql<number>`count(*)`,
+          unhashed: sql<number>`sum(case when ${gameFiles.sizeBytes} = 0
+              or ${gameFiles.chunkBytes} = ${MESH_CHUNK_BYTES} then 0 else 1 end)`,
+        })
+        .from(gameFiles)
+        .where(inArray(gameFiles.gameId, batch))
+        .groupBy(gameFiles.gameId)
+        .all();
+      for (const row of stats) {
+        fileStats.set(row.gameId, { files: Number(row.files), unhashed: Number(row.unhashed) });
+      }
+    }
+
+    const offered = this.config.servesLocalFiles ? null : this.mesh.offeredGameIds(ids);
+
+    for (const game of rows) {
+      const stats = fileStats.get(game.id) ?? { files: 0, unhashed: 0 };
+      result.set(game.id, describeAvailability(game, stats, offered));
+    }
+
+    return result;
   }
 
   /** The paginated query behind both the Store and the Library tab. */
@@ -672,4 +745,50 @@ export class CatalogService {
   private imageUrl(id: string | null): string | null {
     return id ? `${this.config.basePath}/api/images/${id}` : null;
   }
+}
+
+/**
+ * The verdict for one game, given what its files and the fleet look like.
+ *
+ * A pure function so it can be reasoned about and tested on its own; the
+ * queries that feed it live in `availabilityFor`.
+ */
+export function describeAvailability(
+  game: Game,
+  stats: { files: number; unhashed: number },
+  /** Games an online node is offering, or null on a server that holds its own files. */
+  offered: Set<string> | null,
+): { state: GameAvailability; note: string | null } {
+  if (game.missingAt !== null) {
+    return {
+      state: 'coming-soon',
+      note: 'The files for this one are not on the server at the moment.',
+    };
+  }
+
+  if (stats.files === 0) {
+    return {
+      state: 'coming-soon',
+      note: 'This is in the catalog, but nothing has been indexed for it yet.',
+    };
+  }
+
+  // A server holding its own files can stream them straight out, hashed or not.
+  if (offered === null) return { state: 'ready', note: null };
+
+  if (stats.unhashed > 0) {
+    return {
+      state: 'coming-soon',
+      note: `Still being prepared — ${stats.unhashed.toLocaleString('en')} of ${stats.files.toLocaleString('en')} files left to hash. It will appear here as soon as that finishes.`,
+    };
+  }
+
+  if (!offered.has(game.id)) {
+    return {
+      state: 'coming-soon',
+      note: 'Ready to go, but the machine holding it is offline right now.',
+    };
+  }
+
+  return { state: 'ready', note: null };
 }

@@ -123,6 +123,15 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
       throw ApiError.gone('This game is no longer present on disk');
     }
 
+    // The store already shows this one as coming soon rather than offering a
+    // button, so reaching here means a stale page or a scripted client. Saying
+    // exactly what is missing beats the ENOENT or empty-sources failure that
+    // used to happen several minutes into a download.
+    const availability = catalog.availabilityOf(game.id);
+    if (availability.state !== 'ready') {
+      throw ApiError.conflict(availability.note ?? 'This game cannot be installed yet');
+    }
+
     const files = db.select().from(gameFiles).where(eq(gameFiles.gameId, id)).all();
     const issued = downloadTokens.issue({ userId: context.user.id, gameId: id });
 

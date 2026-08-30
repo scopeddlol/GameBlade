@@ -168,6 +168,14 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
       .job:last-child { margin-bottom: 0; }
       .job h3 { font-size: 14px; margin: 0 0 2px; }
       .job p { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+      /* The live readout under the hashing bar. Monospaced paths, because a
+         file name is the one thing here somebody may want to copy exactly. */
+      .hashing-now { font-size: 12px; line-height: 1.7; margin: 0 0 8px; }
+      .hashing-now code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        word-break: break-all;
+        color: var(--fg);
+      }
     </style>
   </head>
   <body>
@@ -551,7 +559,11 @@ function jobs(status: NodeStatusSnapshot): string {
              this node can be served over the mesh until its game is hashed, and on a real
              archive the first pass takes hours — so it is worth starting now rather than
              waiting for the timer.</p>
-          ${hashing.running ? progressBar(hashDone, hashing.total) : ''}
+          ${
+            hashing.running
+              ? progressBar(hashing.bytesHashed, hashing.bytesTotal) + hashingNow(status)
+              : ''
+          }
           <p>${hashDetail}</p>
           <div class="actions">
             <button type="button" data-post="/api/node/hash" data-busy="Starting the pass…"
@@ -587,6 +599,48 @@ function scanPhase(status: NodeStatusSnapshot): string {
 function progressBar(done: number, total: number): string {
   const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
   return `<div class="bar"><i style="width:${percent}%"></i></div>`;
+}
+
+/**
+ * What the hashing pass is actually doing this second.
+ *
+ * The bar above is a percentage of a number nobody can feel. This is the part
+ * an operator was reading `docker logs` for: the title being read, the files
+ * open inside it, how fast the bytes are coming off the disk, and how long
+ * that leaves. All of it is already in memory; none of it was on screen.
+ */
+function hashingNow(status: NodeStatusSnapshot): string {
+  const sweep = status.hashing;
+  const game = status.hashingGame;
+
+  const title = sweep.currentGameTitle ?? game.gameTitle;
+  const lines: string[] = [];
+
+  if (title) {
+    const within =
+      game.total > 0
+        ? ` — file ${Math.min(game.processed + 1, game.total).toLocaleString('en')} of ${game.total.toLocaleString('en')}`
+        : '';
+    lines.push(`<strong>${escapeHtml(title)}</strong>${within}`);
+  }
+
+  for (const file of game.currentFiles.slice(0, 4)) {
+    lines.push(`<code>${escapeHtml(file)}</code>`);
+  }
+  if (game.currentFiles.length > 4) {
+    lines.push(`<span class="muted">and ${game.currentFiles.length - 4} more</span>`);
+  }
+
+  const rate = sweep.bytesPerSecond > 0 ? `${formatBytes(sweep.bytesPerSecond)}/s` : null;
+  const done = `${formatBytes(sweep.bytesHashed)} of ${formatBytes(sweep.bytesTotal)}`;
+  const eta = sweep.etaSeconds === null ? null : `${formatDuration(sweep.etaSeconds)} left`;
+  const workers = `${game.concurrency} at a time${game.threaded ? '' : ' (in-process)'}`;
+
+  lines.push(
+    `<span class="muted">${[done, rate, eta, workers].filter(Boolean).join(' · ')}</span>`,
+  );
+
+  return `<div class="hashing-now">${lines.join('<br>')}</div>`;
 }
 
 function servable(status: NodeStatusSnapshot): string {
@@ -667,6 +721,15 @@ function mountHint(status: NodeStatusSnapshot): string {
   - /mnt/3TB:${escapeHtml(status.multiLibraryRoot)}/3TB:ro
   - /mnt/E:${escapeHtml(status.multiLibraryRoot)}/E:ro</pre>
         </div>`;
+}
+
+/** A duration in seconds as hours and minutes, for the hashing estimate. */
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
 
 /** Bytes, at the precision a person reads rather than the one a disk reports. */

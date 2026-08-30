@@ -2,6 +2,7 @@ import type { ClientButton, GameSummary } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
+  Clock,
   Download,
   ExternalLink,
   FolderOpen,
@@ -18,6 +19,7 @@ import {
 import { useAddToLibrary, useRemoveFromLibrary } from '../hooks/useLibrary.js';
 import { buttonIcon } from '../lib/buttonIcons.js';
 import { errorMessage, ipc, type DownloadState, type InstalledGame } from '../lib/ipc.js';
+import { isComingSoon } from './GameCard.js';
 import type { MenuItem } from './ContextMenu.js';
 
 /** Operator-defined links, cached for the session — they change rarely. */
@@ -107,11 +109,14 @@ export function useGameMenuItems({ onOpen, onError, onManageGroups, onInstall }:
         onSelect: () => run(ipc.cancelDownload(game.id)),
       });
     } else {
+      const notReady = isComingSoon(game);
       items.push({
-        label: 'Install',
-        icon: <Download size={14} />,
-        disabled: game.isMissing,
-        disabledReason: 'This game is no longer on the server',
+        label: notReady ? 'Coming soon' : 'Install',
+        icon: notReady ? <Clock size={14} /> : <Download size={14} />,
+        disabled: game.isMissing || notReady,
+        disabledReason: game.isMissing
+          ? 'This game is no longer on the server'
+          : (game.availabilityNote ?? 'Not ready to install yet'),
         onSelect: () => (onInstall ? onInstall(game) : run(ipc.startDownload(game.id))),
       });
     }
