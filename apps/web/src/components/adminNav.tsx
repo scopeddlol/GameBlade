@@ -99,6 +99,16 @@ export const ADMIN_SECTIONS: AdminSection[] = [
         prefetch: [{ key: ['admin', 'featured'], path: '/admin/featured' }],
       },
       {
+        to: '/admin/catalog/launch-rules',
+        label: 'Launch rules',
+        prefetch: [
+          {
+            key: ['admin', 'launch-rules', 'missing', '', 0],
+            path: '/admin/launch-rules?status=missing&offset=0&limit=50',
+          },
+        ],
+      },
+      {
         to: '/admin/catalog/save-paths',
         label: 'Save paths',
         prefetch: [{ key: ['admin', 'save-manifest'], path: '/admin/save-manifest' }],

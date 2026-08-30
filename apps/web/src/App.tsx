@@ -19,6 +19,7 @@ import { AdminApiPage } from './pages/admin/AdminApiPage.js';
 import { AdminDiscordPage } from './pages/admin/AdminDiscordPage.js';
 import { AdminBugsPage } from './pages/admin/AdminBugsPage.js';
 import { AdminHealthPage } from './pages/admin/AdminHealthPage.js';
+import { AdminLaunchRulesPage } from './pages/admin/AdminLaunchRulesPage.js';
 import { AdminSavePathsPage } from './pages/admin/AdminSavePathsPage.js';
 import { AdminClientPage } from './pages/admin/AdminClientPage.js';
 import { AdminFeaturedPage } from './pages/admin/AdminFeaturedPage.js';
@@ -132,6 +133,7 @@ export function App() {
             <Route path="achievements" element={<AdminAchievementsPage />} />
             <Route path="featured" element={<AdminFeaturedPage />} />
             <Route path="save-paths" element={<AdminSavePathsPage />} />
+            <Route path="launch-rules" element={<AdminLaunchRulesPage />} />
             {/* A coordinator holds no game files, so there is no folder to add
                 and no disk to scan — and scanning an absent one used to flag
                 its nodes' entire catalog as missing. The server refuses those

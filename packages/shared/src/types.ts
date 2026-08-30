@@ -328,6 +328,37 @@ export interface ClientButton {
  * One folder on a player's machine that might already hold a game from the
  * catalog, offered for linking rather than re-downloading.
  */
+/**
+ * One game as the Launch Rules tab sees it.
+ *
+ * The candidates travel with the row so the page is a list of dropdowns rather
+ * than a list of text fields: an operator setting a hundred launch rules should
+ * be picking from what is actually in each folder, not typing paths from memory
+ * and finding out they were wrong when a player presses Play.
+ */
+export interface LaunchRuleRow {
+  gameId: string;
+  title: string;
+  kind: GameKind;
+  rule: LaunchRule | null;
+  /** Executables found in this game's own files, largest first. */
+  candidates: Array<{ path: string; sizeBytes: number }>;
+  /**
+   * The one to offer, chosen by name first and size second.
+   *
+   * Null where nothing in the folder looks like a game binary.
+   */
+  suggestion: string | null;
+  /**
+   * True for an archive, whose contents are not indexed.
+   *
+   * The zip's central directory has to be read to list its executables, which
+   * is a per-game cost the list will not pay for every row up front — so those
+   * rows fetch their own candidates when they are opened.
+   */
+  needsArchiveScan: boolean;
+}
+
 export interface LocalGameMatch {
   /** The folder name that was searched for. */
   name: string;
