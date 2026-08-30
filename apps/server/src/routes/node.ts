@@ -187,6 +187,9 @@ export async function nodeRoutes(app: FastifyInstance): Promise<void> {
 
     state.coordinatorUrl = input.coordinatorUrl.replace(/\/+$/, '');
     state.enrolmentToken = input.enrolmentToken;
+    // This submission is a new attempt. Do not keep showing the reason the
+    // previous code failed while the agent is trying the replacement.
+    delete state.registrationError;
 
     await mkdir(path.dirname(config.nodeStatePath), { recursive: true });
     await writeFile(config.nodeStatePath, JSON.stringify(state, null, 2), 'utf8');

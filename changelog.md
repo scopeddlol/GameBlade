@@ -154,6 +154,43 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.5 - August 29, 2026
+
+This release makes node enrolment reliable for large, already-populated archives
+and closes a re-registration hole in the coordinator protocol.
+
+### The setup form stays put while you use it
+
+The node status page refreshed itself every three to five seconds even while an
+operator was typing. Behind an HTTPS reverse proxy that could repeatedly clear
+the coordinator URL and token before the form was submitted. Automatic refresh
+now pauses while the form is focused or edited, then resumes after enrolment.
+Registration failures returned by the mesh agent are shown on the page instead
+of being hidden behind a generic disconnected state.
+
+### Large node catalogs can reach the coordinator
+
+Fastify's default one-megabyte request limit also applied to catalog reports. A
+real node with hundreds of thousands of files could enrol successfully and then
+fail every catalog upload. The mesh catalog endpoint now accepts reports up to
+128 MiB while the rest of the API keeps its smaller default limit.
+
+### Re-registration proves possession of the node's private key
+
+The coordinator used to accept a node's public key as sufficient proof when
+issuing a replacement token. Public keys are intentionally visible, so that
+allowed anyone who learned one to rotate the legitimate node's token and assume
+its identity. Re-registration now uses a one-use challenge signed by the node's
+Ed25519 private key, with replay protection and a short expiry.
+
+The Rust mesh agent now performs that challenge-and-proof exchange and persists
+its identity before contacting the coordinator. It is also the only component
+allowed to register: the catalog reporter reads the shared result instead of
+racing the agent and repeatedly rotating the token. Reporter retries now keep a
+single live timer rather than retaining completed handles.
+
+---
+
 ## Version 0.6.4 - August 29, 2026
 
 0.6.3 made pairing a node the only step there is. This is the release where

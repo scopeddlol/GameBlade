@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createPublicKey, verify as verifyBytes } from 'node:crypto';
 import {
   MESH_CHUNK_BYTES,
   MESH_HEARTBEAT_TIMEOUT_SECONDS,
@@ -40,11 +40,20 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 /** How long an unused enrolment code stays good for. */
 const ENROLMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** A proof challenge is useful only for the request immediately following it. */
+const REGISTRATION_CHALLENGE_TTL_MS = 60_000;
+
+/** The exact bytes both implementations sign when a known node comes back. */
+export function registrationProofMessage(publicKey: string, challenge: string): string {
+  return `gameblade-register-v1:${publicKey}:${challenge}`;
+}
+
 export interface RegisterInput {
-  enrolmentToken: string;
+  enrolmentToken?: string;
   publicKey: string;
   agentVersion?: string;
   endpoints: MeshEndpoint[];
+  proof?: { challenge: string; signature: string };
   /** What the coordinator saw the registration arrive from. */
   observedAddress?: string;
 }
@@ -71,12 +80,42 @@ export interface HeartbeatInput {
  * the decision being a security judgement.
  */
 export class MeshService {
+  /** One outstanding proof challenge per known key; replaced and consumed once. */
+  private readonly registrationChallenges = new Map<
+    string,
+    { challenge: string; expiresAt: number }
+  >();
+
   constructor(
     private readonly db: Db,
     private readonly logger: Logger,
   ) {}
 
   /* --------------------------------------------------------------- enrolment */
+
+  /**
+   * Ask a known node to prove it still holds the private half of its key.
+   *
+   * The public half is deliberately given to clients, so merely repeating it
+   * can never authenticate a node. A short-lived, one-use challenge turns the
+   * existing Ed25519 identity into an actual proof without keeping another
+   * long-lived secret on the node.
+   */
+  createRegistrationChallenge(publicKey: string): {
+    challenge: string;
+    expiresAt: string;
+  } {
+    const node = this.db.select().from(meshNodes).where(eq(meshNodes.publicKey, publicKey)).get();
+    if (!node) throw ApiError.notFound('That node key is not registered');
+    if (node.status === 'blocked') {
+      throw ApiError.forbidden('This node has been blocked by an administrator');
+    }
+
+    const challenge = newToken(32);
+    const expiresAt = Date.now() + REGISTRATION_CHALLENGE_TTL_MS;
+    this.registrationChallenges.set(publicKey, { challenge, expiresAt });
+    return { challenge, expiresAt: new Date(expiresAt).toISOString() };
+  }
 
   /**
    * Mint a one-time code that turns a machine into a node.
@@ -193,6 +232,9 @@ export class MeshService {
       if (existing.status === 'blocked') {
         throw ApiError.forbidden('This node has been blocked by an administrator');
       }
+      if (!input.proof || !this.consumeRegistrationProof(input.publicKey, input.proof)) {
+        throw ApiError.forbidden('Prove possession of this node’s private key to re-register it');
+      }
       this.applyEndpoints(existing.id, input.endpoints, input.observedAddress);
 
       // A fresh credential on every registration. An agent re-registering is
@@ -210,6 +252,10 @@ export class MeshService {
         .where(eq(meshNodes.id, existing.id))
         .run();
       return { nodeId: existing.id, status: 'online', nodeToken };
+    }
+
+    if (!input.enrolmentToken) {
+      throw ApiError.forbidden('A new node needs an enrolment code');
     }
 
     const enrolment = this.db
@@ -257,6 +303,41 @@ export class MeshService {
     this.applyEndpoints(nodeId, input.endpoints, input.observedAddress);
     this.logger.info({ nodeId, label: enrolment.label }, 'mesh node enrolled');
     return { nodeId, status: 'online', nodeToken };
+  }
+
+  /** Consume and verify one proof challenge. It cannot be replayed. */
+  private consumeRegistrationProof(
+    publicKey: string,
+    proof: { challenge: string; signature: string },
+  ): boolean {
+    const expected = this.registrationChallenges.get(publicKey);
+    this.registrationChallenges.delete(publicKey);
+
+    if (
+      !expected ||
+      expected.expiresAt <= Date.now() ||
+      !safeEqual(expected.challenge, proof.challenge)
+    ) {
+      return false;
+    }
+
+    try {
+      const raw = Buffer.from(publicKey, 'base64url');
+      if (raw.length !== 32) return false;
+
+      // Ed25519 SubjectPublicKeyInfo is a fixed twelve-byte prefix followed by
+      // the raw 32-byte key. Node's verifier expects the wrapped form.
+      const spki = Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), raw]);
+      const key = createPublicKey({ key: spki, format: 'der', type: 'spki' });
+      return verifyBytes(
+        null,
+        Buffer.from(registrationProofMessage(publicKey, proof.challenge)),
+        key,
+        Buffer.from(proof.signature, 'base64url'),
+      );
+    } catch {
+      return false;
+    }
   }
 
   /**

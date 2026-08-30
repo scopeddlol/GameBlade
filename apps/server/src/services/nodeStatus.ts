@@ -21,6 +21,7 @@ interface NodeStateFile {
   secretKey?: string;
   coordinatorUrl?: string;
   enrolmentToken?: string;
+  registrationError?: string;
 }
 
 export interface ReportAttempt {
@@ -46,6 +47,8 @@ export interface NodeStatusSnapshot {
   configured: boolean;
   /** Whether a code is sitting in the state file waiting to be spent. */
   enrolmentPending: boolean;
+  /** The mesh agent's last failed registration attempt, if any. */
+  enrolmentError: string | null;
   nodeId: string | null;
   /** Whether the mesh agent has generated this node's key yet. */
   keyPresent: boolean;
@@ -175,6 +178,7 @@ export class NodeStatusService {
       enrolled: Boolean(state.nodeId),
       configured: Boolean(this.config.coordinatorUrl ?? state.coordinatorUrl),
       enrolmentPending: Boolean(state.enrolmentToken),
+      enrolmentError: state.registrationError ?? null,
       nodeId: state.nodeId ?? null,
       keyPresent: Boolean(state.secretKey),
       libraries: rows.map((library, index) => ({

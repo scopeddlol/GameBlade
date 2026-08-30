@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use gameblade_mesh::agent::{
     Agent, AgentState, CatalogGame, LibraryChunks, LibraryIndex, RendezvousReply, RETRY_DELAY,
 };
@@ -50,6 +51,11 @@ struct Registration {
     coordinator_public_key: String,
     #[serde(rename = "heartbeatSeconds", default = "default_heartbeat")]
     heartbeat_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegistrationChallenge {
+    challenge: String,
 }
 
 fn default_heartbeat() -> u64 {
@@ -159,6 +165,11 @@ async fn main() {
         match start(&server_url, &state_path, port).await {
             Ok(agent) => break agent,
             Err(err) => {
+                let mut state = AgentState::load(&state_path);
+                state.registration_error = Some(err.to_string());
+                if let Err(save_err) = state.save(&state_path) {
+                    eprintln!("could not write the registration error to node state: {save_err}");
+                }
                 eprintln!(
                     "could not start: {err}; retrying in {}s",
                     RETRY_DELAY.as_secs()
@@ -185,6 +196,14 @@ async fn main() {
 async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> MeshResult<Agent> {
     let mut state = AgentState::load(state_path);
     let identity = state.identity()?;
+
+    // Persist the identity before the first network request. Registration can
+    // be refused (a mistyped or expired code is ordinary), and the server
+    // process beside this agent reads the shared state for its status page.
+    // Waiting until a successful response left that page saying the key had
+    // not been generated while the agent retried an error only its container
+    // log could see.
+    state.save(state_path)?;
 
     let stun: Vec<&str> = DEFAULT_STUN_SERVERS.to_vec();
     let endpoint = MeshEndpoint::node_with_discovery(identity.clone(), port, &stun)?;
@@ -241,42 +260,60 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
         .or_else(|| state.enrolment_token.clone())
         .unwrap_or_default();
 
-    if enrolment.is_empty() {
-        return Err(MeshError::Refused(
-            "no enrolment code: paste one from Admin → Nodes into this node's setup page".into(),
-        ));
-    }
+    let registration = if enrolment.is_empty() {
+        // A partially lost state file can retain the private key while losing
+        // its replaceable token. Prove that key rather than asking an operator
+        // for a second code. An unknown key still needs ordinary enrolment.
+        register_with_proof(&http, server_url, &identity, &endpoints)
+            .await
+            .map_err(|_| {
+                MeshError::Refused(
+                    "no enrolment code: paste one from Admin → Nodes into this node's setup page"
+                        .into(),
+                )
+            })?
+    } else {
+        let body = serde_json::json!({
+            "enrolmentToken": enrolment,
+            "publicKey": identity.public_key_base64(),
+            "agentVersion": env!("CARGO_PKG_VERSION"),
+            "endpoints": &endpoints,
+        });
 
-    let body = serde_json::json!({
-        "enrolmentToken": enrolment,
-        "publicKey": identity.public_key_base64(),
-        "agentVersion": env!("CARGO_PKG_VERSION"),
-        "endpoints": endpoints,
-    });
+        let response = http
+            .post(format!("{server_url}/api/mesh/register"))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| MeshError::Unreachable(format!("registering: {err}")))?;
 
-    let response = http
-        .post(format!("{server_url}/api/mesh/register"))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|err| MeshError::Unreachable(format!("registering: {err}")))?;
+        if response.status().is_success() {
+            response
+                .json()
+                .await
+                .map_err(|err| MeshError::Protocol(format!("registration reply: {err}")))?
+        } else {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        return Err(MeshError::Refused(format!(
-            "registration refused ({status}): {text}"
-        )));
-    }
-
-    let registration: Registration = response
-        .json()
-        .await
-        .map_err(|err| MeshError::Protocol(format!("registration reply: {err}")))?;
+            // The key may already be registered even though this process has
+            // only the old one-time code. A proof recovers that same node; an
+            // unknown key preserves the coordinator's useful enrolment error.
+            match register_with_proof(&http, server_url, &identity, &endpoints).await {
+                Ok(registration) => registration,
+                Err(_) => {
+                    return Err(MeshError::Refused(format!(
+                        "registration refused ({status}): {text}"
+                    )))
+                }
+            }
+        }
+    };
 
     state.node_id = Some(registration.node_id.clone());
     state.node_token = Some(registration.node_token.clone());
     state.coordinator_key = Some(registration.coordinator_public_key.clone());
+    state.registration_error = None;
     // Spent. Cleared so it is not sitting on disk being useless, and so a
     // restart cannot look like it still has something to enrol with.
     state.enrolment_token = None;
@@ -557,10 +594,9 @@ async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, stat
 
 /// Present this node's key again and take the credential that comes back.
 ///
-/// Not enrolment: the coordinator matches on the public key, finds the node it
-/// already has, and issues a fresh token. No enrolment code is involved and
-/// none is needed — which is the property that makes recovering from a rejected
-/// credential something the agent can do by itself.
+/// Not enrolment: the coordinator matches on the public key, challenges this
+/// process to prove it owns the private half, and issues a fresh token. No
+/// enrolment code is involved or kept.
 async fn reregister(
     http: &reqwest::Client,
     server_url: &str,
@@ -584,12 +620,60 @@ async fn reregister(
         }));
     }
 
+    let registration = register_with_proof(http, server_url, identity, &endpoints).await?;
+
+    // Written through so the server process beside this one, which reads the
+    // same file, is not left presenting the credential that was just replaced.
+    let mut state = AgentState::load(state_path);
+    state.node_id = Some(registration.node_id);
+    state.node_token = Some(registration.node_token.clone());
+    state.coordinator_key = Some(registration.coordinator_public_key);
+    state.registration_error = None;
+    state.save(state_path)?;
+
+    Ok(registration.node_token)
+}
+
+/** Recover a known registration by proving possession of its private key. */
+async fn register_with_proof(
+    http: &reqwest::Client,
+    server_url: &str,
+    identity: &gameblade_mesh::NodeIdentity,
+    endpoints: &[serde_json::Value],
+) -> MeshResult<Registration> {
+    let public_key = identity.public_key_base64();
+    let response = http
+        .get(format!("{server_url}/api/mesh/register/challenge"))
+        .query(&[("publicKey", public_key.as_str())])
+        .send()
+        .await
+        .map_err(|err| MeshError::Unreachable(format!("requesting key challenge: {err}")))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(MeshError::Refused(format!(
+            "key challenge refused ({status}): {body}"
+        )));
+    }
+
+    let challenge: RegistrationChallenge = response
+        .json()
+        .await
+        .map_err(|err| MeshError::Protocol(format!("key challenge reply: {err}")))?;
+    let message = format!("gameblade-register-v1:{public_key}:{}", challenge.challenge);
+    let signature = URL_SAFE_NO_PAD.encode(identity.sign(message.as_bytes()));
+
     let response = http
         .post(format!("{server_url}/api/mesh/register"))
         .json(&serde_json::json!({
-            "publicKey": identity.public_key_base64(),
+            "publicKey": public_key,
             "agentVersion": env!("CARGO_PKG_VERSION"),
             "endpoints": endpoints,
+            "proof": {
+                "challenge": challenge.challenge,
+                "signature": signature,
+            },
         }))
         .send()
         .await
@@ -601,20 +685,10 @@ async fn reregister(
         return Err(MeshError::Refused(format!("({status}): {body}")));
     }
 
-    let registration: Registration = response
+    response
         .json()
         .await
-        .map_err(|err| MeshError::Protocol(format!("registration reply: {err}")))?;
-
-    // Written through so the server process beside this one, which reads the
-    // same file, is not left presenting the credential that was just replaced.
-    let mut state = AgentState::load(state_path);
-    state.node_id = Some(registration.node_id);
-    state.node_token = Some(registration.node_token.clone());
-    state.coordinator_key = Some(registration.coordinator_public_key);
-    state.save(state_path)?;
-
-    Ok(registration.node_token)
+        .map_err(|err| MeshError::Protocol(format!("registration reply: {err}")))
 }
 
 /// Rebuild the index of what this machine can serve.

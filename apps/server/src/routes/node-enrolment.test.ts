@@ -45,10 +45,14 @@ describe('a node joining a coordinator', () => {
    * the public half, so anything else here would fail in a way that looks like
    * a rejected enrolment rather than a malformed key.
    */
-  function agentSecretKey(): string {
-    const { privateKey } = generateKeyPairSync('ed25519');
+  function agentIdentity(): { secretKey: string; publicKey: string } {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
     const pkcs8 = privateKey.export({ format: 'der', type: 'pkcs8' });
-    return Buffer.from(pkcs8.subarray(16)).toString('base64url');
+    const spki = publicKey.export({ format: 'der', type: 'spki' });
+    return {
+      secretKey: Buffer.from(pkcs8.subarray(16)).toString('base64url'),
+      publicKey: Buffer.from(spki.subarray(12)).toString('base64url'),
+    };
   }
 
   beforeAll(async () => {
@@ -125,7 +129,8 @@ describe('a node joining a coordinator', () => {
     // The agent's half: its key, in the file both processes share.
     await mkdir(nodeDir, { recursive: true });
     const statePath = path.join(nodeDir, 'node-state.json');
-    await writeFile(statePath, JSON.stringify({ secretKey: agentSecretKey() }), 'utf8');
+    const identity = agentIdentity();
+    await writeFile(statePath, JSON.stringify({ secretKey: identity.secretKey }), 'utf8');
 
     const node = await buildApp(
       loadConfig({
@@ -175,6 +180,30 @@ describe('a node joining a coordinator', () => {
       });
       expect(saved.statusCode).toBe(202);
 
+      /* ---------------------------------------- what the mesh agent does next */
+
+      // The agent is the sole registrar. Letting the catalog reporter race it
+      // rotated the bearer token twice; whichever process wrote last could
+      // leave the other permanently presenting a stale credential.
+      const registered = await coordinator.inject({
+        method: 'POST',
+        url: '/api/mesh/register',
+        payload: { enrolmentToken: code, publicKey: identity.publicKey, endpoints: [] },
+      });
+      expect(registered.statusCode).toBe(200);
+      const registration = registered.json() as {
+        nodeId: string;
+        nodeToken: string;
+        coordinatorPublicKey: string;
+      };
+      const configured = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, string>;
+      configured.nodeId = registration.nodeId;
+      configured.nodeToken = registration.nodeToken;
+      configured.coordinatorKey = registration.coordinatorPublicKey;
+      configured.coordinatorUrl = coordinatorUrl;
+      delete configured.enrolmentToken;
+      await writeFile(statePath, JSON.stringify(configured), 'utf8');
+
       /* ------------------------------------- what the reporter does next, now */
 
       const reporter = new CatalogReporter(
@@ -184,7 +213,8 @@ describe('a node joining a coordinator', () => {
       );
 
       // Configured by the form, not by the environment — which is the whole
-      // point of it: nothing was passed to this process.
+      // point of it: nothing was passed to this process. It reads the agent's
+      // registration rather than issuing a second one.
       expect(await reporter.isConfigured()).toBe(true);
       expect(await reporter.ensureRegistered()).toBe(true);
 

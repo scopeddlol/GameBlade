@@ -65,6 +65,15 @@ describe('a node’s own page', () => {
     expect(script.statusCode).toBe(200);
     expect(script.headers['content-type']).toContain('javascript');
     expect(script.body).toContain('/api/node/setup');
+    // Status updates still reload the page, but never while somebody is in
+    // the form or after they have pasted a one-time code. The old unconditional
+    // three-second timer made a busy node almost impossible to enrol.
+    expect(script.body).toContain('function setupInProgress()');
+    expect(script.body).toContain('form.contains(document.activeElement)');
+    expect(script.body).toContain('form.elements.enrolmentToken.value !==');
+    expect(script.body).not.toContain(
+      'var timer = setTimeout(function () { location.reload(); }, refreshIn);',
+    );
 
     // And the policy that broke it is still on, so this cannot regress into an
     // inline block that happens to work in one browser.
@@ -222,5 +231,23 @@ describe('a node’s own page', () => {
 
     const page = await app.inject({ method: 'GET', url: '/' });
     expect(page.body).toContain('/libraries');
+  });
+
+  it('shows the coordinator’s actual enrolment failure on the setup page', async () => {
+    const { app, dataDir } = await bootNode();
+    await writeFile(
+      path.join(dataDir, 'node-state.json'),
+      JSON.stringify({
+        secretKey: 'generated',
+        coordinatorUrl: 'https://games.example.com',
+        enrolmentToken: 'expired-code',
+        registrationError: 'registration refused (403): That enrolment code has expired',
+      }),
+      'utf8',
+    );
+
+    const page = await app.inject({ method: 'GET', url: '/' });
+    expect(page.body).toContain('That enrolment code has expired');
+    expect(page.body).toContain('enrolment failed');
   });
 });

@@ -1,5 +1,4 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { MESH_CHUNK_BYTES, type ReportedFile, type ReportedGame } from '@gameblade/shared';
 import { eq, isNull } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
@@ -21,7 +20,7 @@ interface NodeState {
   coordinatorKey?: string;
   /** Written by the setup page, so a node can be pointed without a redeploy. */
   coordinatorUrl?: string;
-  /** The one-time code, until whichever process registers first spends it. */
+  /** The one-time code, until the mesh agent spends it. */
   enrolmentToken?: string;
 }
 
@@ -74,13 +73,7 @@ export class CatalogReporter {
     return this.coordinatorUrl() !== null;
   }
 
-  /**
-   * Enrol with the coordinator, or recover the enrolment from last time.
-   *
-   * The code is spent on first use, so it is normal — and expected — for it to
-   * be absent from the environment after the first run. What identifies this
-   * node afterwards is the key in the state file.
-   */
+  /** Wait for the mesh agent beside this process to finish enrolment. */
   async ensureRegistered(): Promise<boolean> {
     await this.loadState();
 
@@ -92,8 +85,7 @@ export class CatalogReporter {
       return false;
     }
 
-    const enrolmentToken = this.config.enrolmentToken ?? this.state.enrolmentToken ?? null;
-    if (!enrolmentToken) {
+    if (!(this.config.enrolmentToken ?? this.state.enrolmentToken)) {
       this.logger.warn(
         {},
         'no enrolment code and no saved registration; paste one into this node’s setup page',
@@ -101,54 +93,18 @@ export class CatalogReporter {
       return false;
     }
 
-    // The mesh agent alongside this process owns the keypair. If it has not
-    // started yet there is nothing to register with, so wait rather than
-    // generating a second identity for the same node.
     if (!this.state.secretKey) {
       this.logger.info({}, 'waiting for the mesh agent to generate this node’s key');
       return false;
     }
 
-    try {
-      const response = await fetch(`${coordinatorUrl}/api/mesh/register`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          enrolmentToken,
-          publicKey: await this.publicKey(),
-          endpoints: [],
-        }),
-      });
-
-      if (!response.ok) {
-        this.logger.error(
-          { status: response.status },
-          'the coordinator refused this node’s enrolment',
-        );
-        return false;
-      }
-
-      const body = (await response.json()) as {
-        nodeId: string;
-        nodeToken: string;
-        coordinatorPublicKey: string;
-      };
-
-      this.state.nodeId = body.nodeId;
-      this.state.nodeToken = body.nodeToken;
-      this.state.coordinatorKey = body.coordinatorPublicKey;
-      // Spent, and remembered: the code is of no further use and the URL is
-      // how this node finds its way back after a restart.
-      delete this.state.enrolmentToken;
-      this.state.coordinatorUrl = coordinatorUrl;
-      await this.saveState();
-
-      this.logger.info({ nodeId: body.nodeId }, 'node enrolled with the coordinator');
-      return true;
-    } catch (error) {
-      this.logger.warn({ err: error }, 'could not reach the coordinator to enrol');
-      return false;
-    }
+    // Only the Rust agent registers. Both processes used to race the same
+    // one-time code and then rotate each other's node token; whichever stale
+    // write landed last left catalog reporting broken until the next restart.
+    // The agent is also the process that owns and proves the private key, so it
+    // is the one authoritative registrar. This loop rereads what it writes.
+    this.logger.info({}, 'waiting for the mesh agent to finish enrolment');
+    return false;
   }
 
   /**
@@ -456,29 +412,6 @@ export class CatalogReporter {
       // No state is a first run, not a failure.
       this.state = {};
     }
-  }
-
-  private async saveState(): Promise<void> {
-    await mkdir(path.dirname(this.config.statePath), { recursive: true });
-    await writeFile(this.config.statePath, JSON.stringify(this.state, null, 2), 'utf8');
-  }
-
-  /** The public half of the key the mesh agent generated. */
-  private async publicKey(): Promise<string> {
-    const { createPrivateKey, createPublicKey } = await import('node:crypto');
-    const secret = Buffer.from(this.state.secretKey ?? '', 'base64url');
-
-    // Ed25519 secret keys wrap into PKCS#8 behind a fixed sixteen-byte prefix.
-    // Building it here avoids a dependency for what is a constant.
-    const pkcs8 = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), secret]);
-
-    const privateKey = createPrivateKey({ key: pkcs8, format: 'der', type: 'pkcs8' });
-    // The raw 32 bytes are the tail of the SPKI encoding, which is what the
-    // coordinator and the mesh agent both exchange.
-    return createPublicKey(privateKey)
-      .export({ format: 'der', type: 'spki' })
-      .subarray(12)
-      .toString('base64url');
   }
 }
 
