@@ -154,6 +154,88 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.6 - August 30, 2026
+
+Five things the client and the panel could not do, and one thing they did
+slowly.
+
+### Hashing uses the whole machine, and says what it is doing
+
+Both hashing passes read one file at a time on the main thread, which was slow
+twice over: SHA-256 is real CPU work that blocked everything else the process
+was doing, and a single sequential reader leaves most of a disk's throughput
+unused. They now run through a worker pool — several files in flight, on real
+threads, falling back to in-process hashing where no compiled worker exists so
+development and tests behave identically. The read buffer went from 1 MiB to
+8 MiB, and the whole-file and per-chunk digests still come from one pass over
+the bytes. `HASH_CONCURRENCY` overrides the automatic choice for the two cases
+it cannot know about: an archive on a single spinning disk, where parallel
+reads become seek thrash, and a machine whose cores are wanted elsewhere.
+
+The readout was a bare percentage, which on an archive is the least useful
+number available — it moves a whole file at a time and says nothing about which
+of several thousand is being read. A node's page now shows the game's title,
+the files open right now, bytes done against bytes total, a read rate over a
+trailing window and an estimate built on it.
+
+### Games that cannot be installed say so instead of failing
+
+The store offered Install on everything, including games whose files were still
+being hashed, whose node was offline, or which had never been indexed. Picking
+a drive and waiting several minutes for an error was the only way to find out.
+Every game now carries an availability verdict, and the ones that are not ready
+show as **Coming soon** with the reason attached — on the card, in the row, in
+the right-click menu and on the detail page. They stay listed and can still be
+added to a library, because a bookmark for something not out yet is exactly
+what somebody wants. The install manifest refuses the same cases with the same
+explanation. A standalone server is unaffected: it holds its own files and can
+stream them hashed or not.
+
+### Import brings back saves, not just games
+
+The import tool matched folders against catalog titles and stopped there, which
+is half of what somebody who lost their library needs — their save folders are
+still on the machine, under AppData and Documents rather than inside the
+install, and nothing looked for them. Every match now carries its save rule,
+batched with the title matching, so the client can find a save on disk before
+anything is linked and offer to send it back to the cloud. Uploads are
+unforced, so a save here can never overwrite a newer one from another machine.
+The scan runs over every mapped game folder on open and reports the roots it
+searched, including any configured folder that is no longer on the PC.
+
+### Launch rules are picked, not typed
+
+Setting a launch rule meant opening a game, opening its editor and typing a
+path from memory; on a catalog of any size that is an afternoon, and a path
+that is subtly wrong looks set and fails weeks later when somebody presses
+Play. **Admin → Catalog → Launch rules** is a list of dropdowns instead. Each
+row lists the executables actually inside that game's folder, with uninstallers
+and redistributables filtered out and the one whose name matches the title
+pre-selected. "Accept N suggestions" fills a page at once. Arguments, a working
+directory and a typed path sit behind Advanced. Archives read their own
+contents when a row is opened.
+
+### The chat grew the five things it was missing
+
+Right-clicking a message opens a menu: reply, copy, delete your own, and mute
+whoever wrote it. A reply carries a quote of what it answers, and survives the
+withdrawal of the message it answered. Reactions sit at the top of that menu as
+six emoji and as chips under the message; clicking one you already gave takes
+it back.
+
+Muting is not blocking — the group carries on, everyone else is unaffected, and
+the muted person is never told. Their messages fold to one line the reader can
+unfold, and stop counting towards the unread badge. Settings → Privacy lists
+who is muted.
+
+Pasting a picture into the composer sends it straight from the clipboard rather
+than requiring it be saved to disk first, picked in a file dialog, and deleted
+afterwards — which nobody does. And a game can be sent as a card rather than a
+pasted title: search the whole archive, pick one, and the other person gets its
+cover and genres.
+
+---
+
 ## Version 0.6.5 - August 29, 2026
 
 This release makes node enrolment reliable for large, already-populated archives
