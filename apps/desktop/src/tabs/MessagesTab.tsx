@@ -291,7 +291,13 @@ function Thread({
         items.push({
           label: 'Copy text',
           icon: <Copy size={14} />,
-          onSelect: () => void navigator.clipboard.writeText(message.body),
+          onSelect: () => {
+            // Reported rather than swallowed: a Copy that silently does
+            // nothing is worse than one that says it could not.
+            void navigator.clipboard
+              .writeText(message.body)
+              .catch(() => onError('Could not copy that to the clipboard.'));
+          },
         });
       }
     }
@@ -431,10 +437,10 @@ function Thread({
             menu.state.target.deleted ? undefined : (
               <ReactionPicker
                 message={menu.state.target}
-                onPick={(emoji) => {
-                  const messageId = menu.state?.target.id;
+                messageId={menu.state.target.id}
+                onPick={(messageId, emoji) => {
                   menu.close();
-                  if (messageId) react.mutate({ messageId, emoji });
+                  react.mutate({ messageId, emoji });
                 }}
               />
             )
@@ -449,10 +455,13 @@ function Thread({
 /** The strip of emoji at the top of a message's right-click menu. */
 function ReactionPicker({
   message,
+  messageId,
   onPick,
 }: {
   message: MessageInfo;
-  onPick: (emoji: string) => void;
+  /** Passed back on pick, so closing the menu first cannot lose it. */
+  messageId: string;
+  onPick: (messageId: string, emoji: string) => void;
 }) {
   return (
     <div className="reaction-picker">
@@ -467,7 +476,7 @@ function ReactionPicker({
             className={clsx('reaction-pick', mine && 'mine')}
             aria-label={`React with ${emoji}`}
             aria-pressed={mine}
-            onClick={() => onPick(emoji)}
+            onClick={() => onPick(messageId, emoji)}
           >
             {emoji}
           </button>
@@ -515,7 +524,12 @@ function MessageRow({
    */
   if (message.muted && !revealed && !message.deleted) {
     return (
-      <article className="message-row muted-row">
+      // Right-clickable in its folded state too, so unmuting does not require
+      // first unfolding the message you asked not to see.
+      <article
+        className="message-row muted-row"
+        onContextMenu={(event) => onContextMenu(event, message)}
+      >
         <button type="button" className="message-muted" onClick={onReveal}>
           <BellOff size={12} aria-hidden />
           Message from {author?.displayName ?? 'someone you muted'} — show it
@@ -666,14 +680,28 @@ function Composer({
   const [attachments, setAttachments] = useState<string[]>([]);
   const [pasted, setPasted] = useState<PastedImage[]>([]);
 
-  // Object URLs are the only thing here that has to be cleaned up by hand; a
-  // long chat session would otherwise leak one per pasted image.
+  /*
+   * Object URLs are the only thing here that has to be released by hand.
+   *
+   * Tracked in a ref rather than cleaned up from an effect on `pasted`: that
+   * effect's cleanup runs on every change, so pasting a second image would
+   * revoke the first one's preview while it was still on screen. Individual
+   * URLs are released where they stop being needed — removed, or sent — and
+   * the ref is the safety net for a composer that unmounts mid-draft.
+   */
+  const pastedUrls = useRef<string[]>([]);
   useEffect(
     () => () => {
-      for (const image of pasted) URL.revokeObjectURL(image.previewUrl);
+      for (const url of pastedUrls.current) URL.revokeObjectURL(url);
+      pastedUrls.current = [];
     },
-    [pasted],
+    [],
   );
+
+  const releaseUrl = (url: string) => {
+    URL.revokeObjectURL(url);
+    pastedUrls.current = pastedUrls.current.filter((entry) => entry !== url);
+  };
 
   const attach = async () => {
     const selected = await open({
@@ -709,10 +737,11 @@ function Composer({
     const read = await Promise.all(
       files.map(async (file) => ({
         previewUrl: URL.createObjectURL(file),
-        bytes: [...new Uint8Array(await file.arrayBuffer())],
+        data: await toBase64(file),
         contentType: file.type,
       })),
     );
+    pastedUrls.current.push(...read.map((image) => image.previewUrl));
     setPasted((current) => [...current, ...read]);
   };
 
@@ -722,8 +751,8 @@ function Composer({
     onSend(trimmed, attachments, pasted, null);
     setText('');
     setAttachments([]);
-    // Not revoked here: the effect above owns those URLs and will clear them
-    // when this list is replaced.
+    // The bytes are already on their way; only the thumbnails are released.
+    for (const image of pasted) releaseUrl(image.previewUrl);
     setPasted([]);
   };
 
@@ -777,7 +806,7 @@ function Composer({
                 className="icon-btn small-icon-btn"
                 aria-label="Remove this pasted image"
                 onClick={() => {
-                  URL.revokeObjectURL(image.previewUrl);
+                  releaseUrl(image.previewUrl);
                   setPasted((current) =>
                     current.filter((entry) => entry.previewUrl !== image.previewUrl),
                   );
@@ -1086,4 +1115,21 @@ function StartConversation({
       </div>
     </Modal>
   );
+}
+
+/**
+ * A file as base64, for crossing the IPC bridge.
+ *
+ * Chunked through `String.fromCharCode` rather than spread in one call: a
+ * two-megabyte image is two million arguments, which overflows the call stack
+ * on exactly the images somebody most wants to paste.
+ */
+async function toBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  const step = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += step) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + step));
+  }
+  return btoa(binary);
 }

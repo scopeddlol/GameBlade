@@ -22,6 +22,10 @@ tauri-plugin-updater = "2"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Images pasted into a message cross the IPC bridge as base64: a byte array of
+# a few million elements is slow to serialise and enormous as JSON, and a
+# string is neither.
+base64 = "0.22"
 
 # Direct node-to-client transfer. Its own crate so the node agent can share it
 # without dragging a GUI toolkit along.

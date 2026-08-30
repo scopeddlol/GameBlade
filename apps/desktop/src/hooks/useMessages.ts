@@ -6,7 +6,14 @@ import { ipc } from '../lib/ipc.js';
 export interface PastedImage {
   /** Only for the composer's own thumbnail; never written anywhere. */
   previewUrl: string;
-  bytes: number[];
+  /**
+   * The image as base64.
+   *
+   * Not a byte array: the IPC bridge serialises arguments as JSON, and a
+   * two-megabyte screenshot becomes two million array elements — slow to
+   * encode and several times the size as text. A string is neither.
+   */
+  data: string;
   contentType: string;
 }
 
@@ -108,7 +115,7 @@ export function useMessageMutations(conversationId: string | null) {
         mediaIds.push(uploaded.id);
       }
       for (const image of input.pasted ?? []) {
-        const uploaded = await ipc.uploadMediaBytes(image.bytes, image.contentType, 'image');
+        const uploaded = await ipc.uploadMediaBytes(image.data, image.contentType, 'image');
         mediaIds.push(uploaded.id);
       }
 

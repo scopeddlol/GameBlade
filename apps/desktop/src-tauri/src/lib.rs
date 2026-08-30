@@ -1406,10 +1406,10 @@ async fn upload_media(
 
 /// The largest pasted image the client will send.
 ///
-/// A clipboard image arrives as a base64 string over the IPC bridge, so it is
-/// held in memory twice on the way through. Eight megabytes is far more than a
-/// screenshot of any monitor and small enough that the round trip is not the
-/// thing somebody notices.
+/// A clipboard image crosses the IPC bridge as base64 and is held in memory
+/// twice on the way through. Eight megabytes is far more than a screenshot of
+/// any monitor and small enough that the round trip is not the thing somebody
+/// notices.
 const MAX_PASTED_BYTES: usize = 8 * 1024 * 1024;
 
 /// Uploads an image straight from the clipboard, without it touching the disk.
@@ -1422,17 +1422,26 @@ const MAX_PASTED_BYTES: usize = 8 * 1024 * 1024;
 #[tauri::command]
 async fn upload_media_bytes(
     state: State<'_, AppState>,
-    bytes: Vec<u8>,
+    data: String,
     content_type: String,
     kind: String,
 ) -> AppResult<serde_json::Value> {
-    if bytes.is_empty() {
-        return Err(AppError::Other("There was nothing to paste".to_string()));
-    }
-    if bytes.len() > MAX_PASTED_BYTES {
+    use base64::Engine as _;
+
+    // Checked before decoding: base64 is four characters per three bytes, so
+    // this refuses an oversized paste without first allocating it.
+    if data.len() / 4 * 3 > MAX_PASTED_BYTES {
         return Err(AppError::Other(
             "That image is too large to paste — save it and attach it instead".to_string(),
         ));
+    }
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|_| AppError::Other("That paste could not be read".to_string()))?;
+
+    if bytes.is_empty() {
+        return Err(AppError::Other("There was nothing to paste".to_string()));
     }
 
     // An allow-list rather than "whatever the clipboard called it": the value

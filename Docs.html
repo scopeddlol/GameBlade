@@ -1057,6 +1057,7 @@ cp .env.example .env</code></pre>
                 <tr><td><code>SCAN_INTERVAL_MINUTES</code></td><td><code>360</code></td><td>Scheduled rescan interval, up to 10080 (a week); <code>0</code> disables</td></tr>
                 <tr><td><code>SCAN_CONCURRENCY</code></td><td><code>4</code></td><td>How many entries are inspected at once, 1&ndash;32. Lower it on a spinning disk or a network share.</td></tr>
                 <tr><td><code>AUTO_CHUNK_HASH</code></td><td><code>true</code></td><td>Whether a node hashes what it scanned without being asked. Only the <code>node</code> role acts on it, because only a node has no API to be asked through. See <a href="#deploy-hashing">hashing</a>.</td></tr>
+                <tr><td><code>HASH_CONCURRENCY</code></td><td><code>0</code></td><td>How many files are hashed at once, 1&ndash;32. <code>0</code> works it out from the machine, which is what almost every deployment should leave it as. Set it to <code>1</code> for an archive on a single spinning disk, where parallel reads become seek thrash.</td></tr>
 
                 <tr><td colspan="3"><strong>Advanced</strong></td></tr>
                 <tr><td><code>RATE_LIMIT_MAX</code></td><td><code>300</code></td><td>Requests per window per client, minimum 10</td></tr>
@@ -2946,6 +2947,18 @@ services:
               game at a time. See <a href="#achievements-bulk">In bulk</a>.
             </li>
             <li><strong>Featured</strong> — curates the carousel on the client's Home tab, in order, with a per-slot image override.</li>
+            <li>
+              <strong>Launch rules</strong> — what the client runs once a game is installed,
+              across the whole catalog rather than one game at a time. Every row lists the
+              executables actually inside that game's folder, with uninstallers and
+              redistributables filtered out and the one whose name matches the title
+              pre-selected, so a rule is picked rather than typed. Defaults to the games with no
+              rule; &ldquo;Accept N suggestions&rdquo; fills a whole page at once. Arguments, a
+              working directory and a typed path sit behind <strong>Advanced</strong> on each row
+              — the typed field is for the case a picker cannot cover, such as an executable an
+              installer creates. Archives list their contents when a row is opened, since a zip
+              has to be read to know what is inside it.
+            </li>
             <li><strong>Save paths</strong> — where each game keeps its saves. See <a href="#save-paths">Where the save paths come from</a>.</li>
             <li>
               <strong>Libraries</strong> — the folders on disk that are scanned, and the scan
