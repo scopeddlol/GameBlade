@@ -395,6 +395,42 @@ pub fn socket_address(address: &str, port: u16) -> Option<std::net::SocketAddr> 
     literal.parse().ok()
 }
 
+/// Turn a coordinator-supplied address into something dialable, resolving a
+/// hostname when that is what it is.
+///
+/// Deliberately separate from `socket_address`, and deliberately not used for
+/// every address that arrives. A node's advertised endpoints and a client's
+/// reflexive address are literals by construction, and resolving names on
+/// their say-so would let either point this process at a lookup it never
+/// intended. The relay address is the one exception: it comes from the
+/// coordinator's own configuration — by default the very hostname this
+/// process already speaks HTTPS to — so a name there is expected rather than
+/// suspicious.
+///
+/// This is what made the relay unreachable in practice: the default relay
+/// address is the coordinator's hostname, `SocketAddr` parses IP literals
+/// only, and both ends silently discarded every relay instruction they were
+/// given.
+///
+/// IPv4 wins a tie because a client endpoint binds `0.0.0.0` and cannot dial
+/// an IPv6 peer from it.
+pub async fn resolve_socket_address(address: &str, port: u16) -> Option<std::net::SocketAddr> {
+    if let Some(literal) = socket_address(address, port) {
+        return Some(literal);
+    }
+
+    let resolved: Vec<std::net::SocketAddr> = tokio::net::lookup_host((address, port))
+        .await
+        .ok()?
+        .collect();
+
+    resolved
+        .iter()
+        .copied()
+        .find(|candidate| candidate.is_ipv4())
+        .or_else(|| resolved.first().copied())
+}
+
 /// Everything the agent needs to run.
 pub struct AgentConfig {
     pub server_url: String,
@@ -484,6 +520,49 @@ mod tests {
 
     fn sha(bytes: &[u8]) -> String {
         hex::encode(Sha256::digest(bytes))
+    }
+
+    #[test]
+    fn a_hostname_is_not_a_socket_address() {
+        // The regression this guards: the default relay address is the
+        // coordinator's hostname, and both ends used to reject it here and
+        // then silently drop the relay instruction built on it.
+        assert!(socket_address("archive.example.com", 47_821).is_none());
+        assert!(socket_address("192.0.2.10", 47_821).is_some());
+        assert!(socket_address("2001:db8::1", 47_821).unwrap().is_ipv6());
+    }
+
+    #[tokio::test]
+    async fn a_literal_resolves_without_a_lookup() {
+        let resolved = resolve_socket_address("192.0.2.10", 47_821).await.unwrap();
+        assert_eq!(resolved.port(), 47_821);
+        assert!(resolved.is_ipv4());
+
+        assert!(resolve_socket_address("2001:db8::1", 47_821)
+            .await
+            .unwrap()
+            .is_ipv6());
+    }
+
+    #[tokio::test]
+    async fn a_resolvable_name_becomes_an_address() {
+        // localhost is the one name that resolves without a network.
+        let resolved = resolve_socket_address("localhost", 47_821).await.unwrap();
+        assert_eq!(resolved.port(), 47_821);
+        assert!(
+            resolved.ip().is_loopback(),
+            "localhost should resolve to a loopback address, got {resolved}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_name_that_does_not_resolve_is_none() {
+        assert!(
+            resolve_socket_address("relay.invalid.", 47_821)
+                .await
+                .is_none(),
+            "the reserved .invalid TLD must never resolve"
+        );
     }
 
     fn game(files: Vec<CatalogFile>) -> CatalogGame {

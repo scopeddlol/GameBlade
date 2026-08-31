@@ -1,6 +1,6 @@
 {
   "name": "gameblade",
-  "version": "0.6.10",
+  "version": "0.6.11",
   "private": true,
   "description": "Self-hosted game preservation platform: a Docker server with an admin panel, and a Windows desktop client with cloud saves, achievements and friends.",
   "license": "AGPL-3.0-only",

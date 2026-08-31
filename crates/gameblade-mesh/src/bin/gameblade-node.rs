@@ -552,11 +552,6 @@ async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, stat
                 };
 
                 for punch in punches {
-                    let Some(target) =
-                        gameblade_mesh::agent::socket_address(&punch.address, punch.port)
-                    else {
-                        continue;
-                    };
                     let endpoint = Arc::clone(&endpoint);
 
                     // Concurrently: several clients can be arriving at once and
@@ -567,10 +562,40 @@ async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, stat
                             // gone to the relay. Announce ourselves there so it
                             // can pair the two of us; QUIC then runs over the
                             // top exactly as it would have directly.
+                            //
+                            // Resolved rather than parsed: this address is the
+                            // coordinator's own, and by default it is the
+                            // coordinator's hostname. Parsing it as a literal
+                            // failed for every ordinary deployment and the
+                            // instruction was then dropped without a word,
+                            // which is why a relayed tunnel could open on the
+                            // map and never carry a byte.
                             Some(relay) => {
+                                let Some(target) = gameblade_mesh::agent::resolve_socket_address(
+                                    &punch.address,
+                                    punch.port,
+                                )
+                                .await
+                                else {
+                                    eprintln!(
+                                        "mesh: relay {}:{} could not be resolved; the client waiting on it will time out",
+                                        punch.address, punch.port
+                                    );
+                                    return;
+                                };
                                 let _ = endpoint.announce_to_relay(target, &relay.ticket).await;
                             }
+                            // A direct punch aims at the client's own reflexive
+                            // address, which is a literal by construction.
+                            // Names are deliberately not resolved here: that
+                            // would be a lookup made on a client's say-so.
                             None => {
+                                let Some(target) = gameblade_mesh::agent::socket_address(
+                                    &punch.address,
+                                    punch.port,
+                                ) else {
+                                    return;
+                                };
                                 let _ = endpoint.punch(target).await;
                             }
                         }

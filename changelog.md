@@ -154,6 +154,36 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.11 - August 31, 2026
+
+### The relay was never reachable, on either end
+
+0.6.10 restored the relay fallback and it still could not carry a byte. The
+node map showed a relayed tunnel opening and sitting at `connecting` with 0 B
+moved; Desktop reported "The relay returned an unusable address."
+
+The relay's address defaults to the coordinator's own hostname —
+`archive.example.com:47821` — and both ends turned it into a socket address by
+parsing it as an IP literal. `SocketAddr` accepts literals only, so a hostname
+never parsed. Desktop reported that as the relay's fault, and the node was
+worse: it dropped the instruction with a bare `continue` and logged nothing at
+all, so the coordinator recorded a tunnel that neither end had ever dialled.
+
+That is why a relayed download could look alive on the map and never move.
+Every deployment that did not set `RELAY_ENDPOINT` to a bare IP was affected,
+which is the ordinary one, so the relay has effectively never worked.
+
+A hostname is now resolved, preferring IPv4 because a client endpoint binds
+`0.0.0.0` and cannot dial an IPv6 peer from it. Resolution is deliberately
+limited to the relay address: it comes from the coordinator's own
+configuration and is usually the name the client has just spoken HTTPS to.
+Node-advertised endpoints and a client's reflexive address stay literal-only,
+because resolving those would mean performing lookups on a peer's say-so.
+
+A node that cannot resolve a relay address now says so instead of going quiet.
+
+---
+
 ## Version 0.6.10 - August 31, 2026
 
 ### Downloads work again for everyone
