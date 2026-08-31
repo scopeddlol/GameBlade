@@ -155,6 +155,25 @@ fn default_heartbeat() -> u64 {
     30
 }
 
+/// Where the relay is, and this client's half of the pairing.
+///
+/// The response also carries the node's id and public key. Neither is read:
+/// the client already holds both from the resolve that chose this node, and
+/// pins the certificate against *that* copy. Taking the key from here instead
+/// would mean trusting a second, later answer about who it is talking to —
+/// weaker for no benefit — so the extra fields are deliberately ignored.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RelaySession {
+    pub relay: RelayAddress,
+    pub ticket: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RelayAddress {
+    pub address: String,
+    pub port: u16,
+}
+
 /// What `POST /download/:gameId/token` hands back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssuedDownloadToken {
@@ -540,6 +559,28 @@ impl ApiClient {
         let request = self.authorised(self.http.delete(self.endpoint("/mesh/peer")))?;
         check_status(request.send().await?).await?;
         Ok(())
+    }
+
+    /// Ask for a relay session, having failed to reach a node directly.
+    ///
+    /// Asked for only after the direct attempt failed, because relaying spends
+    /// the coordinator's bandwidth — the very thing the mesh exists to save.
+    /// Any refusal is preserved so the downloads panel can show why that route
+    /// was unavailable instead of collapsing every failure into "no source".
+    pub async fn request_relay(&self, game_id: &str, node_id: &str) -> AppResult<RelaySession> {
+        let request = self.authorised(
+            self.http
+                .post(self.endpoint(&format!("/mesh/relay/{game_id}"))),
+        )?;
+
+        let response = check_status(
+            request
+                .json(&serde_json::json!({ "nodeId": node_id }))
+                .send()
+                .await?,
+        )
+        .await?;
+        Ok(response.json().await?)
     }
 
     /// Reads a non-2xx response into its structured parts without turning it

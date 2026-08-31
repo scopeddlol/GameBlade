@@ -14,6 +14,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use gameblade_mesh::client::connect_through_relay;
 use gameblade_mesh::{
     connect_to_node, coordinator_key_from_spki, MeshEndpoint, MeshError, NodeCandidate,
     NodeIdentity, NodeSession, PublicKey, SourcePool,
@@ -192,10 +193,73 @@ impl MeshContext {
             }
         }
 
+        // Nothing answered directly. Before giving up on the mesh entirely, ask
+        // whether this server runs a relay — on a coordinator holding no game
+        // files there is no HTTP origin behind us, so this is the difference
+        // between a slow download and no download at all. The tunnel is still
+        // end-to-end encrypted and still pinned to the node's own key; the
+        // relay only carries ciphertext it cannot read.
+        if sessions.is_empty() {
+            for (position, candidate) in nodes.iter().enumerate() {
+                let session = match client.request_relay(game_id, &candidate.node_id).await {
+                    Ok(session) => session,
+                    Err(err) => {
+                        sources.push(source_state(
+                            &resolution,
+                            candidate,
+                            "relay",
+                            "failed",
+                            Some(err.to_string()),
+                        ));
+                        continue;
+                    }
+                };
+                let Some(address) = socket_address(&session.relay.address, session.relay.port)
+                else {
+                    sources.push(source_state(
+                        &resolution,
+                        candidate,
+                        "relay",
+                        "failed",
+                        Some("The relay returned an unusable address.".to_string()),
+                    ));
+                    continue;
+                };
+
+                match connect_through_relay(&endpoint, address, &session.ticket, candidate).await {
+                    Ok(live) => {
+                        pool.add_node(&candidate.node_id, &candidate.label, position);
+                        sources.push(source_state(
+                            &resolution,
+                            candidate,
+                            "relay",
+                            "connected",
+                            Some(format!("Connected in {} ms", live.handshake_ms)),
+                        ));
+                        sessions.push(Arc::new(live));
+                        break;
+                    }
+                    Err(err) => {
+                        sources.push(source_state(
+                            &resolution,
+                            candidate,
+                            "relay",
+                            "failed",
+                            Some(err.to_string()),
+                        ));
+                        tracing_log(&format!(
+                            "mesh: relay to {} failed ({err})",
+                            candidate.label
+                        ));
+                    }
+                }
+            }
+        }
+
         if sessions.is_empty() {
             endpoint.close();
             return MeshPreparation::unavailable(
-                "A private Node-to-Client tunnel could not be established with any active node.",
+                "No copy of this game could be reached. The direct tunnel and the relay both failed to connect to any active node.",
                 sources,
             );
         }

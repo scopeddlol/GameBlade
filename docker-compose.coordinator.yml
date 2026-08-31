@@ -35,6 +35,11 @@ services:
       # ADMIN_USERNAME: admin
       # ADMIN_PASSWORD: change-me-to-something-long
 
+      # Optional public relay override. Left empty, clients use the coordinator
+      # request hostname and UDP port 47821, which matches the relay below. Set
+      # this only when the relay has a different public name or port.
+      RELAY_ENDPOINT: ${RELAY_ENDPOINT:-}
+
       # Metadata providers. Can also be set in Admin -> Settings.
       IGDB_CLIENT_ID: ${IGDB_CLIENT_ID:-}
       IGDB_CLIENT_SECRET: ${IGDB_CLIENT_SECRET:-}
@@ -51,6 +56,47 @@ services:
     # `coordinator:8080` instead, so nothing is exposed on the host at all.
     ports:
       - '127.0.0.1:8080:8080'
+
+    security_opt:
+      - 'no-new-privileges:true'
+
+  # The path for clients whose NAT defeats hole punching.
+  #
+  # Not optional here, and that is the point. Nothing about it asks anyone to
+  # forward a port: both the client and the node dial outward to it, which is
+  # what a symmetric or carrier-grade NAT still permits when a direct punch
+  # between two such networks cannot work. It is the fallback that keeps the
+  # "no port forwarding" promise honest.
+  #
+  # A coordinator holds no game files, so there is no HTTP origin behind it:
+  # without this, a player behind that kind of NAT cannot download anything,
+  # ever, and it looks like a broken archive rather than a network they are
+  # behind.
+  #
+  # It costs almost nothing to have running and unused. Only clients that
+  # already failed to connect directly are ever sent here, relayed bytes count
+  # against the same allowance as any others, and GAMEBLADE_RELAY_MAX caps how
+  # many can be in flight.
+  relay:
+    image: ghcr.io/scopeddlol/gameblade-relay:latest
+    container_name: gameblade-relay
+    restart: unless-stopped
+    depends_on:
+      - coordinator
+
+    environment:
+      # It fetches the coordinator's public key from here itself, waiting for
+      # it to come up. That key is all it is ever given: no database, no
+      # credentials, no API. It never terminates TLS and never learns which
+      # game is moving through it.
+      GAMEBLADE_SERVER: http://coordinator:8080
+      GAMEBLADE_RELAY_MAX: '256'
+
+    ports:
+      # UDP, and not something a reverse proxy can carry — Caddy has nothing to
+      # do with this. Open 47821/udp on the host firewall, and make sure
+      # RELAY_ENDPOINT overrides this automatic same-host address when needed.
+      - '47821:47821/udp'
 
     security_opt:
       - 'no-new-privileges:true'
