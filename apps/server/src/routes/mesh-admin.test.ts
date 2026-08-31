@@ -1,11 +1,11 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CSRF_HEADER, type MeshAnalytics, type MeshTunnelMap } from '@gameblade/shared';
+import { CSRF_HEADER, type MeshAnalytics } from '@gameblade/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
-import { games, libraries, meshNodeGames, users } from '../db/schema.js';
+import { games, libraries, meshNodeGames } from '../db/schema.js';
 import { newId } from '../lib/ids.js';
 
 /**
@@ -115,11 +115,6 @@ describe('the coordinator’s view of its fleet', () => {
     return id;
   }
 
-  /** The administrator created by `boot`; a grant is issued to an account. */
-  function adminId(app: Awaited<ReturnType<typeof buildApp>>): string {
-    return app.gameblade.db.select().from(users).all()[0]!.id;
-  }
-
   it('reports a node’s catalog against the library it reports into', async () => {
     // The pairing that explains a node: it announces four hundred games while
     // its library holds two thousand, because the rest are not hashed yet.
@@ -165,82 +160,11 @@ describe('the coordinator’s view of its fleet', () => {
     // a division by nothing on a fresh server used to render as "NaN%".
     expect(report.bytes.meshShare).toBe(0);
     expect(report.history).toHaveLength(7);
-    expect(report.relay.configured).toBe(true);
-    expect(report.relay.address).toBe('automatic coordinator host:47821');
-  });
-
-  it('draws a tunnel from the moment permission is issued', async () => {
-    const { app, admin } = await boot();
-    const node = await enrol(app, admin, 'Loft NAS', 'c');
-
-    app.gameblade.mesh.recordGrant({
-      nonce: 'non_test',
-      nodeId: node.nodeId,
-      userId: adminId(app),
-      gameId: addGame(app, 'Hades'),
-      clientAddress: '203.0.113.7',
-    });
-
-    const response = await app.inject({
-      method: 'GET',
-      url: '/api/mesh/tunnels',
-      headers: auth(admin),
-    });
-    const map = response.json() as MeshTunnelMap;
-
-    expect(map.nodes).toHaveLength(1);
-    expect(map.tunnels).toHaveLength(1);
-    const [tunnel] = map.tunnels;
-    expect(tunnel!.via).toBe('direct');
-    // Nothing reported yet, and for the first half-minute a handshake in
-    // progress and one that failed look the same from here.
-    expect(tunnel!.state).toBe('connecting');
-    // The player's address is reduced to a network before it reaches a screen
-    // somebody leaves open.
-    expect(tunnel!.clientNetwork).toBe('203.0.x.x');
-  });
-
-  it('marks a tunnel relayed rather than drawing a second one beside it', async () => {
-    // A relayed transfer is the same account fetching the same game from the
-    // same node; drawing it twice would say the mesh is doing more work than
-    // it is, and hide the thing that matters — that these bytes now cross the
-    // coordinator after all.
-    const { app, admin } = await boot({ RELAY_ENDPOINT: 'relay.example.com:47821' });
-    const node = await enrol(app, admin, 'Loft NAS', 'd');
-
-    const userId = adminId(app);
-    const gameId = addGame(app, 'Hades');
-    app.gameblade.mesh.recordGrant({
-      nonce: 'non_relay',
-      nodeId: node.nodeId,
-      userId,
-      gameId,
-      clientAddress: '198.51.100.9',
-    });
-    app.gameblade.mesh.noteRelayed(node.nodeId, userId, gameId);
-
-    const map = (
-      await app.inject({ method: 'GET', url: '/api/mesh/tunnels', headers: auth(admin) })
-    ).json() as MeshTunnelMap;
-
-    expect(map.tunnels).toHaveLength(1);
-    expect(map.tunnels[0]!.via).toBe('relay');
-    expect(map.coordinator.relay).toBe('relay.example.com:47821');
-
-    const report = (
-      await app.inject({
-        method: 'GET',
-        url: '/api/mesh/analytics?days=7',
-        headers: auth(admin),
-      })
-    ).json() as MeshAnalytics;
-    expect(report.relay.configured).toBe(true);
-    expect(report.relay.sessions24h).toBe(1);
   });
 
   it('keeps the fleet to administrators', async () => {
     const { app } = await boot();
-    for (const url of ['/api/mesh/nodes', '/api/mesh/analytics', '/api/mesh/tunnels']) {
+    for (const url of ['/api/mesh/nodes', '/api/mesh/analytics']) {
       const response = await app.inject({ method: 'GET', url });
       expect(response.statusCode).toBe(401);
     }

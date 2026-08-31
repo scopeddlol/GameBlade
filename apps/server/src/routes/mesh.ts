@@ -1,22 +1,18 @@
 import {
+  MESH_CHUNK_BYTES,
   MESH_HEARTBEAT_INTERVAL_SECONDS,
-  MESH_RELAY_DEFAULT_PORT,
-  MESH_RENDEZVOUS_POLL_SECONDS,
-  meshResolveSchema,
+  MESH_TRANSFER_POLL_SECONDS,
   meshEnrolmentSchema,
   meshHeartbeatSchema,
-  meshPeerRegisterSchema,
   meshRegisterSchema,
-  meshReportSchema,
   reportedCatalogBatchSchema,
   reportedCatalogSchema,
 } from '@gameblade/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { requireAdmin, requireUser } from '../auth/middleware.js';
+import { requireAdmin } from '../auth/middleware.js';
 import { gameFiles, games, meshNodes } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
-import { newId } from '../lib/ids.js';
 
 /**
  * A node catalog contains paths and chunk hashes for an entire archive.
@@ -30,6 +26,25 @@ const MAX_NODE_CATALOG_BYTES = 128 * 1024 * 1024;
 /** An abandoned multi-request report is harmless and should not live forever. */
 const CATALOG_BATCH_SESSION_TTL_MS = 60 * 60_000;
 
+async function readChunkUpload(body: unknown): Promise<Buffer> {
+  const stream = body as NodeJS.ReadableStream | undefined;
+  if (!stream || !(Symbol.asyncIterator in stream)) {
+    throw ApiError.badRequest('A binary chunk body is required');
+  }
+
+  const pieces: Buffer[] = [];
+  let received = 0;
+  for await (const piece of stream as AsyncIterable<Buffer | Uint8Array | string>) {
+    const bytes = Buffer.isBuffer(piece) ? piece : Buffer.from(piece);
+    received += bytes.length;
+    if (received > MESH_CHUNK_BYTES) {
+      throw ApiError.badRequest('A Node chunk cannot exceed the configured chunk size');
+    }
+    pieces.push(bytes);
+  }
+  return Buffer.concat(pieces, received);
+}
+
 interface CatalogBatchSession {
   nextIndex: number;
   seen: Set<string>;
@@ -37,52 +52,8 @@ interface CatalogBatchSession {
   result: { added: number; updated: number; unchanged: number; missing: number };
 }
 
-/**
- * The address a request appears to come from.
- *
- * Behind Pangolin every request arrives from the tunnel, so the forwarded
- * header is the only thing that carries the real client. It is also
- * attacker-controlled in general — which is why this feeds an endpoint
- * *candidate* and nothing else. A wrong value here costs one failed connection
- * attempt; it grants nothing.
- */
-function observedAddress(request: FastifyRequest): string | undefined {
-  const forwarded = request.headers['x-forwarded-for'];
-  const first = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  const candidate = first?.split(',')[0]?.trim() || request.ip;
-  if (!candidate) return undefined;
-
-  // Only literals. A hostname would mean resolving names on a node's say-so,
-  // and a bracketed IPv6 form would be stored in a shape the agent cannot use.
-  return /^[0-9a-fA-F:.]+$/.test(candidate) ? candidate : undefined;
-}
-
-/**
- * The relay shipped beside a coordinator listens on the same public host by
- * default. RELAY_ENDPOINT remains an override for split-DNS and dedicated
- * relay deployments; it is no longer mandatory for the ordinary compose
- * topology.
- */
-function relayForRequest(
-  request: FastifyRequest,
-  configured: { address: string; port: number } | null,
-): { address: string; port: number } {
-  if (configured) return configured;
-
-  // Fastify removes the port from `hostname`. Strip IPv6 URL brackets as the
-  // wire shape carries the address and port separately.
-  const hostname = request.hostname.replace(/^\[|\]$/g, '');
-  return { address: hostname, port: MESH_RELAY_DEFAULT_PORT };
-}
-
-function relayLabel(configured: { address: string; port: number } | null, coordinator: boolean) {
-  if (configured) return `${configured.address}:${configured.port}`;
-  return coordinator ? `automatic coordinator host:${MESH_RELAY_DEFAULT_PORT}` : null;
-}
-
 export async function meshRoutes(app: FastifyInstance): Promise<void> {
-  const { db, mesh, settings, downloadTokens, chunks, bandwidth, catalogIngest, config } =
-    app.gameblade;
+  const { db, mesh, settings, chunks, catalogIngest } = app.gameblade;
 
   // In memory on purpose. A coordinator restart between pieces makes the next
   // piece fail safely and the node retries the whole report; persisting partial
@@ -108,25 +79,6 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
     return { nodeId: mesh.authenticate(id, token).id };
   }
 
-  /**
-   * The coordinator's public key, for a relay that has to check grants.
-   *
-   * Unauthenticated on purpose, and safe to be: it is the public half. Every
-   * client is already handed it, it verifies signatures and cannot make one,
-   * and a relay is given nothing else — no database, no credentials, no API.
-   *
-   * It exists because the alternative was a manual step that made the relay
-   * feel optional. The key was published to nodes at enrolment and nowhere
-   * else, so standing one up meant reading a field out of a JSON file on a
-   * different machine and pasting it into a compose file — for a component
-   * whose entire job is to be there before anybody needs it.
-   */
-  app.get('/mesh/coordinator-key', async () => ({
-    publicKey: downloadTokens.publicKeyBase64(),
-    algorithm: 'ed25519',
-    format: 'spki-base64url',
-  }));
-
   /* ------------------------------------------------------------ node-facing */
 
   /** A one-use challenge for a known node recovering its credential. */
@@ -149,10 +101,7 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
   app.post('/mesh/register', async (request) => {
     const body = meshRegisterSchema.parse(request.body);
 
-    const { nodeId, status, nodeToken } = mesh.register({
-      ...body,
-      observedAddress: observedAddress(request),
-    });
+    const { nodeId, status, nodeToken } = mesh.register({ ...body, endpoints: [] });
 
     settings.enableMeshWhenUnconfigured();
 
@@ -162,7 +111,6 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
       // Returned exactly once. Only its hash is stored, so an agent that loses
       // it re-registers with its key rather than recovering it.
       nodeToken,
-      coordinatorPublicKey: downloadTokens.publicKeyBase64(),
       heartbeatSeconds: MESH_HEARTBEAT_INTERVAL_SECONDS,
     };
   });
@@ -179,9 +127,8 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
 
     const result = mesh.heartbeat({
       nodeId,
-      endpoints: body.endpoints,
+      endpoints: [],
       games: body.games,
-      observedAddress: observedAddress(request),
     });
 
     return { ...result, heartbeatSeconds: MESH_HEARTBEAT_INTERVAL_SECONDS };
@@ -379,215 +326,29 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * Report what was actually served under a grant.
-   *
-   * This is what keeps a byte allowance honest once transfers stop passing
-   * through the server. A node that stops reporting is a node whose grants stop
-   * being renewed, so under-reporting buys a node nothing.
+   * A Node holds this authenticated outbound HTTPS poll
+   * open; the Coordinator answers immediately when one or more Desktop ranges
+   * need bytes from that node.
    */
-  app.post('/mesh/report', async (request) => {
+  app.get('/mesh/transfers/poll', async (request) => {
     const { nodeId } = requireNode(request);
-    const body = meshReportSchema.parse(request.body);
+    const jobs = await mesh.waitForNodeChunks(nodeId, MESH_TRANSFER_POLL_SECONDS * 1000);
+    return { jobs };
+  });
 
-    mesh.reportTransfer({ nonce: body.nonce, nodeId, bytesServed: body.bytesServed });
+  app.post('/mesh/transfers/:requestId', async (request) => {
+    const { nodeId } = requireNode(request);
+    const { requestId } = request.params as { requestId: string };
+    const bytes = await readChunkUpload(request.body);
+    mesh.deliverNodeChunk(requestId, nodeId, bytes);
     return { ok: true };
   });
 
-  /**
-   * Wait to be told to punch toward a client.
-   *
-   * Held open rather than polled on a timer, because the whole value is in
-   * being immediate: a client asks, the node punches within milliseconds, and
-   * both ends' packets cross while the mappings are fresh. A poll every few
-   * seconds would mean the client had given up and fallen back to HTTP long
-   * before the node heard.
-   *
-   * A long-poll rather than a WebSocket because it survives any proxy
-   * unchanged, needs no upgrade negotiation, and there is exactly one message
-   * shape to carry.
-   */
-  app.get('/mesh/rendezvous', {
-    // A node holds this open continuously by design; the abuse limiter would
-    // read a well-behaved agent as a flood.
-    config: { rateLimit: false },
-    handler: async (request) => {
-      const { nodeId } = requireNode(request);
-
-      const punches = await mesh.waitForPunch(nodeId, MESH_RENDEZVOUS_POLL_SECONDS * 1000);
-      return { punches, pollSeconds: MESH_RENDEZVOUS_POLL_SECONDS };
-    },
-  });
-
-  /* ---------------------------------------------------------- client-facing */
-
-  /**
-   * Ask where a game can be fetched from, and get permission to fetch it.
-   *
-   * One call rather than two: a client that has been told about a node has
-   * nothing to do with that knowledge without a grant, and a grant is only
-   * meaningful for a node it was told about.
-   */
-  app.post('/mesh/resolve/:gameId', async (request) => {
-    const context = requireUser(request);
-    const { gameId } = request.params as { gameId: string };
-
-    if (!settings.get().meshEnabled) {
-      // Not an error: the client's answer is "use the origin", which is what an
-      // empty node list already says.
-      return { nodes: [], grants: [], coordinatorPublicKey: downloadTokens.publicKeyBase64() };
-    }
-
-    const game = db.select({ id: games.id }).from(games).where(eq(games.id, gameId)).get();
-    if (!game) throw ApiError.notFound('Game not found');
-
-    // Refused up front rather than by a node mid-transfer: an account out of
-    // allowance should be told so, not handed a grant that dies at zero bytes.
-    const quota = bandwidth.assertWithinQuota(context.user.id);
-
-    const nodes = mesh.nodesForGame(gameId, { excludeOwnerId: context.user.id });
-
-    // Tell every candidate node to punch toward this client, now.
-    //
-    // The client's own reflexive address is what it sends here, and it is the
-    // only usable one: the address this HTTP request arrived from belongs to a
-    // TCP connection through a different NAT mapping on a different port.
-    // Punching at that would open a hole nothing uses.
-    const candidates = meshResolveSchema.parse(request.body ?? {}).endpoints;
-    const queuedAt = new Date().toISOString();
-
-    for (const node of nodes) {
-      for (const candidate of candidates) {
-        mesh.requestPunch(node.id, {
-          address: candidate.address,
-          port: candidate.port,
-          userId: context.user.id,
-          queuedAt,
-        });
-      }
-    }
-
-    // The ceiling on one grant. With no quota configured this is still bounded,
-    // because an unbounded grant would be a permanent credential if it leaked.
-    const ceiling =
-      quota.quotaBytes > 0 ? Math.max(0, quota.remainingBytes) : 512 * 1024 * 1024 * 1024;
-
-    const grants = nodes.map((node) => {
-      const issued = downloadTokens.issueGrant({
-        userId: context.user.id,
-        gameId,
-        nodeId: node.id,
-        maxBytes: ceiling,
-      });
-      mesh.recordGrant({
-        nonce: issued.nonce,
-        nodeId: node.id,
-        userId: context.user.id,
-        gameId,
-        // The client's own candidate, reduced to a network before it is
-        // stored. What the map needs is "somebody, roughly there", not an
-        // address to leave on a screen.
-        clientAddress: candidates[0]?.address ?? null,
-      });
-      return { nodeId: node.id, grant: issued.grant, expiresAt: issued.expiresAt };
-    });
-
-    return {
-      nodes: nodes.map((node) => ({
-        id: node.id,
-        label: node.label,
-        role: node.role,
-        publicKey: node.publicKey,
-        endpoints: node.endpoints,
-      })),
-      grants,
-      coordinatorPublicKey: downloadTokens.publicKeyBase64(),
-    };
-  });
-
-  /**
-   * Fall back to the relay, for a client that could not reach a node directly.
-   *
-   * Asked for only after the direct attempt failed, because relaying costs this
-   * server's bandwidth — the very thing the mesh exists to stop spending. It
-   * exists so that download happens at all rather than fast.
-   */
-  app.post('/mesh/relay/:gameId', async (request) => {
-    const context = requireUser(request);
-    const { gameId } = request.params as { gameId: string };
-    const { nodeId } = (request.body ?? {}) as { nodeId?: string };
-
-    if (!settings.get().meshEnabled) throw ApiError.forbidden('The mesh is switched off');
-
-    const relay = relayForRequest(request, config.relayEndpoint);
-
-    const node = mesh
-      .nodesForGame(gameId, { excludeOwnerId: context.user.id })
-      .find((candidate) => !nodeId || candidate.id === nodeId);
-    if (!node) throw ApiError.notFound('No node is offering that game');
-
-    // Checked here as well as on the direct path: the relay is a different
-    // route to the same bytes, not a way around the allowance.
-    bandwidth.assertWithinQuota(context.user.id);
-
-    const sessionId = newId('rly');
-    const tickets = downloadTokens.issueRelayTickets({
-      sessionId,
-      nodeId: node.id,
-      userId: context.user.id,
-    });
-
-    // Counted here rather than inferred later: a relayed transfer is the one
-    // case where game bytes do cross this server, and an operator watching the
-    // fleet needs to see it happening rather than find it on a bill.
-    mesh.noteRelayed(node.id, context.user.id, gameId);
-
-    // The node hears about this on the channel it already holds open, so it
-    // dials the relay at the same moment the client does.
-    mesh.requestPunch(node.id, {
-      address: relay.address,
-      port: relay.port,
-      userId: context.user.id,
-      queuedAt: new Date().toISOString(),
-      relay: { address: relay.address, port: relay.port, ticket: tickets.node },
-    });
-
-    return {
-      sessionId,
-      relay: { address: relay.address, port: relay.port },
-      ticket: tickets.client,
-      expiresAt: tickets.expiresAt,
-      nodeId: node.id,
-      publicKey: node.publicKey,
-    };
-  });
-
-  /**
-   * Offer this client as a peer node for what it already holds.
-   *
-   * Gated on the seeding setting rather than the mesh setting, because they are
-   * different decisions: one shares the operator's machines, the other turns
-   * players into distributors of each other's downloads.
-   */
-  app.post('/mesh/peer', async (request) => {
-    const context = requireUser(request);
-    if (!settings.get().meshSeedingEnabled) {
-      throw ApiError.forbidden('Peer sharing is turned off on this server');
-    }
-
-    const body = meshPeerRegisterSchema.parse(request.body);
-    const { nodeId, nodeToken } = mesh.registerPeer({
-      ...body,
-      ownerId: context.user.id,
-      observedAddress: observedAddress(request),
-    });
-
-    return { nodeId, nodeToken, heartbeatSeconds: MESH_HEARTBEAT_INTERVAL_SECONDS };
-  });
-
-  /** Stop seeding — on sign-out, or when someone turns the setting off. */
-  app.delete('/mesh/peer', async (request) => {
-    const context = requireUser(request);
-    mesh.dropPeersFor(context.user.id);
+  app.post('/mesh/transfers/:requestId/fail', async (request) => {
+    const { nodeId } = requireNode(request);
+    const { requestId } = request.params as { requestId: string };
+    const body = (request.body ?? {}) as { message?: string };
+    mesh.failNodeChunk(requestId, nodeId, body.message?.slice(0, 300) || 'Node could not read it');
     return { ok: true };
   });
 
@@ -598,29 +359,11 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
     return { nodes: mesh.listNodeStats(), enrolments: mesh.listEnrolments() };
   });
 
-  /** How much of the traffic the mesh is actually carrying, and for how long. */
+  /** How much download traffic the Node fleet supplies. */
   app.get('/mesh/analytics', async (request) => {
     requireAdmin(request);
     const { days } = request.query as { days?: string };
-    return mesh.analytics({
-      days: Number(days) || 14,
-      relay: relayLabel(config.relayEndpoint, !config.servesLocalFiles),
-    });
-  });
-
-  /**
-   * Everything currently strung between the nodes, the relay and the clients.
-   *
-   * Polled by the panel rather than pushed, because the underlying facts only
-   * change when a node heartbeats — pushing would send the same map thirty
-   * times between two updates of the data behind it.
-   */
-  app.get('/mesh/tunnels', async (request) => {
-    requireAdmin(request);
-    return mesh.tunnelMap({
-      label: settings.get().serverName,
-      relay: relayLabel(config.relayEndpoint, !config.servesLocalFiles),
-    });
+    return mesh.analytics({ days: Number(days) || 14 });
   });
 
   app.post('/mesh/enrolments', async (request) => {
@@ -672,6 +415,14 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
     }
 
     mesh.setNodeStatus(nodeId, status);
+    return { ok: true };
+  });
+
+  app.patch('/mesh/nodes/:nodeId', async (request) => {
+    requireAdmin(request);
+    const { nodeId } = request.params as { nodeId: string };
+    const { label } = (request.body ?? {}) as { label?: string };
+    mesh.renameNode(nodeId, label ?? '');
     return { ok: true };
   });
 

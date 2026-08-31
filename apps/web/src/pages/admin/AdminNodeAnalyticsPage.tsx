@@ -7,13 +7,7 @@ import { useMeshAnalytics } from './meshData.js';
 const RANGES = [7, 14, 30, 90] as const;
 
 /**
- * Whether the mesh is doing the job it exists for.
- *
- * That job is not "be online". A coordinator runs on a small VPS with a thin
- * pipe, and the whole reason nodes exist is that the game bytes must not cross
- * it — so the headline here is the share of delivered bytes that did not, and
- * everything under it is there to explain that number on the days it is
- * disappointing.
+ * How much download traffic is supplied by Nodes through the Coordinator.
  */
 export function AdminNodeAnalyticsPage() {
   const [days, setDays] = useState<(typeof RANGES)[number]>(14);
@@ -42,8 +36,7 @@ export function AdminNodeAnalyticsPage() {
     <div className="gb-page">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-ink-400 text-xs">
-          Node transfers are counted from what each node reports on its heartbeat, so the last
-          half-minute of a live download is not in these numbers yet.
+          Node transfers are recorded as verified chunks arrive at the Coordinator.
         </p>
         <div className="flex gap-1">
           {RANGES.map((range) => (
@@ -61,11 +54,9 @@ export function AdminNodeAnalyticsPage() {
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile
-          label="Kept off this server"
+          label="Node-backed share"
           value={`${share}%`}
-          hint={`${formatBytes(report.bytes.mesh7d)} of ${formatBytes(
-            report.bytes.mesh7d + report.bytes.origin7d,
-          )} this week`}
+          hint={`${formatBytes(report.bytes.mesh7d)} of ${formatBytes(report.bytes.origin7d)} this week`}
         />
         <StatTile
           label="Nodes served"
@@ -80,7 +71,7 @@ export function AdminNodeAnalyticsPage() {
         <StatTile
           label="All time, from nodes"
           value={formatBytes(report.bytes.meshLifetime)}
-          hint="since the mesh was switched on"
+          hint="since Node transfers were enabled"
         />
       </div>
 
@@ -89,7 +80,7 @@ export function AdminNodeAnalyticsPage() {
           Bytes served by nodes
         </h2>
         <p className="text-ink-400 mb-3 text-xs">
-          What players downloaded without touching this server&rsquo;s connection.
+          Verified chunks supplied by Nodes and forwarded through the Coordinator.
         </p>
         <AreaChart points={meshSeries} emptyMessage="No node transfers in this period." />
       </section>
@@ -99,8 +90,7 @@ export function AdminNodeAnalyticsPage() {
           Bytes served by this server
         </h2>
         <p className="text-ink-400 mb-3 text-xs">
-          The same period, from the coordinator itself. Drawn separately rather than stacked because
-          the two are answers to different questions — this one is the bandwidth bill.
+          Total bytes delivered through the Coordinator in the same period.
         </p>
         <AreaChart points={originSeries} emptyMessage="No downloads from this server." />
       </section>
@@ -109,7 +99,7 @@ export function AdminNodeAnalyticsPage() {
         <h2 className="mb-1 text-sm font-semibold tracking-wide uppercase">Catalog coverage</h2>
         <p className="text-ink-400 mb-3 text-xs">
           How much of the archive an online node can actually hand over. A game no node holds is a
-          game this server serves every single time.
+          game cannot currently be downloaded from the Node fleet.
         </p>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatTile
@@ -177,27 +167,8 @@ export function AdminNodeAnalyticsPage() {
           <Badge tone="warning">{report.nodes.stale} stale</Badge>
           <Badge tone="danger">{report.nodes.blocked} blocked</Badge>
           <Badge tone="neutral">{report.nodes.pending} pending</Badge>
-          <Badge tone="neutral">{report.nodes.operator} operator-run</Badge>
-          <Badge tone="neutral">{report.nodes.peers} player clients seeding</Badge>
+          <Badge tone="neutral">{report.nodes.operator} managed Nodes</Badge>
         </div>
-
-        <h3 className="text-ink-300 mt-4 mb-1 text-xs font-semibold tracking-wide uppercase">
-          Relay
-        </h3>
-        {report.relay.configured ? (
-          <p className="text-ink-400 text-xs">
-            <code className="bg-ink-800 rounded px-1">{report.relay.address}</code> ·{' '}
-            {report.relay.sessions24h} transfers sent through it in the last day,{' '}
-            {report.relay.activeSessions} open now. Relayed bytes <em>do</em> cross this server, so
-            a number that keeps climbing means players cannot reach the nodes directly.
-          </p>
-        ) : (
-          <p className="text-xs text-amber-400">
-            No relay is configured, so a player whose network refuses a direct connection to a node
-            cannot download from it at all. Set <code>RELAY_ENDPOINT</code> to this host&rsquo;s
-            public name and the relay&rsquo;s port.
-          </p>
-        )}
       </section>
     </div>
   );

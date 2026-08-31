@@ -1,6 +1,6 @@
 [package]
 name = "gameblade-desktop"
-version = "0.6.11"
+version = "0.7.0"
 description = "GameBlade desktop client"
 authors = ["GameBlade"]
 edition = "2021"
@@ -26,10 +26,6 @@ serde_json = "1"
 # a few million elements is slow to serialise and enormous as JSON, and a
 # string is neither.
 base64 = "0.22"
-
-# Direct node-to-client transfer. Its own crate so the node agent can share it
-# without dragging a GUI toolkit along.
-gameblade-mesh = { path = "../../../crates/gameblade-mesh" }
 
 # Download engine
 reqwest = { version = "0.12", default-features = false, features = [

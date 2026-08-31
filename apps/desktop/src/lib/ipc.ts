@@ -33,8 +33,6 @@ export type DownloadStatus =
 export interface DownloadSourceState {
   node_id: string | null;
   label: string;
-  source_type: 'origin_node' | 'mirror_node' | 'peer_client' | 'coordinator';
-  route: 'direct' | 'relay' | 'https';
   status: 'connecting' | 'connected' | 'available' | 'failed';
   detail: string | null;
 }
@@ -114,7 +112,6 @@ export interface ClientSettings {
    * Only has an effect where the operator has also turned sharing on; with it
    * off on their side this does nothing at all.
    */
-  shareDownloads: boolean;
   minimizeOnLaunch: boolean;
   downloadConcurrency: number;
   verifyDownloads: boolean;

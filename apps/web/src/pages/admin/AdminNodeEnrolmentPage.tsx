@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Badge, Field } from '../../components/ui.js';
 import { api } from '../../lib/api.js';
@@ -45,6 +45,11 @@ export function AdminNodeEnrolmentPage() {
     },
   });
 
+  const revokeMutation = useMutation({
+    mutationFn: (tokenHash: string) => api.delete(`/mesh/enrolments/${tokenHash}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'mesh'] }),
+  });
+
   const copy = async (value: string) => {
     try {
       await navigator.clipboard.writeText(value);
@@ -63,11 +68,12 @@ export function AdminNodeEnrolmentPage() {
       <section className="gb-card p-5">
         <h2 className="mb-1 text-sm font-semibold tracking-wide uppercase">Enrol a node</h2>
         <p className="text-ink-400 mb-4 text-xs">
-          A node is a machine that holds game files and serves them straight to clients, so those
-          bytes never cross this server. Generate a code here, then open the node&rsquo;s own page
-          &mdash; <code className="bg-ink-800 rounded px-1">http://that-machine:8080</code> &mdash;
-          and paste it in along with this server&rsquo;s address. It registers itself, gets a
-          library of its own, and the code is spent the moment it does.
+          A Node is a machine that holds game files. It sends requested chunks to the Coordinator,
+          which streams them to the Desktop over HTTPS. Generate a code here, then open the
+          Node&rsquo;s own page &mdash;{' '}
+          <code className="bg-ink-800 rounded px-1">http://that-machine:8080</code> &mdash; and
+          paste it in along with this server&rsquo;s address. It registers itself, gets a library of
+          its own, and the code is spent the moment it does.
         </p>
 
         <form
@@ -182,6 +188,16 @@ export function AdminNodeEnrolmentPage() {
                   ? `used ${formatDateTime(enrolment.usedAt)}`
                   : `expires ${formatDateTime(enrolment.expiresAt)}`}
               </span>
+              <button
+                type="button"
+                className="gb-btn-ghost text-xs"
+                disabled={revokeMutation.isPending}
+                onClick={() => revokeMutation.mutate(enrolment.tokenHash)}
+                aria-label={`Delete enrolment code for ${enrolment.label}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                Delete
+              </button>
             </div>
           ))}
           {enrolments.length === 0 ? (

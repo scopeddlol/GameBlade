@@ -27,8 +27,9 @@ file, no build step, and everything below is covered there in depth.
 - **Small.** One Alpine container, SQLite, no external database or cache.
 - **One machine, or several.** `gameblade` is everything in one container. A
   `gameblade-coordinator` holds the database and the panel; `gameblade-node`s
-  hold the games and serve them straight to clients, and set themselves up from
-  a page they serve. One build, an image per role.
+  hold the games and supply verified chunks to the Coordinator over outbound
+  HTTPS. The Coordinator streams those chunks to clients over HTTPS. Nodes
+  need no inbound port and set themselves up from a local page.
 
 | Piece                        | Who uses it   | What it does                                                           |
 | ---------------------------- | ------------- | ---------------------------------------------------------------------- |
@@ -36,8 +37,7 @@ file, no build step, and everything below is covered there in depth.
 | **Landing page** (`/`)       | Everyone      | Explains the archive and links the Windows client download             |
 | **Admin panel** (`/admin`)   | Administrator | Invites, users, catalog, metadata, featured games, settings            |
 | **Desktop client** (Windows) | Players       | The whole player experience                                            |
-| **Node** (`ROLE=node`)       | You           | Holds the game files, scans them, and serves bytes straight to clients |
-| **Relay** (optional)         | Nobody        | Joins a client and a node that cannot reach each other                 |
+| **Node** (`ROLE=node`)       | You           | Holds files, scans them, and supplies chunks over outbound HTTPS       |
 
 ---
 
@@ -120,7 +120,7 @@ packages/shared Types, zod schemas and constants used by all three
 ```
 
 Releases come from CI: stamp the version, tag it, and the Publish workflow
-builds the four images and the Windows installers and publishes them together —
+builds the three images and the Windows installers and publishes them together —
 see **[Cutting a release](Docs.html#releases)**.
 
 ---

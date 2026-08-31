@@ -4,11 +4,8 @@
 //! address — a machine on a home connection gets a new one whenever the lease
 //! renews, and an identity that changed with it would be no identity at all.
 //!
-//! The same key does double duty. It names the node to the coordinator, and it
-//! is what a client checks the TLS certificate against when it connects: the
-//! node presents a self-signed certificate carrying the key, so "I reached the
-//! machine the coordinator told me about" is a local check rather than a
-//! question for a certificate authority.
+//! The key names the Node to the Coordinator and signs the one-use challenge
+//! used when a known Node rotates its API credential.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -58,7 +55,7 @@ impl NodeIdentity {
     }
 }
 
-/// The public half — what a client is told to expect, and what it checks.
+/// The public half used by the Coordinator to verify identity proofs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PublicKey(VerifyingKey);
 
@@ -95,31 +92,6 @@ impl PublicKey {
             .verify(message, &Signature::from_bytes(&bytes))
             .is_ok()
     }
-}
-
-/// The coordinator's key, in the SPKI form Node's `crypto` exports.
-///
-/// The server publishes `spki` DER because it carries the algorithm identifier,
-/// so a verifier is not required to be told out of band that this is Ed25519.
-/// Ed25519 SPKI is a fixed 44 bytes ending in the 32 raw key bytes, so the
-/// prefix is checked rather than a full DER parser being pulled in for one
-/// known shape.
-pub fn coordinator_key_from_spki(encoded: &str) -> MeshResult<PublicKey> {
-    const ED25519_SPKI_PREFIX: [u8; 12] = [
-        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
-    ];
-
-    let raw = URL_SAFE_NO_PAD
-        .decode(encoded.trim())
-        .map_err(|_| MeshError::Identity("the coordinator key must be base64url".into()))?;
-
-    if raw.len() != 44 || raw[..12] != ED25519_SPKI_PREFIX {
-        return Err(MeshError::Identity(
-            "the coordinator key is not an Ed25519 SPKI key".into(),
-        ));
-    }
-
-    PublicKey::from_bytes(&raw[12..])
 }
 
 #[cfg(test)]
@@ -178,15 +150,5 @@ mod tests {
     fn a_key_of_the_wrong_length_is_refused() {
         assert!(PublicKey::from_bytes(&[0u8; 31]).is_err());
         assert!(PublicKey::from_bytes(&[0u8; 33]).is_err());
-    }
-
-    #[test]
-    fn a_coordinator_key_that_is_not_spki_is_refused() {
-        // A raw 32-byte key encoded as if it were SPKI would otherwise be read
-        // as one, and the bytes it verified against would be nonsense.
-        let identity = NodeIdentity::generate();
-        let raw = URL_SAFE_NO_PAD.encode(identity.public_key().as_bytes());
-
-        assert!(coordinator_key_from_spki(&raw).is_err());
     }
 }

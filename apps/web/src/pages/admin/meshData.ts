@@ -1,4 +1,4 @@
-import type { MeshAnalytics, MeshNodeStats, MeshTunnelMap } from '@gameblade/shared';
+import type { MeshAnalytics, MeshNodeStats } from '@gameblade/shared';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/api.js';
 
@@ -12,6 +12,7 @@ import { api } from '../../lib/api.js';
  */
 
 export interface EnrolmentInfo {
+  tokenHash: string;
   label: string;
   role: 'origin' | 'mirror' | 'peer';
   createdAt: string;
@@ -55,20 +56,5 @@ export function useMeshAnalytics(days: number) {
     // Aggregates over days; a minute of staleness is invisible and the query
     // touches every transfer row in the window.
     refetchInterval: 60_000,
-  });
-}
-
-/**
- * The live map.
- *
- * Polled quickly, but the data underneath only moves when a node heartbeats —
- * every thirty seconds — so the page shows how old each tunnel's last report
- * is rather than implying it is watching the wire.
- */
-export function useMeshTunnels(enabled = true) {
-  return useQuery({
-    queryKey: ['admin', 'mesh', 'tunnels'],
-    queryFn: () => api.get<MeshTunnelMap>('/mesh/tunnels'),
-    refetchInterval: enabled ? 5_000 : false,
   });
 }

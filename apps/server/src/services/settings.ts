@@ -27,14 +27,6 @@ export interface RuntimeSettings {
    * ever pointed at it — turning it on is then a switch, not a migration.
    */
   meshEnabled: boolean;
-  /**
-   * Whether clients may serve chunks they hold to other clients.
-   *
-   * Separate from `meshEnabled` and off by default, because it is a different
-   * decision: the first shares an operator's own machines, the second turns
-   * players into distributors of each other's downloads.
-   */
-  meshSeedingEnabled: boolean;
   /** Named colour theme applied to the web app and the desktop client. */
   themePreset: string;
   /** Optional hex accent replacing the preset's own. */
@@ -190,7 +182,6 @@ export class SettingsService {
       downloadSpeedLimitKbps: asNumber('downloadSpeedLimitKbps', 0),
       monthlyQuotaMb: asNumber('monthlyQuotaMb', 0),
       meshEnabled: asBoolean('meshEnabled', false),
-      meshSeedingEnabled: asBoolean('meshSeedingEnabled', false),
       themePreset: asString('themePreset', 'midnight') ?? 'midnight',
       themeAccent: asString('themeAccent', null),
       backupKeep: asNumber('backupKeep', 7),

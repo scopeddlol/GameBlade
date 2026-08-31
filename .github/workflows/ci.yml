@@ -91,27 +91,14 @@ jobs:
           pnpm --filter @gameblade/server build
           pnpm --filter @gameblade/web build
 
-  # The transport crate, on the cheap runner.
-  #
-  # Nothing else in CI covers it. The desktop job compiles it as a dependency
-  # but lints and tests only its own package, and the Linux jobs above are
-  # JavaScript. Which left a crate carrying the chunk protocol, the grant
-  # checking and the relay entirely unverified by anything automatic — including
-  # the tests that stand a real node and a real client up over localhost QUIC,
-  # which are the ones most likely to catch a change that compiles and does not
-  # work.
+  # The Node worker crate, on Linux and Windows.
   mesh:
     name: Test the mesh crate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # Windows as well as Linux, because the two disagree about sockets in a
-        # way this crate is exactly the wrong place to find out about late.
-        # `IPV6_V6ONLY` defaults off on Linux and on on Windows, so a `[::]`
-        # bind is dual-stack on one and IPv6-only on the other — and the client
-        # that seeds to other players runs on Windows only. A Linux-only gate
-        # passed every test while that path could not receive an IPv4 packet.
+        # Windows as well as Linux because Nodes run on both host platforms.
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
@@ -137,13 +124,10 @@ jobs:
         working-directory: crates/gameblade-mesh
         run: cargo test
 
-      # The binaries are what a node and a relay actually run, and a feature
-      # only dev-dependencies provide has silently broken this before while
-      # every test still passed.
-      - name: Build the binaries
+      - name: Build the Node worker
         if: matrix.os == 'ubuntu-latest'
         working-directory: crates/gameblade-mesh
-        run: cargo build --release --bins
+        run: cargo build --release --bin gameblade-node
 
   docker:
     name: Build and smoke test the images
@@ -189,16 +173,6 @@ jobs:
           push: false
           load: true
           tags: gameblade-node:ci
-          cache-from: type=gha,scope=image
-
-      - name: Build the relay image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: relay
-          push: false
-          load: true
-          tags: gameblade-relay:ci
           cache-from: type=gha,scope=image
 
       # Every role, booted. The point is the roles rather than the code: an
@@ -252,38 +226,18 @@ jobs:
           # that serves nothing while looking perfectly healthy.
           sleep 5
           docker exec gameblade-node-ci sh -c 'pgrep -f gameblade-node >/dev/null'
-          echo "the mesh agent is running beside the server"
+          echo "the Node worker is running beside the server"
 
           # And it must still be up rather than restarting, which is what an
           # entrypoint that mishandles either process looks like.
           test "$(docker inspect -f '{{.State.Running}}' gameblade-node-ci)" = true
           echo "node is stable, not restarting"
 
-          # Relay: with neither the coordinator's address nor its key it stops
-          # and names both ways to give it one. Captured rather than piped,
-          # because it exits non-zero on purpose and `pipefail` would read that
-          # as the step failing.
-          relay_says=$(docker run --rm gameblade-relay:ci 2>&1 || true)
-          echo "relay: $relay_says"
-          echo "$relay_says" | grep -q 'GAMEBLADE_SERVER'
-          echo "$relay_says" | grep -q 'GAMEBLADE_COORDINATOR_KEY'
-          echo "relay refuses to start unconfigured, and names both ways to fix it"
-
-          # And with an address it waits for the coordinator rather than dying,
-          # which is the ordinary case: the two start together and this one
-          # routinely comes up first.
-          docker run -d --name gameblade-relay-ci \
-            -e GAMEBLADE_SERVER=http://127.0.0.1:9 gameblade-relay:ci
-          sleep 6
-          test "$(docker inspect -f '{{.State.Running}}' gameblade-relay-ci)" = true
-          docker logs gameblade-relay-ci 2>&1 | grep -q 'waiting for the coordinator'
-          echo "relay waits for a coordinator that is not up yet"
-
       - name: Clean up
         if: always()
         run: >-
           docker rm -f gameblade-ci gameblade-coordinator-ci gameblade-node-ci
-          gameblade-relay-ci 2>/dev/null || true
+          2>/dev/null || true
 
   desktop:
     name: Build desktop client

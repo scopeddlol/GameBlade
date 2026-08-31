@@ -4,7 +4,7 @@
  *
  * Ten files, read by five different tools, all of which have to agree: the
  * five `package.json` files, the Tauri config that names the installer, the
- * desktop crate, the mesh crate, and both Cargo lockfiles that record the local
+ * desktop crate, the Node worker crate, and both Cargo lockfiles that record the local
  * crates they contain. A release where they disagree is not a broken build —
  * it is an installer that reports the wrong version to the update check, which
  * is worse, because it ships.
@@ -46,9 +46,6 @@ const CARGO_MANIFESTS = ['apps/desktop/src-tauri/Cargo.toml', 'crates/gameblade-
  */
 const CARGO_LOCKS = [
   { path: 'apps/desktop/src-tauri/Cargo.lock', crate: 'gameblade-desktop' },
-  // The desktop consumes the local mesh crate by path, so its lockfile carries
-  // that workspace version as well as its own.
-  { path: 'apps/desktop/src-tauri/Cargo.lock', crate: 'gameblade-mesh' },
   { path: 'crates/gameblade-mesh/Cargo.lock', crate: 'gameblade-mesh' },
 ];
 

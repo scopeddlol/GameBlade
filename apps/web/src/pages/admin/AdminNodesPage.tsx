@@ -1,6 +1,7 @@
 import type { MeshNodeStats } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, HardDrive, Radio, ShieldOff, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, Pencil, Radio, ShieldOff, Trash2, X } from 'lucide-react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { StatTile } from '../../components/charts.js';
 import { Badge, RowSkeleton } from '../../components/ui.js';
@@ -35,6 +36,12 @@ export function AdminNodesPage() {
     onSuccess: invalidate,
   });
 
+  const renameMutation = useMutation({
+    mutationFn: (input: { nodeId: string; label: string }) =>
+      api.patch(`/mesh/nodes/${input.nodeId}`, { label: input.label }),
+    onSuccess: invalidate,
+  });
+
   const libraryMutation = useMutation({
     mutationFn: (input: { nodeId: string; libraryId: string | null }) =>
       api.post(`/mesh/nodes/${input.nodeId}/library`, { libraryId: input.libraryId }),
@@ -65,7 +72,7 @@ export function AdminNodesPage() {
           hint="last 7 days"
         />
         <StatTile
-          label="Kept off this server"
+          label="Node-backed share"
           value={`${Math.round((summary?.bytes.meshShare ?? 0) * 100)}%`}
           hint="of delivered bytes"
         />
@@ -119,6 +126,7 @@ export function AdminNodesPage() {
               key={node.id}
               node={node}
               libraries={librariesQuery.data ?? []}
+              onRename={(label) => renameMutation.mutateAsync({ nodeId: node.id, label })}
               onLibrary={(libraryId) => libraryMutation.mutate({ nodeId: node.id, libraryId })}
               onToggleBlock={() =>
                 statusMutation.mutate({
@@ -156,22 +164,74 @@ function NodeCard({
   node,
   libraries,
   onLibrary,
+  onRename,
   onToggleBlock,
   onRemove,
 }: {
   node: MeshNodeStats;
   libraries: LibraryOption[];
   onLibrary: (libraryId: string | null) => void;
+  onRename: (label: string) => Promise<unknown>;
   onToggleBlock: () => void;
   onRemove: () => void;
 }) {
   const coverage = node.libraryGames > 0 ? node.gameCount / node.libraryGames : 0;
+  const [editingName, setEditingName] = useState(false);
+  const [name, setName] = useState(node.label);
+
+  const saveName = async () => {
+    const clean = name.trim();
+    if (!clean) return;
+    await onRename(clean);
+    setEditingName(false);
+  };
 
   return (
     <div className="bg-ink-800 rounded-lg p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium">{node.label}</span>
+          {editingName ? (
+            <form
+              className="flex items-center gap-1.5"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void saveName();
+              }}
+            >
+              <input
+                className="gb-input h-8 w-52 text-sm"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                maxLength={80}
+                autoFocus
+                aria-label="Node name"
+              />
+              <button type="submit" className="gb-btn-ghost p-1.5" aria-label="Save Node name">
+                <Check className="h-3.5 w-3.5" aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="gb-btn-ghost p-1.5"
+                onClick={() => {
+                  setName(node.label);
+                  setEditingName(false);
+                }}
+                aria-label="Cancel renaming"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              className="flex items-center gap-1.5 font-medium hover:text-white"
+              onClick={() => setEditingName(true)}
+              title="Rename Node"
+            >
+              {node.label}
+              <Pencil className="text-ink-500 h-3 w-3" aria-hidden />
+            </button>
+          )}
           <Badge tone={STATUS_TONE[node.status] ?? 'neutral'}>{node.status}</Badge>
           <Badge tone="neutral">{node.role}</Badge>
           {node.activeTransfers > 0 ? (
@@ -222,7 +282,7 @@ function NodeCard({
           </div>
           <p className="text-ink-500 mt-1 text-[11px]">
             {Math.round(coverage * 100)}% of this library is hashed and being offered. The rest
-            cannot be served over the mesh until the node has read it —{' '}
+            cannot be served from this Node until it has read it —{' '}
             {node.servableGames.toLocaleString('en')} games are hashed on this coordinator.
           </p>
         </div>
@@ -258,13 +318,6 @@ function NodeCard({
           </p>
         ) : null}
       </div>
-
-      {node.endpoints.length > 0 ? (
-        <p className="text-ink-500 mt-2 flex items-start gap-1.5 font-mono text-[11px] break-all">
-          <HardDrive className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
-          {node.endpoints.map((e) => `${e.address}:${e.port}`).join('  ')}
-        </p>
-      ) : null}
     </div>
   );
 }

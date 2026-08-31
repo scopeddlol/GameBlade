@@ -28,7 +28,6 @@ import { AdminLibrariesPage } from './pages/admin/AdminLibrariesPage.js';
 import { AdminNodesPage } from './pages/admin/AdminNodesPage.js';
 import { AdminNodeAnalyticsPage } from './pages/admin/AdminNodeAnalyticsPage.js';
 import { AdminNodeEnrolmentPage } from './pages/admin/AdminNodeEnrolmentPage.js';
-import { AdminNodeMapPage } from './pages/admin/AdminNodeMapPage.js';
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage.js';
 import { AdminRequestsPage } from './pages/admin/AdminRequestsPage.js';
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage.js';
@@ -174,7 +173,6 @@ export function App() {
               checks, so it is a section. */}
           <Route path="nodes">
             <Route index element={<AdminNodesPage />} />
-            <Route path="map" element={<AdminNodeMapPage />} />
             <Route path="analytics" element={<AdminNodeAnalyticsPage />} />
             <Route path="enrolment" element={<AdminNodeEnrolmentPage />} />
           </Route>

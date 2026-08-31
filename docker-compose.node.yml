@@ -1,11 +1,10 @@
 # A node: the game files, and nothing else.
 #
 # Runs wherever the library lives. Scans it, reports what it found to the
-# coordinator, and serves game data straight to clients over QUIC so those bytes
-# never cross the coordinator's connection.
+# coordinator, and supplies requested chunks through authenticated outbound HTTPS.
 #
-# Two processes, one container. The server scans and reports; the mesh agent
-# serves. They share a state file so they agree about which node they are, and
+# Two processes, one container. The server scans and reports; the Node agent
+# supplies chunks. They share a state file so they agree about which Node they are, and
 # the image starts both — a node is one thing to run, not a pair to keep in
 # step.
 #
@@ -90,8 +89,8 @@ services:
       # Bound to localhost by default because the page has no authentication of
       # its own. To reach it from the rest of your network, bind it to this
       # host's LAN address instead — '192.168.1.20:8080:8080' — which keeps it
-      # off every other interface this machine has. For access from outside the
-      # network, put a tunnel with its own authentication in front.
+      # off every other interface this machine has. This local status page is
+      # not needed for downloads; the worker itself only makes outbound HTTPS.
       - '127.0.0.1:8080:8080'
 
     security_opt:

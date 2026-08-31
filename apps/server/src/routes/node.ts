@@ -35,7 +35,7 @@ const setupSchema = z.object({
  * What a node serves over HTTP: a page about itself, and the same thing as JSON.
  *
  * Everything else a node does happens somewhere other than this port — it scans
- * local disk, reports upward over HTTPS, and serves game data over QUIC from
+ * local disk, reports upward over HTTPS, and supplies requested chunks through
  * the agent process beside this one. This exists because a machine that does
  * all of that invisibly is a machine whose only diagnostic is `docker logs`.
  *

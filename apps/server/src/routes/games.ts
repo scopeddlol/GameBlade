@@ -162,7 +162,11 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
       token: issued.token,
       expiresAt: issued.expiresAt,
       ...(chunked ? { chunkBytes: MESH_CHUNK_BYTES } : {}),
-      originAvailable: config.servesLocalFiles,
+      // The Coordinator download route is always the Desktop's HTTPS origin.
+      // In split deployments it obtains each requested chunk from a Node
+      // before streaming it onward; that transport detail is deliberately
+      // invisible to the client.
+      originAvailable: true,
       sources: mesh.sourcesFor(id, {
         chunked,
         includeOrigin: config.servesLocalFiles,

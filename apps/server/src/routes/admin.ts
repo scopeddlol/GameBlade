@@ -777,7 +777,6 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       downloadSpeedLimitKbps: current.downloadSpeedLimitKbps,
       monthlyQuotaMb: current.monthlyQuotaMb,
       meshEnabled: current.meshEnabled,
-      meshSeedingEnabled: current.meshSeedingEnabled,
       installer: installer.info(),
     };
   }
@@ -804,9 +803,6 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         : {}),
       ...(input.monthlyQuotaMb !== undefined ? { monthlyQuotaMb: input.monthlyQuotaMb } : {}),
       ...(input.meshEnabled !== undefined ? { meshEnabled: input.meshEnabled } : {}),
-      ...(input.meshSeedingEnabled !== undefined
-        ? { meshSeedingEnabled: input.meshSeedingEnabled }
-        : {}),
     });
 
     return describeSettings();

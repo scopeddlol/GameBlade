@@ -1,7 +1,8 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
+import { MESH_CHUNK_BYTES } from '@gameblade/shared';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZipFile } from 'yazl';
@@ -35,7 +36,7 @@ async function mapWithConcurrency<T, R>(
 }
 
 export async function downloadRoutes(app: FastifyInstance): Promise<void> {
-  const { db, downloadTokens, bandwidth } = app.gameblade;
+  const { db, downloadTokens, bandwidth, chunks, config, mesh } = app.gameblade;
 
   /**
    * Applies the configured per-stream speed limit.
@@ -248,6 +249,143 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(meter(source));
   }
 
+  /**
+   * Stream a file held by a Node through the Coordinator.
+   *
+   * The Desktop already asks for fixed 8 MiB ranges concurrently. Each range
+   * becomes a small authenticated HTTPS job for a Node, and the Coordinator
+   * verifies the full chunk before forwarding it. Whole-file requests use a
+   * four-chunk read-ahead window so browsers also receive a continuous stream
+   * instead of a pause between files or chunks.
+   */
+  async function streamNodeFile(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    options: {
+      gameId: string;
+      fileId: string;
+      filePath: string;
+      sizeBytes: number;
+      modifiedAt: string;
+      userId: string;
+    },
+  ): Promise<FastifyReply> {
+    const refs = chunks.chunksForGame(options.gameId).get(options.fileId) ?? [];
+    const expectedChunks = Math.ceil(options.sizeBytes / MESH_CHUNK_BYTES);
+    if (refs.length !== expectedChunks) {
+      throw ApiError.gone('This game is still being prepared by its Node');
+    }
+
+    const quota = bandwidth.assertWithinQuota(options.userId);
+    const etag = makeETag(options.sizeBytes, options.modifiedAt);
+    const ifRange = request.headers['if-range'];
+    const rangeHeader = ifRangeMatches(Array.isArray(ifRange) ? ifRange[0] : ifRange, etag)
+      ? request.headers.range
+      : undefined;
+    const parsed = parseRange(rangeHeader, options.sizeBytes);
+    if (parsed.type === 'unsatisfiable') {
+      return reply
+        .code(416)
+        .header('Accept-Ranges', 'bytes')
+        .header('Content-Range', `bytes */${options.sizeBytes}`)
+        .type('application/json')
+        .send({ error: { code: 'range_not_satisfiable', message: 'Requested range is invalid' } });
+    }
+
+    const start = parsed.type === 'satisfiable' ? parsed.range.start : 0;
+    const end =
+      parsed.type === 'satisfiable' ? parsed.range.end : Math.max(0, options.sizeBytes - 1);
+    const length = parsed.type === 'satisfiable' ? parsed.range.length : options.sizeBytes;
+
+    reply
+      .header('Accept-Ranges', 'bytes')
+      .header('Content-Type', 'application/octet-stream')
+      .header('Content-Disposition', contentDisposition(path.basename(options.filePath)))
+      .header('ETag', etag)
+      .header('Last-Modified', new Date(options.modifiedAt).toUTCString())
+      .header('Cache-Control', 'private, no-transform')
+      .header('X-Accel-Buffering', 'no')
+      .header('Content-Length', String(length));
+
+    if (parsed.type === 'satisfiable') {
+      reply.code(206).header('Content-Range', `bytes ${start}-${end}/${options.sizeBytes}`);
+    }
+    if (request.method === 'HEAD' || options.sizeBytes === 0) return reply.send();
+
+    const firstIndex = Math.floor(start / MESH_CHUNK_BYTES);
+    const lastIndex = Math.floor(end / MESH_CHUNK_BYTES);
+    const fetch = (index: number) => {
+      const ref = refs[index];
+      if (!ref || ref.index !== index) {
+        return Promise.reject(new Error(`Chunk ${index} is not available`));
+      }
+      const chunkStart = index * MESH_CHUNK_BYTES;
+      const expectedBytes = Math.min(MESH_CHUNK_BYTES, options.sizeBytes - chunkStart);
+      return mesh.fetchNodeChunk({
+        userId: options.userId,
+        gameId: options.gameId,
+        fileId: options.fileId,
+        chunkIndex: index,
+        expectedBytes,
+        sha256: ref.sha256,
+      });
+    };
+
+    // Fetch the first piece before committing binary headers. An offline Node
+    // then produces a useful 503 JSON response instead of a truncated download.
+    const first = await fetch(firstIndex);
+    reply.header('X-GameBlade-Node', encodeURIComponent(first.nodeLabel));
+
+    const eventId = recordEvent(
+      options.userId,
+      options.gameId,
+      options.fileId,
+      request.headers.authorization ? 'desktop' : 'web',
+    );
+
+    const source = Readable.from(
+      (async function* () {
+        const pending = new Map<number, ReturnType<typeof fetch>>([
+          [firstIndex, Promise.resolve(first)],
+        ]);
+        let next = firstIndex + 1;
+        const fill = () => {
+          while (next <= lastIndex && pending.size < 4) {
+            pending.set(next, fetch(next));
+            next += 1;
+          }
+        };
+        fill();
+
+        for (let index = firstIndex; index <= lastIndex; index += 1) {
+          const delivered = await pending.get(index)!;
+          pending.delete(index);
+          fill();
+
+          const chunkStart = index * MESH_CHUNK_BYTES;
+          const from = Math.max(0, start - chunkStart);
+          const through = Math.min(delivered.bytes.length, end - chunkStart + 1);
+          yield delivered.bytes.subarray(from, through);
+        }
+      })(),
+    );
+
+    let sent = 0;
+    source.on('data', (piece: Buffer) => {
+      sent += piece.length;
+      if (quota.quotaBytes > 0 && quota.usedBytes + sent >= quota.quotaBytes) {
+        source.destroy(new Error('monthly download quota reached'));
+      }
+    });
+    source.on('close', () => finishEvent(eventId, sent, sent >= length));
+    source.on('error', (error) => {
+      request.log.warn({ err: error, gameId: options.gameId }, 'proxied Node stream failed');
+      reply.raw.destroy();
+    });
+
+    return reply.send(meter(source));
+  }
+
   /** Archive games, and folder games requested as a single ZIP. */
   app.route({
     method: ['GET', 'HEAD'],
@@ -259,6 +397,24 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       const { gameId } = request.params as { gameId: string };
       const userId = resolveDownloadUser(request, gameId);
       const { game, libraryPath } = loadGame(gameId);
+
+      if (!config.servesLocalFiles) {
+        if (game.kind !== 'archive') {
+          throw ApiError.conflict(
+            'Folder games are installed through the GameBlade Desktop app so they can resume safely.',
+          );
+        }
+        const file = db.select().from(gameFiles).where(eq(gameFiles.gameId, gameId)).get();
+        if (!file) throw ApiError.gone('This game has no downloadable file');
+        return streamNodeFile(request, reply, {
+          gameId,
+          fileId: file.id,
+          filePath: file.relPath,
+          sizeBytes: file.sizeBytes,
+          modifiedAt: file.modifiedAt,
+          userId,
+        });
+      }
 
       const gameRoot = resolveWithin(libraryPath, game.relPath);
 
@@ -290,6 +446,17 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       const file = db.select().from(gameFiles).where(eq(gameFiles.id, fileId)).get();
       if (!file || file.gameId !== gameId) {
         throw ApiError.notFound('File not found');
+      }
+
+      if (!config.servesLocalFiles) {
+        return streamNodeFile(request, reply, {
+          gameId,
+          fileId: file.id,
+          filePath: file.relPath,
+          sizeBytes: file.sizeBytes,
+          modifiedAt: file.modifiedAt,
+          userId,
+        });
       }
 
       const gameRoot = resolveWithin(libraryPath, game.relPath);

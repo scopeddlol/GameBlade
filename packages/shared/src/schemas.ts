@@ -169,7 +169,6 @@ export const providerSettingsSchema = z.object({
   /** Whether clients may fetch game data from mesh nodes rather than the origin. */
   meshEnabled: z.boolean().optional(),
   /** Whether clients may serve chunks they hold to other clients. */
-  meshSeedingEnabled: z.boolean().optional(),
 });
 export type ProviderSettingsInput = z.infer<typeof providerSettingsSchema>;
 

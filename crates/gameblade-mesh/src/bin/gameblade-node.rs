@@ -1,8 +1,8 @@
 //! The GameBlade node agent.
 //!
-//! Runs on a machine holding game files and serves them straight to clients,
-//! so those bytes never cross the reverse proxy. Coordination still goes
-//! through it — that traffic is kilobytes.
+//! Runs on a machine holding game files. It keeps an authenticated outbound
+//! HTTPS poll open to the Coordinator, reads requested 8 MiB chunks, and posts
+//! them back over HTTPS. Nodes need no public listener or game-transfer port.
 //!
 //! Nothing has to be configured for it to start. Every value below has a
 //! working default, and the two that cannot — which coordinator, and the code
@@ -13,7 +13,6 @@
 //!     GAMEBLADE_LIBRARY     /library                     (or read off the mounts)
 //!     GAMEBLADE_ENROLMENT   <code from Admin → Nodes>    (or from the state file)
 //!     GAMEBLADE_STATE       /data/node-state.json        (default)
-//!     GAMEBLADE_PORT        47820                        (default; 0 for any)
 //!
 //! An unconfigured agent waits rather than exiting. It is one half of a node
 //! and the other half is serving the page somebody is about to fill in, so
@@ -29,17 +28,15 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use gameblade_mesh::agent::{
-    Agent, AgentState, CatalogGame, LibraryChunks, LibraryIndex, RendezvousReply, RETRY_DELAY,
+    AgentState, CatalogGame, ChunkStore, LibraryChunks, LibraryIndex, RETRY_DELAY,
 };
-use gameblade_mesh::diagnostics::DEFAULT_STUN_SERVERS;
-use gameblade_mesh::node::NodeServer;
-use gameblade_mesh::transport::MeshEndpoint;
 use gameblade_mesh::{
-    library_roots, MeshError, MeshResult, DEFAULT_STATE_PATH, MESH_DEFAULT_PORT,
-    MULTI_LIBRARY_ROOT, UNCONFIGURED_POLL,
+    library_roots, MeshError, MeshResult, NodeIdentity, DEFAULT_STATE_PATH, MULTI_LIBRARY_ROOT,
+    UNCONFIGURED_POLL,
 };
 use serde::Deserialize;
-use tokio::sync::RwLock;
+use sha2::Digest;
+use tokio::sync::{RwLock, Semaphore};
 
 #[derive(Debug, Deserialize)]
 struct Registration {
@@ -47,10 +44,34 @@ struct Registration {
     node_id: String,
     #[serde(rename = "nodeToken")]
     node_token: String,
-    #[serde(rename = "coordinatorPublicKey")]
-    coordinator_public_key: String,
     #[serde(rename = "heartbeatSeconds", default = "default_heartbeat")]
     heartbeat_seconds: u64,
+}
+
+struct Runtime {
+    identity: NodeIdentity,
+    node_id: String,
+    node_token: String,
+    index: Arc<RwLock<LibraryIndex>>,
+    chunks: Arc<LibraryChunks>,
+    heartbeat: Duration,
+}
+
+#[derive(Debug, Deserialize)]
+struct TransferPoll {
+    #[serde(default)]
+    jobs: Vec<TransferJob>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransferJob {
+    request_id: String,
+    game_id: String,
+    file_id: String,
+    chunk_index: u64,
+    expected_bytes: usize,
+    sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,10 +126,6 @@ async fn main() {
     let state_path = PathBuf::from(
         optional("GAMEBLADE_STATE").unwrap_or_else(|| DEFAULT_STATE_PATH.to_string()),
     );
-    let port: u16 = optional("GAMEBLADE_PORT")
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(MESH_DEFAULT_PORT);
-
     println!("GameBlade node agent");
     if library_roots.is_empty() {
         println!("  library: (none found)");
@@ -162,7 +179,7 @@ async fn main() {
     // down, or an agent that came up before the server beside it, is a wait
     // rather than a crash.
     let agent = loop {
-        match start(&server_url, &state_path, port).await {
+        match start(&server_url, &state_path).await {
             Ok(agent) => break agent,
             Err(err) => {
                 let mut state = AgentState::load(&state_path);
@@ -180,20 +197,12 @@ async fn main() {
     };
 
     println!("  node:    {}", agent.node_id);
-    match agent.endpoint.local_addr() {
-        Ok(address) => println!("  serving: {address}"),
-        Err(_) => println!("  serving: (unknown)"),
-    }
-    if let Some(reflexive) = agent.endpoint.reflexive_addr() {
-        println!("  seen as: {reflexive}");
-    } else {
-        println!("  seen as: (could not determine — clients may not reach this node)");
-    }
+    println!("  transfer: outbound HTTPS through the coordinator");
 
     run(agent, server_url, library_roots, state_path).await;
 }
 
-async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> MeshResult<Agent> {
+async fn start(server_url: &str, state_path: &std::path::Path) -> MeshResult<Runtime> {
     let mut state = AgentState::load(state_path);
     let identity = state.identity()?;
 
@@ -205,9 +214,6 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
     // log could see.
     state.save(state_path)?;
 
-    let stun: Vec<&str> = DEFAULT_STUN_SERVERS.to_vec();
-    let endpoint = MeshEndpoint::node_with_discovery(identity.clone(), port, &stun)?;
-
     // Already enrolled: use what is there rather than registering again.
     //
     // Registering rotates the node's credential, and in the usual deployment
@@ -216,17 +222,11 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
     // would invalidate the token that process is still using and stop its
     // catalog reports, which is a confusing way to break something that looks
     // unrelated.
-    if let (Some(node_id), Some(node_token), Some(coordinator)) = (
-        state.node_id.clone(),
-        state.node_token.clone(),
-        state.coordinator(),
-    ) {
+    if let (Some(node_id), Some(node_token)) = (state.node_id.clone(), state.node_token.clone()) {
         return Ok(assemble(
             identity,
             node_id,
             node_token,
-            coordinator,
-            endpoint,
             Duration::from_secs(30),
         ));
     }
@@ -238,25 +238,7 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
 
     // Every registration returns a fresh credential, so the enrolment code is
     // only needed the first time. After that the key is the identity.
-    let mut endpoints = Vec::new();
-    if let Some(local) = endpoint
-        .local_addr()
-        .ok()
-        .filter(|address| !address.ip().is_unspecified())
-    {
-        endpoints.push(serde_json::json!({
-            "kind": "local",
-            "address": local.ip().to_string(),
-            "port": local.port(),
-        }));
-    }
-    if let Some(reflexive) = endpoint.reflexive_addr() {
-        endpoints.push(serde_json::json!({
-            "kind": "observed",
-            "address": reflexive.ip().to_string(),
-            "port": reflexive.port(),
-        }));
-    }
+    let endpoints: Vec<serde_json::Value> = Vec::new();
 
     // The environment first, then whatever the setup page wrote. Either way it
     // is spent once and cleared below.
@@ -268,7 +250,7 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
         // A partially lost state file can retain the private key while losing
         // its replaceable token. Prove that key rather than asking an operator
         // for a second code. An unknown key still needs ordinary enrolment.
-        register_with_proof(&http, server_url, &identity, &endpoints)
+        register_with_proof(&http, server_url, &identity)
             .await
             .map_err(|_| {
                 MeshError::Refused(
@@ -303,7 +285,7 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
             // The key may already be registered even though this process has
             // only the old one-time code. A proof recovers that same node; an
             // unknown key preserves the coordinator's useful enrolment error.
-            match register_with_proof(&http, server_url, &identity, &endpoints).await {
+            match register_with_proof(&http, server_url, &identity).await {
                 Ok(registration) => registration,
                 Err(_) => {
                     return Err(MeshError::Refused(format!(
@@ -316,7 +298,6 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
 
     state.node_id = Some(registration.node_id.clone());
     state.node_token = Some(registration.node_token.clone());
-    state.coordinator_key = Some(registration.coordinator_public_key.clone());
     state.registration_error = None;
     // Spent. Cleared so it is not sitting on disk being useless, and so a
     // restart cannot look like it still has something to enrol with.
@@ -326,16 +307,10 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
     state.coordinator_url = Some(server_url.to_string());
     state.save(state_path)?;
 
-    let coordinator = state
-        .coordinator()
-        .ok_or_else(|| MeshError::Identity("the coordinator published an unusable key".into()))?;
-
     Ok(assemble(
         identity,
         registration.node_id,
         registration.node_token,
-        coordinator,
-        endpoint,
         // Clamped: a coordinator asking for a heartbeat every second would put
         // every node into a hot loop, and one asking for an hour would leave
         // them all listed long after they died.
@@ -345,25 +320,20 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
 
 /// Build the agent around credentials, however they were obtained.
 fn assemble(
-    identity: gameblade_mesh::NodeIdentity,
+    identity: NodeIdentity,
     node_id: String,
     node_token: String,
-    coordinator: gameblade_mesh::PublicKey,
-    endpoint: MeshEndpoint,
     heartbeat: Duration,
-) -> Agent {
+) -> Runtime {
     let index = Arc::new(RwLock::new(LibraryIndex::new()));
-    let store = Arc::new(LibraryChunks::new(Arc::clone(&index)));
-    let server = Arc::new(NodeServer::new(node_id.clone(), store, coordinator));
+    let chunks = Arc::new(LibraryChunks::new(Arc::clone(&index)));
 
-    Agent {
+    Runtime {
         identity,
         node_id,
         node_token,
-        coordinator_key: coordinator,
-        endpoint,
         index,
-        server,
+        chunks,
         heartbeat,
     }
 }
@@ -379,45 +349,20 @@ fn credential_rejected(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN
 }
 
-fn advertised_endpoints(endpoint: &MeshEndpoint) -> Vec<serde_json::Value> {
-    let mut endpoints = Vec::new();
-    if let Some(local) = endpoint
-        .local_addr()
-        .ok()
-        .filter(|address| !address.ip().is_unspecified())
-    {
-        endpoints.push(serde_json::json!({
-            "kind": "local",
-            "address": local.ip().to_string(),
-            "port": local.port(),
-        }));
-    }
-    if let Some(reflexive) = endpoint.reflexive_addr() {
-        endpoints.push(serde_json::json!({
-            "kind": "observed",
-            "address": reflexive.ip().to_string(),
-            "port": reflexive.port(),
-        }));
-    }
-    endpoints
-}
-
 /// Mark the node alive, optionally replacing its advertised holdings.
 ///
 /// A liveness-only heartbeat deliberately omits `games`: the coordinator then
 /// preserves the last accepted catalog while a large library is being checked.
-#[allow(clippy::too_many_arguments)]
 async fn send_heartbeat(
     http: &reqwest::Client,
     server_url: &str,
-    identity: &gameblade_mesh::NodeIdentity,
+    identity: &NodeIdentity,
     node_id: &str,
     node_token: &Arc<RwLock<String>>,
-    endpoint: &MeshEndpoint,
     state_path: &std::path::Path,
     games: Option<Vec<serde_json::Value>>,
 ) {
-    let mut body = serde_json::json!({ "endpoints": advertised_endpoints(endpoint) });
+    let mut body = serde_json::json!({ "endpoints": [] });
     if let Some(games) = games {
         body["games"] = serde_json::Value::Array(games);
     }
@@ -438,7 +383,7 @@ async fn send_heartbeat(
                 "the coordinator rejected this node's credential ({}); registering again",
                 response.status()
             );
-            match reregister(http, server_url, identity, endpoint, state_path).await {
+            match reregister(http, server_url, identity, state_path).await {
                 Ok(fresh) => {
                     *node_token.write().await = fresh;
                     println!("re-registered; the node is listed again");
@@ -451,40 +396,23 @@ async fn send_heartbeat(
     }
 }
 
-async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, state_path: PathBuf) {
+async fn run(agent: Runtime, server_url: String, library_roots: Vec<PathBuf>, state_path: PathBuf) {
     let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(40))
+        // A Node may have a modest upload connection. Eight MiB must not be
+        // killed just because it needs more than the old forty-second control
+        // request timeout.
+        .timeout(Duration::from_secs(15 * 60))
         .build()
         .expect("an HTTP client with only a timeout set always builds");
 
-    let Agent {
+    let Runtime {
         identity,
         node_id,
         node_token,
-        endpoint,
         index,
-        server,
+        chunks,
         heartbeat,
-        ..
     } = agent;
-
-    let endpoint = Arc::new(endpoint);
-
-    // STUN discovery at startup creates the exact outbound mapping clients are
-    // handed. Without traffic it expires in roughly thirty seconds on many
-    // routers, leaving every later download aimed at a stale port. Refresh it
-    // from the same socket; no inbound port or router rule is involved.
-    {
-        let endpoint = Arc::clone(&endpoint);
-        tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(gameblade_mesh::transport::NAT_KEEPALIVE_INTERVAL);
-            loop {
-                interval.tick().await;
-                endpoint.refresh_nat_mapping(DEFAULT_STUN_SERVERS);
-            }
-        });
-    }
 
     // The credential rotates; the identity does not.
     //
@@ -495,110 +423,52 @@ async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, stat
     // must not go on presenting a token this loop has already replaced.
     let node_token = Arc::new(RwLock::new(node_token));
 
-    // Accept: clients connecting, one chunk per stream.
-    {
-        let endpoint = Arc::clone(&endpoint);
-        let server = Arc::clone(&server);
-        tokio::spawn(async move {
-            while let Some(incoming) = endpoint.inner().accept().await {
-                let server = Arc::clone(&server);
-                tokio::spawn(async move {
-                    if let Ok(connection) = incoming.await {
-                        server.serve(connection).await;
-                    }
-                });
-            }
-        });
-    }
-
-    // Rendezvous: held open, answered the instant a client asks for this node.
-    //
-    // This is what makes hole punching work at all. Both ends have to send at
-    // roughly the same moment, and this node has no other way to know a client
-    // exists before that client tries to connect — which it cannot do until
-    // this punch has opened the way.
+    // Transfer work: one outbound long-poll, with up to eight HTTPS uploads in
+    // flight. The Coordinator hands each Desktop range to a Node and streams
+    // the verified result onward; there is no listener or path back into this
+    // network.
     {
         let http = http.clone();
         let server_url = server_url.clone();
         let node_id = node_id.clone();
         let node_token = Arc::clone(&node_token);
-        let endpoint = Arc::clone(&endpoint);
+        let chunks = Arc::clone(&chunks);
+        let concurrency = Arc::new(Semaphore::new(8));
 
         tokio::spawn(async move {
             loop {
-                // Read per poll, so a token replaced by the heartbeat loop is
-                // picked up on the next one rather than at the next restart.
                 let token = node_token.read().await.clone();
                 let reply = http
-                    .get(format!("{server_url}/api/mesh/rendezvous"))
+                    .get(format!("{server_url}/api/mesh/transfers/poll"))
                     .header("authorization", format!("Bearer {token}"))
                     .header("x-gameblade-node", &node_id)
                     .send()
                     .await;
 
-                let punches = match reply {
+                let jobs = match reply {
                     Ok(response) if response.status().is_success() => response
-                        .json::<RendezvousReply>()
+                        .json::<TransferPoll>()
                         .await
-                        .map(|body| body.punches)
+                        .map(|body| body.jobs)
                         .unwrap_or_default(),
-                    // A poll that times out or fails is ordinary — the whole
-                    // point is a long-held request — so reconnect rather than
-                    // treating it as an error.
                     _ => {
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         continue;
                     }
                 };
 
-                for punch in punches {
-                    let endpoint = Arc::clone(&endpoint);
-
-                    // Concurrently: several clients can be arriving at once and
-                    // each of these takes a moment of deliberate spacing.
+                for job in jobs {
+                    let http = http.clone();
+                    let server_url = server_url.clone();
+                    let node_id = node_id.clone();
+                    let node_token = Arc::clone(&node_token);
+                    let chunks = Arc::clone(&chunks);
+                    let concurrency = Arc::clone(&concurrency);
                     tokio::spawn(async move {
-                        match punch.relay {
-                            // The client could not reach us directly and has
-                            // gone to the relay. Announce ourselves there so it
-                            // can pair the two of us; QUIC then runs over the
-                            // top exactly as it would have directly.
-                            //
-                            // Resolved rather than parsed: this address is the
-                            // coordinator's own, and by default it is the
-                            // coordinator's hostname. Parsing it as a literal
-                            // failed for every ordinary deployment and the
-                            // instruction was then dropped without a word,
-                            // which is why a relayed tunnel could open on the
-                            // map and never carry a byte.
-                            Some(relay) => {
-                                let Some(target) = gameblade_mesh::agent::resolve_socket_address(
-                                    &punch.address,
-                                    punch.port,
-                                )
-                                .await
-                                else {
-                                    eprintln!(
-                                        "mesh: relay {}:{} could not be resolved; the client waiting on it will time out",
-                                        punch.address, punch.port
-                                    );
-                                    return;
-                                };
-                                let _ = endpoint.announce_to_relay(target, &relay.ticket).await;
-                            }
-                            // A direct punch aims at the client's own reflexive
-                            // address, which is a literal by construction.
-                            // Names are deliberately not resolved here: that
-                            // would be a lookup made on a client's say-so.
-                            None => {
-                                let Some(target) = gameblade_mesh::agent::socket_address(
-                                    &punch.address,
-                                    punch.port,
-                                ) else {
-                                    return;
-                                };
-                                let _ = endpoint.punch(target).await;
-                            }
-                        }
+                        let Ok(_permit) = concurrency.acquire_owned().await else {
+                            return;
+                        };
+                        deliver_job(&http, &server_url, &node_id, &node_token, &chunks, job).await;
                     });
                 }
             }
@@ -620,7 +490,6 @@ async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, stat
             &identity,
             &node_id,
             &node_token,
-            &endpoint,
             &state_path,
             None,
         )
@@ -655,27 +524,66 @@ async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, stat
             &identity,
             &node_id,
             &node_token,
-            &endpoint,
             &state_path,
             Some(games),
         )
         .await;
+    }
+}
 
-        // Report what was served, so transfer allowances still mean something
-        // when the bytes never crossed the server. A rejection here needs no
-        // handling of its own: the next heartbeat is thirty seconds away and
-        // deals with it, and the ledger keeps the report until it lands.
-        let token = node_token.read().await.clone();
-        let pending = server.ledger().lock().await.pending_reports();
-        for (nonce, bytes) in pending {
-            let _ = http
-                .post(format!("{server_url}/api/mesh/report"))
-                .header("authorization", format!("Bearer {token}"))
-                .header("x-gameblade-node", &node_id)
-                .json(&serde_json::json!({ "nonce": nonce, "bytesServed": bytes }))
-                .send()
-                .await;
+async fn deliver_job(
+    http: &reqwest::Client,
+    server_url: &str,
+    node_id: &str,
+    node_token: &Arc<RwLock<String>>,
+    chunks: &LibraryChunks,
+    job: TransferJob,
+) {
+    let token = node_token.read().await.clone();
+    let bytes = chunks
+        .read_chunk(&job.game_id, &job.file_id, job.chunk_index)
+        .await;
+
+    let valid = bytes.filter(|bytes| {
+        bytes.len() == job.expected_bytes
+            && hex::encode(sha2::Sha256::digest(bytes)).eq_ignore_ascii_case(&job.sha256)
+    });
+
+    if let Some(bytes) = valid {
+        let response = http
+            .post(format!(
+                "{server_url}/api/mesh/transfers/{}",
+                job.request_id
+            ))
+            .header("authorization", format!("Bearer {token}"))
+            .header("x-gameblade-node", node_id)
+            .header("content-type", "application/octet-stream")
+            .body(bytes)
+            .send()
+            .await;
+        match response {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                eprintln!(
+                    "the Coordinator refused a requested chunk ({status}): {}",
+                    body.chars().take(300).collect::<String>()
+                );
+            }
+            Err(error) => eprintln!("could not upload a requested chunk: {error}"),
         }
+    } else {
+        let _ = http
+            .post(format!(
+                "{server_url}/api/mesh/transfers/{}/fail",
+                job.request_id
+            ))
+            .header("authorization", format!("Bearer {token}"))
+            .header("x-gameblade-node", node_id)
+            .json(&serde_json::json!({ "message": "The requested chunk is no longer readable on this Node" }))
+            .send()
+            .await;
     }
 }
 
@@ -687,38 +595,16 @@ async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, stat
 async fn reregister(
     http: &reqwest::Client,
     server_url: &str,
-    identity: &gameblade_mesh::NodeIdentity,
-    endpoint: &MeshEndpoint,
+    identity: &NodeIdentity,
     state_path: &std::path::Path,
 ) -> MeshResult<String> {
-    let mut endpoints = Vec::new();
-    if let Some(local) = endpoint
-        .local_addr()
-        .ok()
-        .filter(|address| !address.ip().is_unspecified())
-    {
-        endpoints.push(serde_json::json!({
-            "kind": "local",
-            "address": local.ip().to_string(),
-            "port": local.port(),
-        }));
-    }
-    if let Some(reflexive) = endpoint.reflexive_addr() {
-        endpoints.push(serde_json::json!({
-            "kind": "observed",
-            "address": reflexive.ip().to_string(),
-            "port": reflexive.port(),
-        }));
-    }
-
-    let registration = register_with_proof(http, server_url, identity, &endpoints).await?;
+    let registration = register_with_proof(http, server_url, identity).await?;
 
     // Written through so the server process beside this one, which reads the
     // same file, is not left presenting the credential that was just replaced.
     let mut state = AgentState::load(state_path);
     state.node_id = Some(registration.node_id);
     state.node_token = Some(registration.node_token.clone());
-    state.coordinator_key = Some(registration.coordinator_public_key);
     state.registration_error = None;
     state.save(state_path)?;
 
@@ -729,8 +615,7 @@ async fn reregister(
 async fn register_with_proof(
     http: &reqwest::Client,
     server_url: &str,
-    identity: &gameblade_mesh::NodeIdentity,
-    endpoints: &[serde_json::Value],
+    identity: &NodeIdentity,
 ) -> MeshResult<Registration> {
     let public_key = identity.public_key_base64();
     let response = http
@@ -760,7 +645,7 @@ async fn register_with_proof(
         .json(&serde_json::json!({
             "publicKey": public_key,
             "agentVersion": env!("CARGO_PKG_VERSION"),
-            "endpoints": endpoints,
+            "endpoints": [],
             "proof": {
                 "challenge": challenge.challenge,
                 "signature": signature,

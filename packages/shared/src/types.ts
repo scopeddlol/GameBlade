@@ -184,17 +184,15 @@ export interface DownloadManifest {
    */
   chunkBytes?: number;
   /**
-   * Whether the API server itself holds the bytes behind its HTTP download
-   * routes. Coordinators deliberately do not; clients must not treat their
-   * download routes as a fallback when every real copy lives on a node.
+   * Whether the HTTP download routes are usable. A Coordinator returns true
+   * because those routes fetch verified chunks from Nodes and stream them.
    */
   originAvailable: boolean;
   /**
    * Where this game's bytes may be fetched from, best first.
    *
-   * Contains the origin only when `originAvailable` is true. A client that
-   * predates this field still uses the download routes, preserving compatibility
-   * with standalone servers.
+   * Friendly source labels for diagnostics. Network addresses are never part
+   * of this shape; Desktop always fetches through the HTTP download routes.
    */
   sources?: MeshSource[];
 }
@@ -308,7 +306,6 @@ export interface ServerSettings {
   /** Whether clients may fetch game data from mesh nodes rather than the origin. */
   meshEnabled?: boolean;
   /** Whether clients may serve chunks they hold to other clients. */
-  meshSeedingEnabled?: boolean;
   /** The uploaded Windows installer, when one has been stored. */
   installer?: ClientInstallerInfo | null;
 }

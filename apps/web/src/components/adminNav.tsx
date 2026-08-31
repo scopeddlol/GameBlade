@@ -177,11 +177,6 @@ export const ADMIN_SECTIONS: AdminSection[] = [
         prefetch: [{ key: ['admin', 'mesh'], path: '/mesh/nodes' }],
       },
       {
-        to: '/admin/nodes/map',
-        label: 'Tunnel map',
-        prefetch: [{ key: ['admin', 'mesh', 'tunnels'], path: '/mesh/tunnels' }],
-      },
-      {
         to: '/admin/nodes/analytics',
         label: 'Analytics',
         prefetch: [{ key: ['admin', 'mesh', 'analytics'], path: '/mesh/analytics?days=14' }],

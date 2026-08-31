@@ -1,6 +1,6 @@
 import { and, eq, gte, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { downloadEvents, meshTransfers, users } from '../db/schema.js';
+import { downloadEvents, users } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import type { SettingsService } from './settings.js';
 
@@ -41,14 +41,12 @@ export class BandwidthService {
   }
 
   /**
-   * Bytes this account has been sent since the start of the month, from
-   * everywhere.
+   * Bytes this account has been sent since the start of the month.
    *
-   * Two sources, added together. The download log covers what flowed through
-   * this server. Mesh transfers cover what a node served directly, which this
-   * server never saw a byte of — and leaving those out would make the quota
-   * count only the traffic the mesh exists to avoid, so an account could spend
-   * its whole allowance and the counter would barely move.
+   * Every download now flows through the Coordinator, including chunks fetched
+   * from Nodes, so the download event log is the one authoritative counter.
+   * Node transfer records describe where those same bytes came from and must
+   * not be added again.
    */
   usedThisPeriod(userId: string): number {
     const periodStart = BandwidthService.periodStart();
@@ -59,13 +57,7 @@ export class BandwidthService {
       .where(and(eq(downloadEvents.userId, userId), gte(downloadEvents.startedAt, periodStart)))
       .get();
 
-    const meshed = this.db
-      .select({ bytes: sql<number>`coalesce(sum(${meshTransfers.bytesServed}), 0)` })
-      .from(meshTransfers)
-      .where(and(eq(meshTransfers.userId, userId), gte(meshTransfers.issuedAt, periodStart)))
-      .get();
-
-    return Number(served?.bytes ?? 0) + Number(meshed?.bytes ?? 0);
+    return Number(served?.bytes ?? 0);
   }
 
   /**

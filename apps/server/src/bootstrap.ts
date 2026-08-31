@@ -398,13 +398,6 @@ export function startSchedules(app: FastifyInstance): () => void {
     );
   }
 
-  if (!config.servesLocalFiles && !config.relayEndpoint) {
-    app.log.info(
-      'RELAY_ENDPOINT is not set; relay sessions will use the coordinator request hostname ' +
-        'and UDP port 47821. Set RELAY_ENDPOINT only when the relay has a different public address.',
-    );
-  }
-
   /**
    * Scheduled archives of the data directory.
    *
@@ -501,8 +494,8 @@ export function startSchedules(app: FastifyInstance): () => void {
    *
    * Runs on its own short timer rather than with the hourly cleanup below: a
    * node that dropped an hour ago is a node clients have been queuing
-   * connection attempts against all that time, and the whole point of a direct
-   * path is that it is faster than the tunnel, not slower.
+   * download work against all that time. A stale Node must be removed from the
+   * queue quickly so the next active holder can take over.
    */
   const meshSweep = setInterval(() => {
     try {

@@ -8,13 +8,7 @@ import {
   verify as verifyBytes,
   type KeyObject,
 } from 'node:crypto';
-import {
-  DOWNLOAD_TOKEN_TTL_SECONDS,
-  MESH_GRANT_TTL_SECONDS,
-  MESH_RELAY_TICKET_TTL_SECONDS,
-  type MeshGrantClaims,
-  type MeshRelayTicket,
-} from '@gameblade/shared';
+import { DOWNLOAD_TOKEN_TTL_SECONDS } from '@gameblade/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
@@ -42,21 +36,12 @@ const SIGNING_KEY = 'meshSigningKeyPkcs8';
 const V2_PREFIX = 'v2.';
 
 /**
- * Stateless, signed download tokens — and the mesh grants that extend the same
- * idea to nodes.
+ * Stateless, signed download tokens.
  *
  * The desktop client opens many parallel connections per game and resumes them
  * across restarts. Issuing a signed token instead of a database row means those
  * connections cost no writes and survive a server restart, while still expiring
  * and still being scoped to one user and one game.
- *
- * Signing is asymmetric, and that is the point rather than an upgrade for its
- * own sake. Under HMAC, verifying a token requires the secret that mints one,
- * so a node that could check a client's authority could also manufacture
- * authority for itself and for anyone else. With Ed25519 a node holds only the
- * public half: it can prove the coordinator said yes, and it can say nothing on
- * the coordinator's behalf. Enrolling a node therefore stops being a decision
- * about trust.
  *
  * The old HMAC secret is kept and still verified, because tokens issued before
  * an upgrade have to keep working until they expire on their own.
@@ -129,10 +114,7 @@ export class DownloadTokenService {
   }
 
   /**
-   * The public half, base64url, for anyone who has to check a signature.
-   *
-   * Handed to nodes at enrolment and published to clients so they can tell a
-   * grant the coordinator issued from one a node made up.
+   * The public half, base64url, used by compatibility tests and migrations.
    */
   publicKeyBase64(): string {
     // SPKI carries the algorithm identifier, so a verifier does not have to be
@@ -163,80 +145,6 @@ export class DownloadTokenService {
       // the token and retries when it sees this one, and must not treat an
       // ordinary authorisation failure as something retrying can fix.
       throw new ApiError(403, 'token_expired', 'This download link has expired.');
-    }
-    return claims;
-  }
-
-  /* ------------------------------------------------------------- mesh grants */
-
-  /**
-   * Authorise one account to pull one game from one node, up to a byte ceiling.
-   *
-   * The ceiling is what keeps quota enforcement meaningful once bytes stop
-   * flowing through the server: the node counts down against it locally and
-   * refuses to serve past it, so an account that has spent its allowance cannot
-   * simply talk to a node directly instead.
-   */
-  issueGrant(
-    claims: Omit<MeshGrantClaims, 'expiresAt' | 'nonce'>,
-    ttlSeconds = MESH_GRANT_TTL_SECONDS,
-  ): { grant: string; expiresAt: string; nonce: string } {
-    const nonce = randomBytes(9).toString('base64url');
-    const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
-    const payload: MeshGrantClaims = { ...claims, expiresAt, nonce };
-    return {
-      grant: this.encode(payload),
-      expiresAt: new Date(expiresAt * 1000).toISOString(),
-      nonce,
-    };
-  }
-
-  /**
-   * Check a grant the same way a node does.
-   *
-   * Used by the coordinator's own relay path, and by the tests that pin the
-   * wire format a node depends on.
-   */
-  verifyGrant(grant: string): MeshGrantClaims {
-    const claims = this.decode<MeshGrantClaims>(grant);
-    if (claims.expiresAt * 1000 <= Date.now()) {
-      throw new ApiError(403, 'grant_expired', 'This transfer grant has expired.');
-    }
-    return claims;
-  }
-
-  /* ---------------------------------------------------------------- relay */
-
-  /**
-   * Admit one client and one node to the relay for a single transfer.
-   *
-   * Two tickets sharing a session id, because pairing is the only thing the
-   * relay has to work out and this is what tells it. Signed with the same key
-   * as everything else, so the relay verifies locally and needs no database, no
-   * lookup and no conversation with this server.
-   */
-  issueRelayTickets(claims: { sessionId: string; nodeId: string; userId: string }): {
-    client: string;
-    node: string;
-    expiresAt: string;
-  } {
-    const expiresAt = Math.floor(Date.now() / 1000) + MESH_RELAY_TICKET_TTL_SECONDS;
-
-    const forSide = (side: 'client' | 'node') =>
-      this.encode({ ...claims, side, expiresAt } satisfies MeshRelayTicket);
-
-    return {
-      client: forSide('client'),
-      node: forSide('node'),
-      expiresAt: new Date(expiresAt * 1000).toISOString(),
-    };
-  }
-
-  /** Check a relay ticket the way the relay does. Used by its tests. */
-  verifyRelayTicket(ticket: string): MeshRelayTicket {
-    const claims = this.decode<MeshRelayTicket>(ticket);
-    if (claims.expiresAt * 1000 <= Date.now()) {
-      throw new ApiError(403, 'ticket_expired', 'This relay ticket has expired.');
     }
     return claims;
   }

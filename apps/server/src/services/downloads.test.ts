@@ -10,11 +10,8 @@ import { settings } from '../db/schema.js';
 import { DownloadTokenService } from './downloads.js';
 
 /**
- * The point of signing tokens with Ed25519 rather than an HMAC is that a node
- * can check one without being able to mint one. These tests pin the two halves
- * of that: a node holding only the public key can verify, and tokens issued
- * before the switch keep working until they expire on their own — a six-hour
- * window during which every upgrade has some in flight.
+ * Download tokens survive restarts, reject tampering, and retain compatibility
+ * with tokens issued before asymmetric signing was introduced.
  */
 describe('DownloadTokenService', () => {
   let dataDir: string;
@@ -55,8 +52,7 @@ describe('DownloadTokenService', () => {
   });
 
   it('issues a token a public-key holder can verify without the private key', () => {
-    // This is the property that makes enrolling a node safe: everything the
-    // node needs to check authority, and nothing it needs to invent it.
+    // The public key proves a token came from this Coordinator.
     const service = new DownloadTokenService(db, null);
     const { token } = service.issue({ userId: 'usr_1', gameId: 'gam_1' });
 
@@ -120,71 +116,5 @@ describe('DownloadTokenService', () => {
     } catch (error) {
       expect((error as { code: string }).code).toBe('token_expired');
     }
-  });
-
-  describe('mesh grants', () => {
-    it('carries the node and the byte ceiling', () => {
-      const service = new DownloadTokenService(db, null);
-      const { grant } = service.issueGrant({
-        userId: 'usr_1',
-        gameId: 'gam_1',
-        nodeId: 'nod_1',
-        maxBytes: 5_000,
-      });
-
-      expect(service.verifyGrant(grant)).toMatchObject({
-        userId: 'usr_1',
-        nodeId: 'nod_1',
-        maxBytes: 5_000,
-      });
-    });
-
-    it('gives two grants different nonces', () => {
-      // A node counts served bytes per grant. Two grants that looked identical
-      // would let a client reset its own allowance by asking twice.
-      const service = new DownloadTokenService(db, null);
-      const a = service.issueGrant({
-        userId: 'usr_1',
-        gameId: 'gam_1',
-        nodeId: 'nod_1',
-        maxBytes: 1,
-      });
-      const b = service.issueGrant({
-        userId: 'usr_1',
-        gameId: 'gam_1',
-        nodeId: 'nod_1',
-        maxBytes: 1,
-      });
-
-      expect(a.nonce).not.toBe(b.nonce);
-      expect(a.grant).not.toBe(b.grant);
-    });
-
-    it('refuses a grant with a raised ceiling', () => {
-      const service = new DownloadTokenService(db, null);
-      const { grant } = service.issueGrant({
-        userId: 'usr_1',
-        gameId: 'gam_1',
-        nodeId: 'nod_1',
-        maxBytes: 1_000,
-      });
-
-      const [body, signature] = grant.slice('v2.'.length).split('.', 2);
-      const claims = JSON.parse(Buffer.from(body as string, 'base64url').toString('utf8'));
-      claims.maxBytes = 1_000_000_000_000;
-      const forged = Buffer.from(JSON.stringify(claims), 'utf8').toString('base64url');
-
-      expect(() => service.verifyGrant(`v2.${forged}.${signature}`)).toThrow(/Invalid/);
-    });
-
-    it('expires', () => {
-      const service = new DownloadTokenService(db, null);
-      const { grant } = service.issueGrant(
-        { userId: 'usr_1', gameId: 'gam_1', nodeId: 'nod_1', maxBytes: 1 },
-        -1,
-      );
-
-      expect(() => service.verifyGrant(grant)).toThrow(/expired/);
-    });
   });
 });

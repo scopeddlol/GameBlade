@@ -43,7 +43,7 @@ RUN pnpm --filter @gameblade/shared build \
 RUN pnpm --filter @gameblade/server deploy --prod --legacy /app/deploy
 
 # ---------------------------------------------------------------------------
-# Mesh agent: the QUIC side of a node, built once and carried into the runtime.
+# Node agent: outbound HTTPS chunk worker, built once and carried into runtime.
 #
 # In the same image as the server rather than an image of its own, because a
 # coordinator and its nodes have to agree about the catalog they exchange and
@@ -65,10 +65,9 @@ COPY crates/gameblade-mesh .
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git \
     --mount=type=cache,id=mesh-target,target=/mesh/gameblade-mesh/target \
-    cargo build --release --bins \
+    cargo build --release --bin gameblade-node \
     && mkdir -p /out \
-    && cp target/release/gameblade-node target/release/gameblade-relay \
-          target/release/mesh-doctor /out/
+    && cp target/release/gameblade-node /out/
 
 # ---------------------------------------------------------------------------
 # Runtime: everything, in every role.
@@ -100,8 +99,6 @@ COPY --from=builder --chown=node:node /app/deploy/dist ./dist
 COPY --from=builder --chown=node:node /app/deploy/package.json ./package.json
 COPY --from=builder --chown=node:node /app/apps/web/dist ./public
 COPY --from=mesh --chown=node:node /out/gameblade-node /usr/local/bin/gameblade-node
-COPY --from=mesh --chown=node:node /out/gameblade-relay /usr/local/bin/gameblade-relay
-COPY --from=mesh --chown=node:node /out/mesh-doctor /usr/local/bin/mesh-doctor
 
 # Never run the server as root: it has read access to the whole game library.
 USER node
@@ -152,16 +149,4 @@ USER root
 RUN chmod +x /usr/local/bin/gameblade-node-entrypoint
 USER node
 
-# UDP, for the agent. Published only if this host is directly reachable — see
-# the mesh documentation; the connection is outbound-initiated either way.
-EXPOSE 47820/udp
-
 CMD ["/usr/local/bin/gameblade-node-entrypoint"]
-
-# The relay: a public UDP address that pastes two connections together. It runs
-# beside a coordinator and holds nothing, so it needs no data directory and no
-# library — just the coordinator's public key.
-FROM runtime AS relay
-EXPOSE 47821/udp
-HEALTHCHECK NONE
-CMD ["gameblade-relay"]

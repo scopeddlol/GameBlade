@@ -1,5 +1,29 @@
 # GameBlade Changelog
 
+## Version 0.7.0 - August 31, 2026
+
+### Downloads now use one dependable HTTPS path
+
+- Desktop requests fixed 8 MiB ranges from the Coordinator with multiple ranges in flight.
+- The Coordinator selects a current Node holder, requests the chunk through the Node's authenticated outbound HTTPS poll, verifies it, and streams it to Desktop.
+- Nodes require no inbound game-transfer port. Direct Node-to-Client transport, UDP traversal, the bundled relay, peer seeding, and the Tunnel Map were removed.
+- Offline or failing Nodes time out quickly and the Coordinator tries another holder. Resume journals, range requests, throttling, quotas, and whole-file verification remain intact.
+- Node-supplied bytes are no longer counted twice against download quotas.
+
+### Node administration and privacy
+
+- Nodes can be renamed inline from the Admin Fleet page.
+- Unused enrolment codes can be deleted.
+- The “Games with no Node” count links to a filtered catalog where those entries can be removed.
+- Desktop connection status uses friendly Node names only; addresses, domains, and ports are not shown.
+- Registration and heartbeat address candidates are ignored because the HTTPS worker needs no inbound destination.
+
+### Deployment and documentation
+
+- The standalone, Coordinator, and Node images remain. The obsolete relay image and its release/CI jobs were removed.
+- Reverse-proxy support for exposing the Coordinator remains unchanged.
+- The README, compose examples, Admin copy, Node copy, current HTML guide, and release workflow now describe the HTTPS proxy architecture.
+
 ## Project Briefing
 
 GameBlade is a self-hosted platform for preserving free-to-play and DRM-free games. It consists of:

@@ -1,21 +1,7 @@
-//! The node agent: enrol, serve, heartbeat, punch, report.
+//! The Node's local catalog and authenticated state.
 //!
-//! This is what runs on the machine holding the games. It talks to the
-//! coordinator over ordinary HTTPS — through the same reverse proxy everything
-//! else uses — and serves game data over QUIC directly to clients, which is the
-//! entire point: the coordination is small enough to go through the tunnel, and
-//! the bytes are not.
-//!
-//! It has four loops and each one exists for a reason the others cannot cover.
-//!
-//! * **Accept** — clients connecting, one chunk per stream.
-//! * **Heartbeat** — staying listed, and saying what this node currently holds.
-//! * **Rendezvous** — a held-open request that the coordinator answers the
-//!   instant a client asks for this node. That immediacy is the whole design:
-//!   hole punching only works if both ends send at once, and a node polling on
-//!   a timer would always be too late.
-//! * **Report** — what was actually served, so an account's transfer allowance
-//!   still means something when the bytes never crossed the server.
+//! This runs on the machine holding the games. It reports its catalog and holds
+//! an authenticated outbound HTTPS poll for chunk work from the Coordinator.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,9 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::RwLock;
 
 use crate::error::{MeshError, MeshResult};
-use crate::identity::{coordinator_key_from_spki, NodeIdentity};
-use crate::node::{ChunkStore, NodeServer};
-use crate::transport::MeshEndpoint;
+use crate::identity::NodeIdentity;
 use crate::MESH_CHUNK_BYTES;
 
 /// Where the agent keeps what it must not regenerate.
@@ -57,9 +41,6 @@ pub struct AgentState {
     pub node_id: Option<String>,
     #[serde(alias = "node_token")]
     pub node_token: Option<String>,
-    #[serde(alias = "coordinator_key")]
-    pub coordinator_key: Option<String>,
-
     /// Where this node reports, once somebody has said.
     ///
     /// In the state file rather than only in the environment so a node can be
@@ -310,6 +291,11 @@ pub struct LibraryChunks {
     index: Arc<RwLock<LibraryIndex>>,
 }
 
+#[async_trait::async_trait]
+pub trait ChunkStore: Send + Sync {
+    async fn read_chunk(&self, game_id: &str, file_id: &str, index: u64) -> Option<Vec<u8>>;
+}
+
 impl LibraryChunks {
     pub fn new(index: Arc<RwLock<LibraryIndex>>) -> Self {
         Self { index }
@@ -353,110 +339,6 @@ async fn read_chunk_at(path: &Path, index: u64, size_bytes: u64) -> Option<Vec<u
     Some(buffer)
 }
 
-/// A punch instruction from the coordinator.
-#[derive(Debug, Clone, Deserialize)]
-pub struct PunchRequest {
-    pub address: String,
-    pub port: u16,
-    /// Present when the client gave up on a direct path and wants the relay.
-    ///
-    /// Arrives on the same channel as a punch because it answers the same
-    /// question — someone is trying to reach you, here is how — and the node's
-    /// response is simply different: dial the relay instead of punching.
-    #[serde(default)]
-    pub relay: Option<RelayInstruction>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RelayInstruction {
-    pub address: String,
-    pub port: u16,
-    /// This node's half of the pairing.
-    pub ticket: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RendezvousReply {
-    #[serde(default)]
-    pub punches: Vec<PunchRequest>,
-}
-
-/// Turn a coordinator-supplied address into something dialable.
-///
-/// IPv6 has to be bracketed before it parses, and getting this wrong silently
-/// discards every IPv6 candidate — the ones most likely to work, since two
-/// hosts with IPv6 need no traversal at all.
-pub fn socket_address(address: &str, port: u16) -> Option<std::net::SocketAddr> {
-    let literal = if address.contains(':') {
-        format!("[{address}]:{port}")
-    } else {
-        format!("{address}:{port}")
-    };
-    literal.parse().ok()
-}
-
-/// Turn a coordinator-supplied address into something dialable, resolving a
-/// hostname when that is what it is.
-///
-/// Deliberately separate from `socket_address`, and deliberately not used for
-/// every address that arrives. A node's advertised endpoints and a client's
-/// reflexive address are literals by construction, and resolving names on
-/// their say-so would let either point this process at a lookup it never
-/// intended. The relay address is the one exception: it comes from the
-/// coordinator's own configuration — by default the very hostname this
-/// process already speaks HTTPS to — so a name there is expected rather than
-/// suspicious.
-///
-/// This is what made the relay unreachable in practice: the default relay
-/// address is the coordinator's hostname, `SocketAddr` parses IP literals
-/// only, and both ends silently discarded every relay instruction they were
-/// given.
-///
-/// IPv4 wins a tie because a client endpoint binds `0.0.0.0` and cannot dial
-/// an IPv6 peer from it.
-pub async fn resolve_socket_address(address: &str, port: u16) -> Option<std::net::SocketAddr> {
-    if let Some(literal) = socket_address(address, port) {
-        return Some(literal);
-    }
-
-    let resolved: Vec<std::net::SocketAddr> = tokio::net::lookup_host((address, port))
-        .await
-        .ok()?
-        .collect();
-
-    resolved
-        .iter()
-        .copied()
-        .find(|candidate| candidate.is_ipv4())
-        .or_else(|| resolved.first().copied())
-}
-
-/// Everything the agent needs to run.
-pub struct AgentConfig {
-    pub server_url: String,
-    /// Every root this node holds, searched in order.
-    pub library_roots: Vec<PathBuf>,
-    pub port: u16,
-    pub state_path: PathBuf,
-    pub enrolment_token: Option<String>,
-    pub stun_servers: Vec<String>,
-}
-
-pub struct Agent {
-    pub identity: NodeIdentity,
-    pub node_id: String,
-    pub node_token: String,
-    pub coordinator_key: crate::identity::PublicKey,
-    pub endpoint: MeshEndpoint,
-    pub index: Arc<RwLock<LibraryIndex>>,
-    pub server: Arc<NodeServer<LibraryChunks>>,
-    /// How often to heartbeat, as the coordinator asked.
-    ///
-    /// Taken from the registration reply rather than fixed here, so the
-    /// interval can be changed centrally without redeploying every agent.
-    pub heartbeat: Duration,
-}
-
 impl AgentState {
     pub fn load(path: &Path) -> Self {
         std::fs::read_to_string(path)
@@ -491,13 +373,6 @@ impl AgentState {
         self.secret_key = Some(URL_SAFE_NO_PAD.encode(identity.secret_bytes()));
         Ok(identity)
     }
-
-    /// The coordinator key, decoded.
-    pub fn coordinator(&self) -> Option<crate::identity::PublicKey> {
-        self.coordinator_key
-            .as_deref()
-            .and_then(|key| coordinator_key_from_spki(key).ok())
-    }
 }
 
 /// How long the agent waits between failed registration attempts.
@@ -520,49 +395,6 @@ mod tests {
 
     fn sha(bytes: &[u8]) -> String {
         hex::encode(Sha256::digest(bytes))
-    }
-
-    #[test]
-    fn a_hostname_is_not_a_socket_address() {
-        // The regression this guards: the default relay address is the
-        // coordinator's hostname, and both ends used to reject it here and
-        // then silently drop the relay instruction built on it.
-        assert!(socket_address("archive.example.com", 47_821).is_none());
-        assert!(socket_address("192.0.2.10", 47_821).is_some());
-        assert!(socket_address("2001:db8::1", 47_821).unwrap().is_ipv6());
-    }
-
-    #[tokio::test]
-    async fn a_literal_resolves_without_a_lookup() {
-        let resolved = resolve_socket_address("192.0.2.10", 47_821).await.unwrap();
-        assert_eq!(resolved.port(), 47_821);
-        assert!(resolved.is_ipv4());
-
-        assert!(resolve_socket_address("2001:db8::1", 47_821)
-            .await
-            .unwrap()
-            .is_ipv6());
-    }
-
-    #[tokio::test]
-    async fn a_resolvable_name_becomes_an_address() {
-        // localhost is the one name that resolves without a network.
-        let resolved = resolve_socket_address("localhost", 47_821).await.unwrap();
-        assert_eq!(resolved.port(), 47_821);
-        assert!(
-            resolved.ip().is_loopback(),
-            "localhost should resolve to a loopback address, got {resolved}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_name_that_does_not_resolve_is_none() {
-        assert!(
-            resolve_socket_address("relay.invalid.", 47_821)
-                .await
-                .is_none(),
-            "the reserved .invalid TLD must never resolve"
-        );
     }
 
     fn game(files: Vec<CatalogFile>) -> CatalogGame {
@@ -903,13 +735,12 @@ mod tests {
         state.identity().unwrap();
         state.node_id = Some("nod_1".into());
         state.node_token = Some("tok_1".into());
-        state.coordinator_key = Some("key_1".into());
         state.save(&path).unwrap();
 
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
 
-        for key in ["secretKey", "nodeId", "nodeToken", "coordinatorKey"] {
+        for key in ["secretKey", "nodeId", "nodeToken"] {
             assert!(
                 written.get(key).is_some(),
                 "{key} is missing from {written}"
@@ -971,15 +802,13 @@ mod tests {
         let path = dir.path().join("state.json");
         std::fs::write(
             &path,
-            r#"{"secret_key":"c2VjcmV0","node_id":"nod_old","node_token":"tok_old",
-                "coordinator_key":"key_old"}"#,
+            r#"{"secret_key":"c2VjcmV0","node_id":"nod_old","node_token":"tok_old"}"#,
         )
         .unwrap();
 
         let state = AgentState::load(&path);
         assert_eq!(state.node_id.as_deref(), Some("nod_old"));
         assert_eq!(state.node_token.as_deref(), Some("tok_old"));
-        assert_eq!(state.coordinator_key.as_deref(), Some("key_old"));
         assert_eq!(state.secret_key.as_deref(), Some("c2VjcmV0"));
     }
 
@@ -987,12 +816,5 @@ mod tests {
     fn missing_state_is_a_first_run_rather_than_a_failure() {
         let state = AgentState::load(Path::new("/nonexistent/state.json"));
         assert!(state.node_id.is_none());
-    }
-
-    #[test]
-    fn ipv6_punch_targets_are_bracketed_before_parsing() {
-        assert!(socket_address("2001:db8::1", 47820).is_some());
-        assert!(socket_address("203.0.113.9", 47820).unwrap().is_ipv4());
-        assert!(socket_address("nonsense", 47820).is_none());
     }
 }

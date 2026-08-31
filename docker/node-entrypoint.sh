@@ -47,7 +47,7 @@ server_pid=$!
 gameblade-node &
 agent_pid=$!
 
-echo "node: server pid $server_pid, mesh agent pid $agent_pid" >&2
+echo "node: server pid $server_pid, Node worker pid $agent_pid" >&2
 
 # Watch both. `sleep` runs in the background and is waited on, so a signal
 # arriving mid-interval is handled at once instead of up to a second later.
@@ -61,7 +61,7 @@ done
 # Collect the one that exited, so its status is this container's status and a
 # crash loop is visible in `docker ps` rather than looking like a clean stop.
 if kill -0 "$server_pid" 2>/dev/null; then
-    gone='mesh agent'
+    gone='Node worker'
     wait "$agent_pid"
     status=$?
 else

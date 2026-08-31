@@ -2,7 +2,7 @@ use std::fmt;
 
 pub type MeshResult<T> = Result<T, MeshError>;
 
-/// What can go wrong on the direct path.
+/// What can go wrong while a Node processes Coordinator work.
 ///
 /// The distinction that matters to callers is [`MeshError::is_fallback`]: some
 /// of these mean "this node cannot serve you, try another or go back to the

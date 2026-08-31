@@ -346,95 +346,6 @@ describe('the split-role topology', () => {
     expect(app.gameblade.chunks.isGameChunked(gameId)).toBe(true);
   });
 
-  /* ---------------------------------------------------------------- relay */
-
-  it('publishes the coordinator key a relay needs, without authentication', async () => {
-    // A relay is meant to be running before anybody needs it, and it was not,
-    // because standing one up meant reading a field out of a JSON file on a
-    // different machine. It fetches this instead.
-    //
-    // Unauthenticated and safe to be: it is the public half. Every client is
-    // handed it already, it verifies signatures and cannot make one.
-    const { app } = await boot({ ROLE: 'coordinator' });
-
-    const published = await app.inject({ method: 'GET', url: '/api/mesh/coordinator-key' });
-    expect(published.statusCode).toBe(200);
-
-    const body = published.json() as { publicKey: string; algorithm: string; format: string };
-    expect(body.algorithm).toBe('ed25519');
-    expect(body.format).toBe('spki-base64url');
-    // A base64url SPKI-wrapped Ed25519 key is 44 characters, and never padded.
-    expect(body.publicKey).toMatch(/^[A-Za-z0-9_-]{40,}$/);
-
-    // The same key a node is handed at enrolment, or the relay would be
-    // checking signatures against the wrong one.
-    const admin = await signIn(app);
-    const enrolment = await app.inject({
-      method: 'POST',
-      url: '/api/mesh/enrolments',
-      headers: auth(admin),
-      payload: { label: 'A node', role: 'origin' },
-    });
-    const registered = await app.inject({
-      method: 'POST',
-      url: '/api/mesh/register',
-      payload: {
-        enrolmentToken: (enrolment.json() as { token: string }).token,
-        publicKey: 'p'.repeat(43),
-        endpoints: [],
-      },
-    });
-    expect((registered.json() as { coordinatorPublicKey: string }).coordinatorPublicKey).toBe(
-      body.publicKey,
-    );
-  });
-
-  it('uses the automatic same-host relay without reporting a missing configuration', async () => {
-    const { app } = await boot({ ROLE: 'coordinator' });
-    const admin = await signIn(app);
-
-    const report = await app.inject({
-      method: 'GET',
-      url: '/api/admin/health',
-      headers: auth(admin),
-    });
-    const findings = (report.json() as { findings: { id: string; severity: string }[] }).findings;
-    expect(findings.map((finding) => finding.id)).not.toContain('no-relay-endpoint');
-  });
-
-  it('says nothing about a relay once one is configured', async () => {
-    const { app } = await boot({
-      ROLE: 'coordinator',
-      RELAY_ENDPOINT: 'games.example.com:47821',
-    });
-    const admin = await signIn(app);
-
-    const report = await app.inject({
-      method: 'GET',
-      url: '/api/admin/health',
-      headers: auth(admin),
-    });
-    const findings = (report.json() as { findings: { id: string }[] }).findings;
-
-    expect(findings.map((finding) => finding.id)).not.toContain('no-relay-endpoint');
-  });
-
-  it('leaves a standalone server alone about relays', async () => {
-    // It has the files. A client that cannot reach a node downloads from it
-    // instead, so there is nothing here to warn about.
-    const { app } = await boot({ ROLE: 'standalone' });
-    const admin = await signIn(app);
-
-    const report = await app.inject({
-      method: 'GET',
-      url: '/api/admin/health',
-      headers: auth(admin),
-    });
-    const findings = (report.json() as { findings: { id: string }[] }).findings;
-
-    expect(findings.map((finding) => finding.id)).not.toContain('no-relay-endpoint');
-  });
-
   /* ------------------------------------------------------ pairing a node */
 
   it('makes a library for a node when it registers, named after it', async () => {
@@ -544,18 +455,18 @@ describe('the split-role topology', () => {
       method: 'PATCH',
       url: '/api/admin/settings',
       headers: auth(admin),
-      payload: { meshEnabled: true, meshSeedingEnabled: true },
+      payload: { meshEnabled: true },
     });
 
     expect(saved.statusCode).toBe(200);
-    expect(saved.json()).toMatchObject({ meshEnabled: true, meshSeedingEnabled: true });
+    expect(saved.json()).toMatchObject({ meshEnabled: true });
 
     const reloaded = await app.inject({
       method: 'GET',
       url: '/api/admin/settings',
       headers: auth(admin),
     });
-    expect(reloaded.json()).toMatchObject({ meshEnabled: true, meshSeedingEnabled: true });
+    expect(reloaded.json()).toMatchObject({ meshEnabled: true });
   });
 
   it('turns a batched hashed catalog into a node-backed desktop manifest', async () => {
@@ -654,25 +565,12 @@ describe('the split-role topology', () => {
     expect(manifestBody).toMatchObject({
       gameId: target.id,
       chunkBytes: MESH_CHUNK_BYTES,
-      originAvailable: false,
+      originAvailable: true,
       files: [{ path: 'game.bin', chunks: [{ index: 0, sizeBytes: 16 }] }],
     });
-    expect(manifestBody.sources).not.toContainEqual(expect.objectContaining({ kind: 'origin' }));
     expect(manifestBody.sources).toContainEqual(
       expect.objectContaining({ kind: 'node', nodeId: node.nodeId }),
     );
-
-    const resolved = await app.inject({
-      method: 'POST',
-      url: `/api/mesh/resolve/${target.id}`,
-      headers: auth(admin),
-      payload: { endpoints: [] },
-    });
-    expect(resolved.statusCode).toBe(200);
-    expect(resolved.json()).toMatchObject({
-      nodes: [{ id: node.nodeId }],
-      grants: [{ nodeId: node.nodeId }],
-    });
   });
 
   /* --------------------------------------------------- what a node is told */

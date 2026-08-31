@@ -86,8 +86,6 @@ jobs:
             suffix: '-coordinator'
           - target: node
             suffix: '-node'
-          - target: relay
-            suffix: '-relay'
     steps:
       - uses: actions/checkout@v4
 
@@ -372,7 +370,6 @@ jobs:
             ```
             docker pull ${{ steps.tag.outputs.image }}-coordinator:${{ steps.tag.outputs.image_tag }}
             docker pull ${{ steps.tag.outputs.image }}-node:${{ steps.tag.outputs.image_tag }}
-            docker pull ${{ steps.tag.outputs.image }}-relay:${{ steps.tag.outputs.image_tag }}
             ```
 
             Run the coordinator, then open a node's own page and point it at the

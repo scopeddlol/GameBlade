@@ -1,7 +1,7 @@
 [package]
 name = "gameblade-mesh"
-version = "0.6.11"
-description = "Direct node-to-client transport for GameBlade"
+version = "0.7.0"
+description = "GameBlade Node catalog and HTTPS chunk worker"
 edition = "2021"
 rust-version = "1.77.2"
 
@@ -15,18 +15,11 @@ rust-version = "1.77.2"
 # cryptography. rcgen and reqwest both pull ring regardless, so asking rustls and
 # quinn for aws-lc-rs meant compiling two C and assembly crypto libraries to do
 # one job — the larger of which dominated the build.
-quinn = { version = "0.11", default-features = false, features = [
-    "runtime-tokio",
-    "rustls-ring",
-] }
-rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
-rcgen = "0.13"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 # Only for one thing std cannot express: clearing IPV6_V6ONLY before the bind,
 # so a node's `[::]` socket answers IPv4 on Windows as it already did on Linux.
 # quinn and tokio both pull it in regardless, so it costs nothing to compile.
-socket2 = "0.6"
 # "fs" and "rt-multi-thread" are needed by the node agent binary. They were
 # once only in dev-dependencies, where feature unification made `cargo test`
 # compile happily while a real `cargo build` of the binary failed — so the
@@ -34,7 +27,6 @@ socket2 = "0.6"
 tokio = { version = "1", features = [
     "rt",
     "rt-multi-thread",
-    "net",
     "fs",
     "io-util",
     "sync",

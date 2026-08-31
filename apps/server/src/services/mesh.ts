@@ -3,18 +3,13 @@ import {
   MESH_CHUNK_BYTES,
   MESH_HEARTBEAT_TIMEOUT_SECONDS,
   MESH_MAX_SOURCES_PER_GAME,
-  MESH_PUNCH_TTL_SECONDS,
-  MESH_TUNNEL_IDLE_SECONDS,
   type MeshAnalytics,
   type MeshDailyPoint,
-  type MeshPunchRequest,
   type MeshEndpoint,
   type MeshNodeInfo,
   type MeshNodeRole,
   type MeshNodeStats,
   type MeshSource,
-  type MeshTunnel,
-  type MeshTunnelMap,
 } from '@gameblade/shared';
 import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
@@ -42,6 +37,37 @@ const ENROLMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** A proof challenge is useful only for the request immediately following it. */
 const REGISTRATION_CHALLENGE_TTL_MS = 60_000;
+
+/** A Desktop range request should either be claimed promptly or try another node. */
+const NODE_CHUNK_TIMEOUT_MS = 12_000;
+
+/** Enough work to keep several HTTPS uploads full without flooding one node. */
+const NODE_CHUNK_POLL_BATCH = 8;
+
+export interface NodeChunkJob {
+  requestId: string;
+  gameId: string;
+  fileId: string;
+  chunkIndex: number;
+  expectedBytes: number;
+  sha256: string;
+}
+
+export interface ProxiedChunk {
+  bytes: Buffer;
+  nodeId: string;
+  nodeLabel: string;
+}
+
+interface PendingNodeChunk extends NodeChunkJob {
+  nodeId: string;
+  nodeLabel: string;
+  userId: string;
+  queuedAt: string;
+  resolve: (chunk: ProxiedChunk) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}
 
 /** The exact bytes both implementations sign when a known node comes back. */
 export function registrationProofMessage(publicKey: string, challenge: string): string {
@@ -85,6 +111,12 @@ export class MeshService {
     string,
     { challenge: string; expiresAt: number }
   >();
+
+  /** Short-lived HTTPS work waiting for an outbound-connected node. */
+  private readonly nodeChunkQueues = new Map<string, string[]>();
+  private readonly pendingNodeChunks = new Map<string, PendingNodeChunk>();
+  private readonly nodeChunkWaiters = new Map<string, (() => void)[]>();
+  private nextNode = 0;
 
   constructor(
     private readonly db: Db,
@@ -197,6 +229,7 @@ export class MeshService {
       .limit(50)
       .all()
       .map((row) => ({
+        tokenHash: row.tokenHash,
         label: row.label,
         role: row.role,
         createdAt: row.createdAt,
@@ -208,6 +241,18 @@ export class MeshService {
 
   revokeEnrolment(tokenHash: string): void {
     this.db.delete(meshEnrollments).where(eq(meshEnrollments.tokenHash, tokenHash)).run();
+  }
+
+  renameNode(nodeId: string, label: string): void {
+    const clean = label.trim();
+    if (!clean) throw ApiError.badRequest('Give the Node a name');
+    if (clean.length > 80) throw ApiError.badRequest('Node names cannot exceed 80 characters');
+    const updated = this.db
+      .update(meshNodes)
+      .set({ label: clean })
+      .where(eq(meshNodes.id, nodeId))
+      .run();
+    if ((updated.changes ?? 0) === 0) throw ApiError.notFound('Node not found');
   }
 
   /**
@@ -338,72 +383,6 @@ export class MeshService {
     } catch {
       return false;
     }
-  }
-
-  /**
-   * Register a client as its own short-lived peer node.
-   *
-   * Peers carry no enrolment code — the account is the credential, and the node
-   * dies with it. They are also the least trusted thing in the mesh, which is
-   * why they are a separate entry point rather than a flag on `register`: there
-   * is no path by which a peer can talk its way into being a mirror.
-   */
-  registerPeer(input: {
-    ownerId: string;
-    publicKey: string;
-    label: string;
-    endpoints: MeshEndpoint[];
-    observedAddress?: string;
-    agentVersion?: string;
-  }): { nodeId: string; nodeToken: string } {
-    const existing = this.db
-      .select()
-      .from(meshNodes)
-      .where(eq(meshNodes.publicKey, input.publicKey))
-      .get();
-
-    if (existing) {
-      if (existing.ownerId !== input.ownerId || existing.role !== 'peer') {
-        // A key already claimed by someone else, or by a mirror, is not
-        // something to merge into — it is a mistake or an attempt.
-        throw ApiError.conflict('That key is already registered to another node');
-      }
-      if (existing.status === 'blocked') {
-        throw ApiError.forbidden('This node has been blocked by an administrator');
-      }
-      this.applyEndpoints(existing.id, input.endpoints, input.observedAddress);
-      const rotated = newToken(24);
-      this.db
-        .update(meshNodes)
-        .set({
-          status: 'online',
-          tokenHash: hashToken(rotated),
-          lastSeenAt: new Date().toISOString(),
-        })
-        .where(eq(meshNodes.id, existing.id))
-        .run();
-      return { nodeId: existing.id, nodeToken: rotated };
-    }
-
-    const nodeId = newId('nod');
-    const nodeToken = newToken(24);
-    this.db
-      .insert(meshNodes)
-      .values({
-        id: nodeId,
-        label: input.label,
-        role: 'peer',
-        status: 'online',
-        publicKey: input.publicKey,
-        tokenHash: hashToken(nodeToken),
-        ownerId: input.ownerId,
-        agentVersion: input.agentVersion ?? null,
-        lastSeenAt: new Date().toISOString(),
-      })
-      .run();
-
-    this.applyEndpoints(nodeId, input.endpoints, input.observedAddress);
-    return { nodeId, nodeToken };
   }
 
   /**
@@ -582,15 +561,15 @@ export class MeshService {
       return (b.lastSeenAt ?? '').localeCompare(a.lastSeenAt ?? '');
     });
 
-    const endpoints = this.endpointsFor(rows.map((node) => node.id));
-
     return rows.slice(0, MESH_MAX_SOURCES_PER_GAME).map((node) => ({
       id: node.id,
       label: node.label,
       role: node.role,
       status: node.status,
       publicKey: node.publicKey,
-      endpoints: endpoints.get(node.id) ?? [],
+      // Network locations are deliberately never exposed. Nodes maintain an
+      // outbound authenticated HTTPS connection to this Coordinator.
+      endpoints: [],
       lastSeenAt: node.lastSeenAt,
       bytesServed: node.bytesServed,
       gameCount: 0,
@@ -631,367 +610,219 @@ export class MeshService {
     return sources.sort((a, b) => a.priority - b.priority);
   }
 
-  /* --------------------------------------------------------------- rendezvous */
+  /* ------------------------------------------------------ HTTPS chunk proxy */
 
   /**
-   * Punch instructions waiting for each node, and whoever is waiting to hear.
+   * Fetch one verified 8 MiB piece through an operator node's outbound HTTPS
+   * connection.
    *
-   * In memory rather than in the database on purpose. These live for seconds,
-   * are worthless the moment they go stale, and arrive on the path of every
-   * download — a write and a poll per connection attempt would be the busiest
-   * thing this coordinator does, in service of data nobody would ever read
-   * twice. A restart losing them costs one download its direct path.
+   * Desktop already opens several byte-range requests concurrently. Each one
+   * becomes one small job here, so the Coordinator can keep several uploads in
+   * flight without buffering a game or waiting for one file to finish before
+   * the next starts. A failed node is skipped and the same chunk is offered to
+   * another current holder.
    */
-  private readonly punches = new Map<string, MeshPunchRequest[]>();
-  private readonly waiters = new Map<string, (() => void)[]>();
-
-  /**
-   * Tell a node to punch toward a client.
-   *
-   * This is what breaks the deadlock at the heart of hole punching: both ends
-   * have to send at roughly the same moment, but a node has no idea a client
-   * exists until it connects — and it cannot connect until the node has
-   * punched. The coordinator knows about both, so it tells the node first.
-   */
-  requestPunch(nodeId: string, request: MeshPunchRequest): void {
-    for (const tunnel of this.live.values()) {
-      if (tunnel.nodeId === nodeId && tunnel.userId === request.userId) tunnel.punches += 1;
+  async fetchNodeChunk(input: {
+    userId: string;
+    gameId: string;
+    fileId: string;
+    chunkIndex: number;
+    expectedBytes: number;
+    sha256: string;
+  }): Promise<ProxiedChunk> {
+    const holders = this.nodesForGame(input.gameId).filter((node) => node.role !== 'peer');
+    if (holders.length === 0) {
+      throw ApiError.gone('No active Node currently holds this game');
     }
 
-    const queued = this.punches.get(nodeId) ?? [];
+    // Rotate the first choice so concurrent Desktop ranges spread naturally
+    // across mirrors instead of pinning every request to the first row.
+    const start = this.nextNode++ % holders.length;
+    const ordered = [...holders.slice(start), ...holders.slice(0, start)];
+    let lastError: Error | null = null;
 
-    // Bounded, because this is reachable by any signed-in account asking to
-    // resolve a game repeatedly. A node that is not polling should not
-    // accumulate work nobody will collect.
-    queued.push(request);
-    this.punches.set(nodeId, queued.slice(-32));
+    for (const node of ordered) {
+      try {
+        return await this.queueNodeChunk(node.id, node.label, input);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        this.logger.warn(
+          { err: lastError, nodeId: node.id, gameId: input.gameId, fileId: input.fileId },
+          'node did not deliver a requested HTTPS chunk',
+        );
+      }
+    }
 
-    // Wake whoever is holding a long-poll open, so the node punches now rather
-    // than whenever its poll happens to time out.
-    for (const wake of this.waiters.get(nodeId) ?? []) wake();
-    this.waiters.delete(nodeId);
+    throw ApiError.unavailable(
+      lastError?.message || 'No active Node delivered the requested game data',
+    );
   }
 
-  /** Take everything queued for a node, dropping what has gone stale. */
-  takePunches(nodeId: string): MeshPunchRequest[] {
-    const queued = this.punches.get(nodeId) ?? [];
-    this.punches.delete(nodeId);
+  private queueNodeChunk(
+    nodeId: string,
+    nodeLabel: string,
+    input: {
+      userId: string;
+      gameId: string;
+      fileId: string;
+      chunkIndex: number;
+      expectedBytes: number;
+      sha256: string;
+    },
+  ): Promise<ProxiedChunk> {
+    return new Promise<ProxiedChunk>((resolve, reject) => {
+      const requestId = newId('nch');
+      const timer = setTimeout(() => {
+        this.pendingNodeChunks.delete(requestId);
+        this.removeQueuedNodeChunk(nodeId, requestId);
+        reject(new Error(`${nodeLabel} did not answer the Coordinator in time`));
+      }, NODE_CHUNK_TIMEOUT_MS);
+      timer.unref();
 
-    const cutoff = Date.now() - MESH_PUNCH_TTL_SECONDS * 1000;
-    // A client that asked ten seconds ago has already fallen back to HTTP, and
-    // its NAT mapping has probably lapsed. Punching at it is not harmful, just
-    // pointless.
-    return queued.filter((request) => Date.parse(request.queuedAt) >= cutoff);
+      this.pendingNodeChunks.set(requestId, {
+        requestId,
+        nodeId,
+        nodeLabel,
+        userId: input.userId,
+        gameId: input.gameId,
+        fileId: input.fileId,
+        chunkIndex: input.chunkIndex,
+        expectedBytes: input.expectedBytes,
+        sha256: input.sha256,
+        queuedAt: new Date().toISOString(),
+        resolve,
+        reject,
+        timer,
+      });
+
+      const queued = this.nodeChunkQueues.get(nodeId) ?? [];
+      if (queued.length >= 128) {
+        const droppedId = queued.shift();
+        const dropped = droppedId ? this.pendingNodeChunks.get(droppedId) : undefined;
+        if (dropped) {
+          clearTimeout(dropped.timer);
+          this.pendingNodeChunks.delete(dropped.requestId);
+          dropped.reject(new Error(`${nodeLabel} has too many pending chunk requests`));
+        }
+      }
+      queued.push(requestId);
+      // A disconnected Node must not become an unbounded memory queue.
+      this.nodeChunkQueues.set(nodeId, queued);
+      for (const wake of this.nodeChunkWaiters.get(nodeId) ?? []) wake();
+      this.nodeChunkWaiters.delete(nodeId);
+    });
   }
 
-  /**
-   * Wait for a punch request, or for the poll to time out.
-   *
-   * Resolves as soon as `requestPunch` wakes it. The timeout is what makes this
-   * a long-poll rather than a hang: the connection completes normally and the
-   * node immediately opens another.
-   */
-  async waitForPunch(nodeId: string, timeoutMs: number): Promise<MeshPunchRequest[]> {
-    const ready = this.takePunches(nodeId);
+  /** Long-poll work for one authenticated node. */
+  async waitForNodeChunks(nodeId: string, timeoutMs: number): Promise<NodeChunkJob[]> {
+    const ready = this.takeNodeChunks(nodeId);
     if (ready.length > 0) return ready;
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        this.removeWaiter(nodeId, wake);
+        this.removeNodeChunkWaiter(nodeId, wake);
         resolve();
       }, timeoutMs);
+      timer.unref();
 
       const wake = () => {
         clearTimeout(timer);
         resolve();
       };
-
-      const waiting = this.waiters.get(nodeId) ?? [];
-      waiting.push(wake);
-      this.waiters.set(nodeId, waiting);
+      const waiters = this.nodeChunkWaiters.get(nodeId) ?? [];
+      waiters.push(wake);
+      this.nodeChunkWaiters.set(nodeId, waiters);
     });
 
-    return this.takePunches(nodeId);
+    return this.takeNodeChunks(nodeId);
   }
 
-  private removeWaiter(nodeId: string, wake: () => void): void {
-    const waiting = (this.waiters.get(nodeId) ?? []).filter((entry) => entry !== wake);
-    if (waiting.length > 0) {
-      this.waiters.set(nodeId, waiting);
-    } else {
-      this.waiters.delete(nodeId);
-    }
-  }
+  private takeNodeChunks(nodeId: string): NodeChunkJob[] {
+    const queued = this.nodeChunkQueues.get(nodeId) ?? [];
+    const taken = queued.splice(0, NODE_CHUNK_POLL_BATCH);
+    if (queued.length > 0) this.nodeChunkQueues.set(nodeId, queued);
+    else this.nodeChunkQueues.delete(nodeId);
 
-  /* ---------------------------------------------------------------- reporting */
-
-  /** Remember that a grant was issued, so its report can be matched to it. */
-  recordGrant(input: {
-    nonce: string;
-    nodeId: string;
-    userId: string;
-    gameId: string;
-    /** Where the client said it could be reached, for the tunnel map. */
-    clientAddress?: string | null;
-  }): void {
-    this.db
-      .insert(meshTransfers)
-      .values({
-        nonce: input.nonce,
-        nodeId: input.nodeId,
-        userId: input.userId,
-        gameId: input.gameId,
-      })
-      .run();
-
-    this.live.set(input.nonce, {
-      nonce: input.nonce,
-      nodeId: input.nodeId,
-      userId: input.userId,
-      gameId: input.gameId,
-      via: 'direct',
-      openedAt: Date.now(),
-      lastReportAt: null,
-      previousReportAt: null,
-      bytesServed: 0,
-      previousBytes: 0,
-      clientNetwork: network(input.clientAddress ?? null),
-      punches: 0,
+    return taken.flatMap((requestId) => {
+      const pending = this.pendingNodeChunks.get(requestId);
+      if (!pending || pending.nodeId !== nodeId) return [];
+      return [
+        {
+          requestId: pending.requestId,
+          gameId: pending.gameId,
+          fileId: pending.fileId,
+          chunkIndex: pending.chunkIndex,
+          expectedBytes: pending.expectedBytes,
+          sha256: pending.sha256,
+        },
+      ];
     });
-    this.pruneLive();
   }
 
-  /**
-   * Note that a tunnel went to the relay after failing to connect directly.
-   *
-   * The same tunnel, not a second one: it is the same account fetching the same
-   * game from the same node, and drawing it twice would say the mesh is doing
-   * more work than it is. What changes is the route, which is exactly the thing
-   * an operator watching the map wants to see — a fleet whose tunnels are all
-   * relayed is a fleet paying the coordinator's bandwidth bill after all.
-   */
-  noteRelayed(nodeId: string, userId: string, gameId: string): void {
-    this.relaySessions.push(Date.now());
-    // Bounded, and only ever the last day is read.
-    const cutoff = Date.now() - 24 * 3_600_000;
-    this.relaySessions = this.relaySessions.filter((at) => at >= cutoff).slice(-4_096);
-
-    for (const tunnel of this.live.values()) {
-      if (tunnel.nodeId === nodeId && tunnel.userId === userId && tunnel.gameId === gameId) {
-        tunnel.via = 'relay';
-      }
-    }
-  }
-
-  /**
-   * Record what a node says it served under one grant.
-   *
-   * Only ever raises the number, and only against a grant this coordinator
-   * actually issued. A node that reports twice cannot charge the account twice,
-   * and one that reports a smaller number the second time cannot walk a
-   * transfer back after the fact.
-   */
-  reportTransfer(input: { nonce: string; nodeId: string; bytesServed: number }): void {
-    const existing = this.db
-      .select()
-      .from(meshTransfers)
-      .where(eq(meshTransfers.nonce, input.nonce))
-      .get();
-
-    if (!existing) throw ApiError.notFound('Unknown transfer');
-    if (existing.nodeId !== input.nodeId) {
-      throw ApiError.forbidden('That transfer belongs to another node');
+  /** Accept and independently verify bytes uploaded by the assigned node. */
+  deliverNodeChunk(requestId: string, nodeId: string, bytes: Buffer): void {
+    const pending = this.pendingNodeChunks.get(requestId);
+    if (!pending) throw ApiError.gone('That chunk request is no longer waiting');
+    if (pending.nodeId !== nodeId) throw ApiError.forbidden('That chunk belongs to another Node');
+    if (bytes.length !== pending.expectedBytes) {
+      this.failNodeChunk(
+        requestId,
+        nodeId,
+        `Node returned ${bytes.length} bytes; ${pending.expectedBytes} were requested`,
+      );
+      throw ApiError.badRequest('The uploaded chunk has the wrong length');
     }
 
-    const bytes = Math.max(0, Math.floor(input.bytesServed));
-    if (bytes <= existing.bytesServed) return;
+    const actual = createHash('sha256').update(bytes).digest('hex');
+    if (!safeEqual(actual.toLowerCase(), pending.sha256.toLowerCase())) {
+      this.failNodeChunk(requestId, nodeId, 'Node returned a chunk that failed verification');
+      throw ApiError.badRequest('The uploaded chunk failed verification');
+    }
 
-    const delta = bytes - existing.bytesServed;
+    clearTimeout(pending.timer);
+    this.pendingNodeChunks.delete(requestId);
 
+    const reportedAt = new Date().toISOString();
     this.db.transaction((tx) => {
-      tx.update(meshTransfers)
-        .set({ bytesServed: bytes, reportedAt: new Date().toISOString() })
-        .where(eq(meshTransfers.nonce, input.nonce))
+      tx.insert(meshTransfers)
+        .values({
+          nonce: requestId,
+          nodeId,
+          userId: pending.userId,
+          gameId: pending.gameId,
+          bytesServed: bytes.length,
+          issuedAt: pending.queuedAt,
+          reportedAt,
+        })
         .run();
-
       tx.update(meshNodes)
-        .set({ bytesServed: sql`${meshNodes.bytesServed} + ${delta}` })
-        .where(eq(meshNodes.id, input.nodeId))
+        .set({ bytesServed: sql`${meshNodes.bytesServed} + ${bytes.length}` })
+        .where(eq(meshNodes.id, nodeId))
         .run();
     });
 
-    const tunnel = this.live.get(input.nonce);
-    if (tunnel) {
-      tunnel.previousBytes = tunnel.bytesServed;
-      tunnel.previousReportAt = tunnel.lastReportAt;
-      tunnel.bytesServed = bytes;
-      tunnel.lastReportAt = Date.now();
-    }
+    pending.resolve({ bytes, nodeId, nodeLabel: pending.nodeLabel });
   }
 
-  /**
-   * Bytes served to one account by nodes since a given instant.
-   *
-   * `BandwidthService` counts what flowed through the server. Once transfers go
-   * direct, that number stops being the whole story, and a quota that only sees
-   * half the traffic is not a quota. This is the other half.
-   */
-  bytesServedToUserSince(userId: string, since: string): number {
-    const row = this.db
-      .select({ bytes: sql<number>`coalesce(sum(${meshTransfers.bytesServed}), 0)` })
-      .from(meshTransfers)
-      .where(and(eq(meshTransfers.userId, userId), gte(meshTransfers.issuedAt, since)))
-      .get();
-    return Number(row?.bytes ?? 0);
+  failNodeChunk(requestId: string, nodeId: string, message: string): void {
+    const pending = this.pendingNodeChunks.get(requestId);
+    if (!pending) return;
+    if (pending.nodeId !== nodeId) throw ApiError.forbidden('That chunk belongs to another Node');
+    clearTimeout(pending.timer);
+    this.pendingNodeChunks.delete(requestId);
+    pending.reject(new Error(message || `${pending.nodeLabel} could not read that chunk`));
   }
 
-  /* ---------------------------------------------------------------- tunnels */
-
-  /**
-   * Every tunnel this coordinator currently believes is open.
-   *
-   * In memory and deliberately so. A tunnel exists for minutes, is worthless
-   * once it closes, and the only durable thing about it — how many bytes it
-   * moved — is already a row in `mesh_transfers`. Writing the live view to disk
-   * would be the busiest thing on this server in service of data nobody reads
-   * twice, and losing it on a restart costs a map that fills itself in again
-   * within one heartbeat.
-   */
-  private readonly live = new Map<string, LiveTunnel>();
-
-  /** When the relay was asked to carry a transfer, for the last day. */
-  private relaySessions: number[] = [];
-
-  /**
-   * Drop tunnels nothing has been heard about, and cap the rest.
-   *
-   * The cap is what stops a busy evening turning this into a leak: the map
-   * shows what is happening now, and a hundred tunnels is already more than
-   * anybody reads off a diagram.
-   */
-  private pruneLive(): void {
-    const cutoff = Date.now() - MESH_TUNNEL_IDLE_SECONDS * 1000;
-    for (const [nonce, tunnel] of this.live) {
-      if ((tunnel.lastReportAt ?? tunnel.openedAt) < cutoff) this.live.delete(nonce);
-    }
-
-    const CAP = 256;
-    if (this.live.size <= CAP) return;
-    const oldest = [...this.live.entries()]
-      .sort((a, b) => (a[1].lastReportAt ?? a[1].openedAt) - (b[1].lastReportAt ?? b[1].openedAt))
-      .slice(0, this.live.size - CAP);
-    for (const [nonce] of oldest) this.live.delete(nonce);
+  private removeQueuedNodeChunk(nodeId: string, requestId: string): void {
+    const queued = (this.nodeChunkQueues.get(nodeId) ?? []).filter((id) => id !== requestId);
+    if (queued.length > 0) this.nodeChunkQueues.set(nodeId, queued);
+    else this.nodeChunkQueues.delete(nodeId);
   }
 
-  /**
-   * The map: the nodes, the relay, and the tunnels currently strung between
-   * them.
-   *
-   * Everything here is the coordinator's belief rather than a measurement. A
-   * direct transfer never crosses this machine, so what it knows is what the
-   * node last said on its heartbeat — and the map carries the timestamp so it
-   * can say "twelve seconds ago" instead of implying it is watching the wire.
-   */
-  tunnelMap(options: { relay: string | null; label: string }): MeshTunnelMap {
-    this.pruneLive();
-
-    const nodes = this.db.select().from(meshNodes).all();
-    const byId = new Map(nodes.map((node) => [node.id, node]));
-    const endpoints = this.endpointsFor(nodes.map((node) => node.id));
-
-    const counts = new Map<string, number>();
-    for (const row of this.db
-      .select({ nodeId: meshNodeGames.nodeId, count: sql<number>`count(*)` })
-      .from(meshNodeGames)
-      .groupBy(meshNodeGames.nodeId)
-      .all()) {
-      counts.set(row.nodeId, Number(row.count));
-    }
-
-    const names = this.namesFor(
-      [...this.live.values()].map((tunnel) => tunnel.userId),
-      [...this.live.values()].map((tunnel) => tunnel.gameId),
-    );
-
-    const tunnels: MeshTunnel[] = [];
-    for (const tunnel of this.live.values()) {
-      const node = byId.get(tunnel.nodeId);
-      if (!node) continue;
-
-      const elapsed =
-        tunnel.lastReportAt && tunnel.previousReportAt
-          ? (tunnel.lastReportAt - tunnel.previousReportAt) / 1000
-          : 0;
-      const moved = tunnel.bytesServed - tunnel.previousBytes;
-
-      tunnels.push({
-        id: tunnel.nonce,
-        nodeId: tunnel.nodeId,
-        nodeLabel: node.label,
-        nodeRole: node.role,
-        userId: tunnel.userId,
-        username: names.users.get(tunnel.userId) ?? null,
-        gameId: tunnel.gameId,
-        gameTitle: names.games.get(tunnel.gameId) ?? null,
-        via: tunnel.via,
-        state: tunnelState(tunnel),
-        openedAt: new Date(tunnel.openedAt).toISOString(),
-        lastReportAt: tunnel.lastReportAt ? new Date(tunnel.lastReportAt).toISOString() : null,
-        bytesServed: tunnel.bytesServed,
-        bytesPerSecond: elapsed > 0 && moved > 0 ? Math.round(moved / elapsed) : null,
-        clientNetwork: tunnel.clientNetwork,
-        punches: tunnel.punches,
-      });
-    }
-
-    // Busiest first: a map with thirty tunnels on it is read from the top.
-    tunnels.sort((a, b) => (b.bytesPerSecond ?? 0) - (a.bytesPerSecond ?? 0));
-
-    return {
-      generatedAt: new Date().toISOString(),
-      coordinator: { label: options.label, relay: options.relay },
-      nodes: nodes.map((node) => ({
-        id: node.id,
-        label: node.label,
-        role: node.role,
-        status: node.status,
-        address: preferredAddress(endpoints.get(node.id) ?? []),
-        lastSeenAt: node.lastSeenAt,
-        gameCount: counts.get(node.id) ?? 0,
-        bytesServed: node.bytesServed,
-      })),
-      tunnels,
-    };
-  }
-
-  /** Usernames and game titles for the ids a map is about to draw. */
-  private namesFor(userIds: string[], gameIds: string[]) {
-    const uniqueUsers = [...new Set(userIds.filter(Boolean))];
-    const uniqueGames = [...new Set(gameIds.filter(Boolean))];
-
-    const userNames = new Map<string, string>();
-    if (uniqueUsers.length > 0) {
-      for (const row of this.db
-        .select({ id: users.id, username: users.username })
-        .from(users)
-        .where(inArray(users.id, uniqueUsers))
-        .all()) {
-        userNames.set(row.id, row.username);
-      }
-    }
-
-    const gameNames = new Map<string, string>();
-    if (uniqueGames.length > 0) {
-      for (const row of this.db
-        .select({ id: games.id, title: games.title })
-        .from(games)
-        .where(inArray(games.id, uniqueGames))
-        .all()) {
-        gameNames.set(row.id, row.title);
-      }
-    }
-
-    return { users: userNames, games: gameNames };
+  private removeNodeChunkWaiter(nodeId: string, wake: () => void): void {
+    const waiters = (this.nodeChunkWaiters.get(nodeId) ?? []).filter((entry) => entry !== wake);
+    if (waiters.length > 0) this.nodeChunkWaiters.set(nodeId, waiters);
+    else this.nodeChunkWaiters.delete(nodeId);
   }
 
   /* -------------------------------------------------------------- analytics */
@@ -1006,7 +837,7 @@ export class MeshService {
    * explain that number when it is disappointing: games nothing holds, games
    * one node holds, nodes that stopped reporting.
    */
-  analytics(options: { days: number; relay: string | null }): MeshAnalytics {
+  analytics(options: { days: number }): MeshAnalytics {
     const days = Math.min(90, Math.max(1, Math.floor(options.days)));
     const since = (ago: number) => new Date(Date.now() - ago).toISOString();
     const day = 24 * 3_600_000;
@@ -1041,7 +872,6 @@ export class MeshService {
 
     const mesh7d = meshBytes(since(7 * day));
     const origin7d = originBytes(since(7 * day));
-    const delivered = mesh7d + origin7d;
 
     /*
      * Coverage, counted from what nodes are announcing right now.
@@ -1143,9 +973,6 @@ export class MeshService {
       .map((row) => ({ gameId: row.gameId ?? '', title: row.title, bytes: Number(row.bytes) }))
       .filter((row) => row.bytes > 0);
 
-    this.pruneLive();
-    const relayCutoff = Date.now() - day;
-
     return {
       generatedAt: new Date().toISOString(),
       days,
@@ -1156,7 +983,6 @@ export class MeshService {
         blocked: countStatus('blocked'),
         pending: countStatus('pending'),
         operator: nodes.filter((node) => node.role !== 'peer').length,
-        peers: nodes.filter((node) => node.role === 'peer').length,
       },
       bytes: {
         meshLifetime: lifetime,
@@ -1164,19 +990,15 @@ export class MeshService {
         mesh7d,
         origin24h: originBytes(since(day)),
         origin7d,
-        meshShare: delivered > 0 ? mesh7d / delivered : 0,
+        // Node bytes are a subset of total Coordinator-delivered bytes now,
+        // not a second delivery path to add to them.
+        meshShare: origin7d > 0 ? Math.min(1, mesh7d / origin7d) : 0,
       },
       coverage: {
         games: catalogGames,
         covered,
         singleSource,
         uncovered: Math.max(0, catalogGames - covered),
-      },
-      relay: {
-        configured: options.relay !== null,
-        address: options.relay,
-        sessions24h: this.relaySessions.filter((at) => at >= relayCutoff).length,
-        activeSessions: [...this.live.values()].filter((tunnel) => tunnel.via === 'relay').length,
       },
       history,
       topNodes,
@@ -1285,10 +1107,9 @@ export class MeshService {
         .map((row) => [row.id, row.username]),
     );
 
-    this.pruneLive();
     const activeByNode = new Map<string, number>();
-    for (const tunnel of this.live.values()) {
-      activeByNode.set(tunnel.nodeId, (activeByNode.get(tunnel.nodeId) ?? 0) + 1);
+    for (const pending of this.pendingNodeChunks.values()) {
+      activeByNode.set(pending.nodeId, (activeByNode.get(pending.nodeId) ?? 0) + 1);
     }
 
     return base.map((node) => {
@@ -1323,8 +1144,6 @@ export class MeshService {
 
   listNodes(): MeshNodeInfo[] {
     const rows = this.db.select().from(meshNodes).orderBy(desc(meshNodes.createdAt)).all();
-    const endpoints = this.endpointsFor(rows.map((node) => node.id));
-
     const counts = new Map<string, number>();
     for (const row of this.db
       .select({ nodeId: meshNodeGames.nodeId, count: sql<number>`count(*)` })
@@ -1340,7 +1159,7 @@ export class MeshService {
       role: node.role,
       status: node.status,
       publicKey: node.publicKey,
-      endpoints: endpoints.get(node.id) ?? [],
+      endpoints: [],
       lastSeenAt: node.lastSeenAt,
       bytesServed: node.bytesServed,
       gameCount: counts.get(node.id) ?? 0,
@@ -1381,14 +1200,6 @@ export class MeshService {
 
   removeNode(nodeId: string): void {
     this.db.delete(meshNodes).where(eq(meshNodes.id, nodeId)).run();
-  }
-
-  /** Peer nodes an account has left behind, cleaned up when it signs out. */
-  dropPeersFor(ownerId: string): void {
-    this.db
-      .delete(meshNodes)
-      .where(and(eq(meshNodes.ownerId, ownerId), eq(meshNodes.role, 'peer')))
-      .run();
   }
 
   /* ------------------------------------------------------------------ private */
@@ -1453,26 +1264,6 @@ export class MeshService {
     });
   }
 
-  private endpointsFor(nodeIds: string[]): Map<string, MeshEndpoint[]> {
-    const byNode = new Map<string, MeshEndpoint[]>();
-    if (nodeIds.length === 0) return byNode;
-
-    for (let offset = 0; offset < nodeIds.length; offset += 500) {
-      const batch = nodeIds.slice(offset, offset + 500);
-      for (const row of this.db
-        .select()
-        .from(meshNodeEndpoints)
-        .where(inArray(meshNodeEndpoints.nodeId, batch))
-        .all()) {
-        const list = byNode.get(row.nodeId) ?? [];
-        list.push({ kind: row.kind, address: row.address, port: row.port });
-        byNode.set(row.nodeId, list);
-      }
-    }
-
-    return byNode;
-  }
-
   /**
    * Replace what a node claims to hold.
    *
@@ -1511,77 +1302,4 @@ export class MeshService {
       );
     }
   }
-}
-
-/**
- * One tunnel as this coordinator tracks it, in memory.
- *
- * Times are epoch milliseconds rather than ISO strings: every one of them is
- * compared or subtracted, and parsing a string back on each pass of a map that
- * refreshes every couple of seconds is work for nothing.
- */
-interface LiveTunnel {
-  nonce: string;
-  nodeId: string;
-  userId: string;
-  gameId: string;
-  via: 'direct' | 'relay';
-  openedAt: number;
-  lastReportAt: number | null;
-  previousReportAt: number | null;
-  bytesServed: number;
-  previousBytes: number;
-  clientNetwork: string | null;
-  punches: number;
-}
-
-/**
- * What a tunnel is doing, from the little the coordinator can see.
- *
- * `connecting` is a grant issued and nothing reported yet — the handshake is
- * either in progress or it failed, and from here those look the same for the
- * first half-minute. `transferring` is bytes having moved since the previous
- * report. `idle` is a tunnel that reported once and has not since: a paused
- * download, a finished one, or a client that vanished.
- */
-function tunnelState(tunnel: LiveTunnel): MeshTunnel['state'] {
-  if (tunnel.lastReportAt === null) return 'connecting';
-  if (tunnel.bytesServed > tunnel.previousBytes) return 'transferring';
-  return 'idle';
-}
-
-/**
- * An address reduced to the network it is on.
- *
- * A tunnel map is left open on a screen, and a player's full address is not
- * something to put on one. Two octets of an IPv4 address, or the first three
- * groups of an IPv6 one, is enough to tell two players apart and to see that
- * somebody is on the same LAN as the node they are pulling from — which is the
- * only thing the map uses it for.
- */
-function network(address: string | null): string | null {
-  if (!address) return null;
-
-  if (address.includes(':')) {
-    const groups = address.split(':').filter(Boolean).slice(0, 3);
-    return groups.length > 0 ? `${groups.join(':')}::/48` : null;
-  }
-
-  const octets = address.split('.');
-  if (octets.length !== 4) return null;
-  return `${octets[0]}.${octets[1]}.x.x`;
-}
-
-/**
- * The address worth putting on a node's marker.
- *
- * The observed one first: it is what the coordinator saw the node arrive from,
- * so it is the one that means something to somebody looking at a map from
- * outside the LAN. A local address is better than nothing when there is no
- * other.
- */
-function preferredAddress(endpoints: MeshEndpoint[]): string | null {
-  const observed = endpoints.find((endpoint) => endpoint.kind === 'observed');
-  const chosen = observed ?? endpoints[0];
-  return chosen ? `${chosen.address}:${chosen.port}` : null;
 }
