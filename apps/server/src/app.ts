@@ -116,6 +116,14 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
+        // A Node is intentionally reachable on its plain-HTTP LAN port as
+        // well as through an optional HTTPS reverse proxy. Helmet enables
+        // this directive by default; on the LAN URL it rewrites `/node.js`
+        // to HTTPS on the same port, where no TLS server exists. The script
+        // then never loads and every control looks dead. Nodes use only
+        // same-origin relative assets and requests, so leave their scheme
+        // alone while retaining the upgrade on the public API roles.
+        upgradeInsecureRequests: config.role === 'node' ? null : [],
       },
     },
     // Would otherwise block the YouTube trailer embeds on a game page.

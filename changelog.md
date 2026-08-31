@@ -1,5 +1,12 @@
 # GameBlade Changelog
 
+## Version 0.8.1 - August 31, 2026
+
+### Node controls work on direct LAN addresses
+
+- The Node UI no longer upgrades its same-origin script and API requests to HTTPS when opened on a plain-HTTP LAN address such as `http://192.168.4.209:8085`.
+- The proxied HTTPS Node page keeps working, and the Coordinator retains its existing HTTPS upgrade policy.
+
 ## Version 0.8.0 - August 31, 2026
 
 ### ZIP-first downloads and fast automatic installs

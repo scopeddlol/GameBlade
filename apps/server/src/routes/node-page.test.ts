@@ -78,6 +78,10 @@ describe('a node’s own page', () => {
     // And the policy that broke it is still on, so this cannot regress into an
     // inline block that happens to work in one browser.
     expect(page.headers['content-security-policy']).toContain("script-src 'self'");
+    // Nodes are also opened directly over their plain-HTTP LAN port. Helmet's
+    // default upgrade directive would turn `/node.js` into an HTTPS request on
+    // that port, silently preventing this external script from loading.
+    expect(page.headers['content-security-policy']).not.toContain('upgrade-insecure-requests');
   });
 
   it('finds every drive mounted under the multi-library root', async () => {
