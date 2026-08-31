@@ -332,7 +332,9 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
    */
   app.get('/mesh/transfers/poll', async (request) => {
     const { nodeId } = requireNode(request);
-    const jobs = await mesh.waitForNodeChunks(nodeId, MESH_TRANSFER_POLL_SECONDS * 1000);
+    const requested = Number((request.query as { limit?: string }).limit);
+    const limit = Number.isFinite(requested) ? requested : 8;
+    const jobs = await mesh.waitForNodeChunks(nodeId, MESH_TRANSFER_POLL_SECONDS * 1000, limit);
     return { jobs };
   });
 

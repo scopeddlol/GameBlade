@@ -119,7 +119,7 @@ impl Default for Settings {
             prompt_on_save_conflict: true,
             share_activity: true,
             minimize_on_launch: true,
-            download_concurrency: 4,
+            download_concurrency: 8,
             verify_downloads: true,
             theme_preset: None,
             theme_accent: None,

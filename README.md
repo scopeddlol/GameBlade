@@ -29,7 +29,9 @@ file, no build step, and everything below is covered there in depth.
   `gameblade-coordinator` holds the database and the panel; `gameblade-node`s
   hold the games and supply verified chunks to the Coordinator over outbound
   HTTPS. The Coordinator streams those chunks to clients over HTTPS. Nodes
-  need no inbound port and set themselves up from a local page.
+  need no inbound port and set themselves up from a local page. The Desktop
+  keeps its connection budget busy across both files and chunks, so games with
+  thousands of small files start just as promptly as one large archive.
 
 | Piece                        | Who uses it   | What it does                                                           |
 | ---------------------------- | ------------- | ---------------------------------------------------------------------- |

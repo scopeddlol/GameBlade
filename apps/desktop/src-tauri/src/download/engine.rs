@@ -113,6 +113,10 @@ fn cancelled(flag: &AtomicBool) -> bool {
     flag.load(Ordering::SeqCst)
 }
 
+fn file_parallelism(connections: usize, files: usize) -> usize {
+    connections.max(1).min(files.max(1))
+}
+
 /// The per-chunk hashes usable for this file, if any.
 ///
 /// Three things all have to line up before a hash may be trusted to accept or
@@ -409,52 +413,101 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
         })
     };
 
-    let mut outcome = Outcome::Done;
-    for file in &manifest.files {
-        if cancelled(&job.cancel_flag) {
-            outcome = Outcome::Stopped;
-            break;
-        }
+    // Keep the whole connection budget useful across files. Previously files
+    // were processed one at a time, so a game made of thousands of sub-8 MiB
+    // files silently collapsed to one connection no matter what the setting
+    // said. A bounded file pipeline gives small-file games the same immediate
+    // parallel start that one large, chunked file already had.
+    let parallel_files = file_parallelism(job.connections, manifest.files.len());
+    if !manifest.files.is_empty() {
+        let mut guard = job.state.lock().await;
+        guard.current_file = Some(if parallel_files > 1 {
+            format!("Downloading up to {parallel_files} files at once")
+        } else {
+            manifest.files[0].path.clone()
+        });
+    }
 
-        {
-            let mut guard = job.state.lock().await;
-            guard.current_file = Some(file.path.clone());
-        }
+    let mut remaining = manifest.files.iter().cloned();
+    let mut running = futures_util::stream::FuturesUnordered::new();
+    let start_file = |file: ManifestFile| {
+        let client = job.client.clone();
+        let tokens = Arc::clone(&tokens);
+        let game_id = job.game_id.clone();
+        let root = job.root.clone();
+        let cancel = Arc::clone(&job.cancel_flag);
+        let downloaded = Arc::clone(&downloaded);
+        let semaphore = Arc::clone(&semaphore);
+        let connections = job.connections;
+        let verify = job.verify;
+        let chunk_bytes = manifest.chunk_bytes;
 
-        match download_file(
-            &job.client,
-            &tokens,
-            &job.game_id,
-            file,
-            &job.root,
-            &job.state,
-            &job.cancel_flag,
-            &downloaded,
-            &semaphore,
-            job.connections,
-            job.verify,
-            manifest.chunk_bytes,
-        )
-        .await
-        {
+        tauri::async_runtime::spawn(async move {
+            let path = file.path.clone();
+            let result = download_file(
+                &client,
+                &tokens,
+                &game_id,
+                &file,
+                &root,
+                &cancel,
+                &downloaded,
+                &semaphore,
+                connections,
+                verify,
+                chunk_bytes,
+            )
+            .await;
+            (path, result)
+        })
+    };
+
+    for _ in 0..parallel_files {
+        if let Some(file) = remaining.next() {
+            running.push(start_file(file));
+        }
+    }
+
+    let mut terminal: Option<Outcome> = None;
+    while let Some(joined) = running.next().await {
+        let file_outcome = match joined {
+            Ok((_path, result)) => result,
+            Err(error) => FileOutcome::Fatal(AppError::Other(format!(
+                "A file download task stopped unexpectedly: {error}"
+            ))),
+        };
+
+        match file_outcome {
             FileOutcome::Done => {
-                let mut guard = job.state.lock().await;
-                guard.files_completed += 1;
+                job.state.lock().await.files_completed += 1;
             }
-            FileOutcome::Stopped => {
-                outcome = Outcome::Stopped;
-                break;
+            FileOutcome::Stopped if terminal.is_none() => terminal = Some(Outcome::Stopped),
+            FileOutcome::Quota(message) if terminal.is_none() => {
+                terminal = Some(Outcome::Quota(message));
             }
-            FileOutcome::Quota(message) => {
-                outcome = Outcome::Quota(message);
-                break;
+            FileOutcome::Fatal(error) if terminal.is_none() => {
+                terminal = Some(Outcome::Fatal(error));
             }
-            FileOutcome::Fatal(err) => {
-                outcome = Outcome::Fatal(err);
-                break;
+            _ => {}
+        }
+
+        if terminal.is_some() {
+            // Wake every sibling out of its retry loop so draining the active
+            // set is prompt. The first terminal outcome above is preserved.
+            job.cancel_flag.store(true, Ordering::SeqCst);
+        }
+
+        // Once one file fails, stop adding new work but drain everything
+        // already running. Dropping these futures would detach their chunk
+        // writers and let them race the caller's cleanup.
+        if terminal.is_none() {
+            if let Some(file) = remaining.next() {
+                running.push(start_file(file));
             }
         }
     }
+
+    let outcome = terminal.unwrap_or(Outcome::Done);
 
     {
         let mut guard = job.state.lock().await;
@@ -514,7 +567,6 @@ async fn download_file(
     game_id: &str,
     file: &ManifestFile,
     root: &Path,
-    state: &Arc<Mutex<DownloadState>>,
     cancel: &Arc<AtomicBool>,
     downloaded: &Arc<AtomicU64>,
     semaphore: &Arc<Semaphore>,
@@ -566,6 +618,15 @@ async fn download_file(
 
         let journal = load_journal(&journal_path, file.size_bytes).await;
         downloaded.fetch_add(journal.done_bytes(), Ordering::Relaxed);
+
+        // A freshly preallocated file already has its final length. Persist a
+        // sidecar before sizing it so a crash during the first chunk cannot
+        // make that sparse/partial file look complete on the next launch.
+        if !journal_path.exists() {
+            if let Err(error) = save_journal(&journal_path, &journal).await {
+                return FileOutcome::Fatal(error);
+            }
+        }
 
         // truncate(false) is load-bearing on a resume: the bytes already on
         // disk are exactly what the journal accounts for, and discarding them
@@ -636,16 +697,15 @@ async fn download_file(
 
     // Hashing a 40 GB file costs real minutes on a slow disk, which is the
     // whole reason this is a preference.
-    if let Some(expected) = file.sha256.as_ref().filter(|_| verify) {
-        {
-            let mut guard = state.lock().await;
-            guard.status = DownloadStatus::Verifying;
-        }
+    // When every chunk had a catalog hash, every byte was already verified as
+    // it arrived. Re-reading the whole file would add disk work without adding
+    // assurance. Older manifests without chunk hashes retain whole-file SHA.
+    if let Some(expected) = file
+        .sha256
+        .as_ref()
+        .filter(|_| verify && chunk_hashes.is_none())
+    {
         let hashed = hash_file(&dest).await;
-        {
-            let mut guard = state.lock().await;
-            guard.status = DownloadStatus::Downloading;
-        }
 
         let actual = match hashed {
             Ok(digest) => digest,
@@ -1118,6 +1178,15 @@ mod tests {
         // which is a worse bug than the one the rollback fixes.
         uncredit(&counter, 500);
         assert_eq!(counter.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn small_file_games_use_the_whole_connection_budget() {
+        // The 16,671-file case that exposed the old serial scheduler.
+        assert_eq!(file_parallelism(8, 16_671), 8);
+        assert_eq!(file_parallelism(16, 3), 3);
+        assert_eq!(file_parallelism(8, 1), 1);
+        assert_eq!(file_parallelism(0, 0), 1);
     }
 
     /* ----------------------------------------------------------- range */

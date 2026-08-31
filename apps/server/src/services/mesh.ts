@@ -38,8 +38,11 @@ const ENROLMENT_TTL_MS = 24 * 60 * 60 * 1000;
 /** A proof challenge is useful only for the request immediately following it. */
 const REGISTRATION_CHALLENGE_TTL_MS = 60_000;
 
-/** A Desktop range request should either be claimed promptly or try another node. */
-const NODE_CHUNK_TIMEOUT_MS = 12_000;
+/** An idle Node should either claim queued work promptly or let another holder try. */
+const NODE_CHUNK_CLAIM_TIMEOUT_MS = 15_000;
+
+/** Once claimed, allow slow disks and modest uplinks time to deliver a full chunk. */
+const NODE_CHUNK_DELIVERY_TIMEOUT_MS = 5 * 60_000;
 
 /** Enough work to keep several HTTPS uploads full without flooding one node. */
 const NODE_CHUNK_POLL_BATCH = 8;
@@ -676,7 +679,7 @@ export class MeshService {
         this.pendingNodeChunks.delete(requestId);
         this.removeQueuedNodeChunk(nodeId, requestId);
         reject(new Error(`${nodeLabel} did not answer the Coordinator in time`));
-      }, NODE_CHUNK_TIMEOUT_MS);
+      }, NODE_CHUNK_CLAIM_TIMEOUT_MS);
       timer.unref();
 
       this.pendingNodeChunks.set(requestId, {
@@ -714,8 +717,13 @@ export class MeshService {
   }
 
   /** Long-poll work for one authenticated node. */
-  async waitForNodeChunks(nodeId: string, timeoutMs: number): Promise<NodeChunkJob[]> {
-    const ready = this.takeNodeChunks(nodeId);
+  async waitForNodeChunks(
+    nodeId: string,
+    timeoutMs: number,
+    limit = NODE_CHUNK_POLL_BATCH,
+  ): Promise<NodeChunkJob[]> {
+    const boundedLimit = Math.min(NODE_CHUNK_POLL_BATCH, Math.max(1, Math.floor(limit)));
+    const ready = this.takeNodeChunks(nodeId, boundedLimit);
     if (ready.length > 0) return ready;
 
     await new Promise<void>((resolve) => {
@@ -734,18 +742,25 @@ export class MeshService {
       this.nodeChunkWaiters.set(nodeId, waiters);
     });
 
-    return this.takeNodeChunks(nodeId);
+    return this.takeNodeChunks(nodeId, boundedLimit);
   }
 
-  private takeNodeChunks(nodeId: string): NodeChunkJob[] {
+  private takeNodeChunks(nodeId: string, limit: number): NodeChunkJob[] {
     const queued = this.nodeChunkQueues.get(nodeId) ?? [];
-    const taken = queued.splice(0, NODE_CHUNK_POLL_BATCH);
+    const taken = queued.splice(0, limit);
     if (queued.length > 0) this.nodeChunkQueues.set(nodeId, queued);
     else this.nodeChunkQueues.delete(nodeId);
 
     return taken.flatMap((requestId) => {
       const pending = this.pendingNodeChunks.get(requestId);
       if (!pending || pending.nodeId !== nodeId) return [];
+      clearTimeout(pending.timer);
+      pending.timer = setTimeout(() => {
+        this.pendingNodeChunks.delete(requestId);
+        pending.reject(new Error(`${pending.nodeLabel} did not finish the requested chunk`));
+      }, NODE_CHUNK_DELIVERY_TIMEOUT_MS);
+      pending.timer.unref();
+
       return [
         {
           requestId: pending.requestId,

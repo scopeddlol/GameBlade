@@ -38,7 +38,7 @@ pub struct TransferOptions {
 impl Default for TransferOptions {
     fn default() -> Self {
         Self {
-            connections: 4,
+            connections: 8,
             verify: true,
         }
     }
@@ -351,7 +351,7 @@ impl DownloadManager {
             notify: Notify::new(),
             queue_path,
             provider,
-            connections: AtomicU64::new(4),
+            connections: AtomicU64::new(8),
             verify: AtomicBool::new(true),
             scheduler_started: AtomicBool::new(false),
         })

@@ -105,8 +105,9 @@
         Coordinator, and the Coordinator verifies it again before streaming it to Desktop.
       </p>
       <p>
-        The Desktop keeps several ranges in flight, writes them at their offsets, records a resume
-        journal, and verifies hashes. There is no file-by-file network handshake between chunks.
+        The Desktop keeps several files and ranges in flight, writes chunks at their offsets,
+        records resume journals, and verifies hashes as bytes arrive. The connection budget is
+        shared across the entire game rather than being reset and drained one file at a time.
       </p>
 
       <h2 id="quick-start">One-machine quick start</h2>
@@ -201,11 +202,14 @@ volumes:
 
       <h2 id="downloads">Download behavior</h2>
       <ul>
-        <li>Fixed 8 MiB chunks with multiple concurrent HTTPS range requests.</li>
+        <li>
+          Fixed 8 MiB chunks with up to eight concurrent HTTPS requests by default, shared across
+          files so small-file games do not collapse to one connection.
+        </li>
         <li>Resume journals survive restarts; transient failures retry with backoff.</li>
         <li>
-          Chunk SHA-256 is checked at Node and Coordinator; optional whole-file verification
-          remains.
+          Chunk SHA-256 is checked at Node, Coordinator, and Desktop. Whole-file verification is
+          retained as the compatibility fallback when an older manifest has no chunk hashes.
         </li>
         <li>
           Quotas and speed limits are enforced once at Coordinator, without double-counting Node

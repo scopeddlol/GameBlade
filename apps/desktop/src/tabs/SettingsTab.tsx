@@ -147,7 +147,7 @@ export function SettingsTab() {
 
               <Toggle
                 label="Verify downloads"
-                hint="Check each file against the server's checksum after downloading."
+                hint="Verify chunks while they arrive; older servers fall back to checking the finished file."
                 checked={draft.verifyDownloads}
                 onChange={(verifyDownloads) => update({ verifyDownloads })}
               />

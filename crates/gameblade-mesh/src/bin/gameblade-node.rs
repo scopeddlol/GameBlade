@@ -419,8 +419,8 @@ async fn run(agent: Runtime, server_url: String, library_roots: Vec<PathBuf>, st
     // A node is its keypair and the socket that keypair answers on, both of
     // which outlive any particular token — so a rejected credential is
     // replaced in place rather than by tearing the agent down and rebuilding
-    // it. Shared because the rendezvous poll below runs on its own task and
-    // must not go on presenting a token this loop has already replaced.
+    // it. Shared because the transfer poll below runs on its own task and must
+    // not go on presenting a token this loop has already replaced.
     let node_token = Arc::new(RwLock::new(node_token));
 
     // Transfer work: one outbound long-poll, with up to eight HTTPS uploads in
@@ -437,9 +437,20 @@ async fn run(agent: Runtime, server_url: String, library_roots: Vec<PathBuf>, st
 
         tokio::spawn(async move {
             loop {
+                // Never claim more work than can start now. The old poll took
+                // eight jobs even when eight uploads were already running,
+                // leaving claimed requests hidden behind the semaphore until
+                // the Coordinator timed them out. Waiting for one slot here
+                // keeps every returned job immediately runnable.
+                let Ok(slot) = Arc::clone(&concurrency).acquire_owned().await else {
+                    return;
+                };
+                drop(slot);
+                let capacity = concurrency.available_permits().clamp(1, 8);
                 let token = node_token.read().await.clone();
                 let reply = http
                     .get(format!("{server_url}/api/mesh/transfers/poll"))
+                    .query(&[("limit", capacity)])
                     .header("authorization", format!("Bearer {token}"))
                     .header("x-gameblade-node", &node_id)
                     .send()
@@ -458,16 +469,16 @@ async fn run(agent: Runtime, server_url: String, library_roots: Vec<PathBuf>, st
                 };
 
                 for job in jobs {
+                    let Ok(permit) = Arc::clone(&concurrency).acquire_owned().await else {
+                        return;
+                    };
                     let http = http.clone();
                     let server_url = server_url.clone();
                     let node_id = node_id.clone();
                     let node_token = Arc::clone(&node_token);
                     let chunks = Arc::clone(&chunks);
-                    let concurrency = Arc::clone(&concurrency);
                     tokio::spawn(async move {
-                        let Ok(_permit) = concurrency.acquire_owned().await else {
-                            return;
-                        };
+                        let _permit = permit;
                         deliver_job(&http, &server_url, &node_id, &node_token, &chunks, job).await;
                     });
                 }

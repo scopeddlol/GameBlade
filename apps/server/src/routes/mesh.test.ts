@@ -8,7 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
-import { gameFileChunks, gameFiles, games, libraries, meshNodes } from '../db/schema.js';
+import { gameFileChunks, gameFiles, games, libraries, meshNodes, users } from '../db/schema.js';
 import { newId } from '../lib/ids.js';
 
 describe('Node HTTPS downloads', () => {
@@ -21,6 +21,8 @@ describe('Node HTTPS downloads', () => {
   let player: { cookie: string; csrf: string };
   let gameId: string;
   let fileId: string;
+  let fileDigest: string;
+  let playerId: string;
 
   const auth = (session: { cookie: string; csrf: string }) => ({
     cookie: session.cookie,
@@ -90,6 +92,7 @@ describe('Node HTTPS downloads', () => {
       password: 'a-long-enough-password',
       inviteCode: (invite.json() as { code: string }).code,
     });
+    playerId = app.gameblade.db.select().from(users).where(eq(users.username, 'player')).get()!.id;
 
     const libraryId = newId('lib');
     app.gameblade.db
@@ -112,7 +115,7 @@ describe('Node HTTPS downloads', () => {
       })
       .run();
     fileId = newId('gfl');
-    const digest = createHash('sha256').update(Buffer.alloc(TEST_BYTES, 7)).digest('hex');
+    fileDigest = createHash('sha256').update(Buffer.alloc(TEST_BYTES, 7)).digest('hex');
     app.gameblade.db
       .insert(gameFiles)
       .values({
@@ -121,14 +124,14 @@ describe('Node HTTPS downloads', () => {
         relPath: 'game.bin',
         sizeBytes: TEST_BYTES,
         modifiedAt: new Date().toISOString(),
-        sha256: digest,
+        sha256: fileDigest,
         chunkedAt: new Date().toISOString(),
         chunkBytes: MESH_CHUNK_BYTES,
       })
       .run();
     app.gameblade.db
       .insert(gameFileChunks)
-      .values({ fileId, chunkIndex: 0, sizeBytes: TEST_BYTES, sha256: digest })
+      .values({ fileId, chunkIndex: 0, sizeBytes: TEST_BYTES, sha256: fileDigest })
       .run();
   });
 
@@ -228,6 +231,56 @@ describe('Node HTTPS downloads', () => {
     } finally {
       app.gameblade.config.servesLocalFiles = local;
     }
+  });
+
+  it('only assigns as many jobs as the Node says it can start', async () => {
+    const node = await enrol('CapacityNode');
+    const contentHash = app.gameblade.mesh.contentHashFor(gameId);
+    await app.inject({
+      method: 'POST',
+      url: '/api/mesh/heartbeat',
+      headers: nodeAuth(node),
+      payload: { endpoints: [], games: [{ gameId, contentHash }] },
+    });
+
+    const requests = Array.from({ length: 3 }, () =>
+      app.gameblade.mesh.fetchNodeChunk({
+        userId: playerId,
+        gameId,
+        fileId,
+        chunkIndex: 0,
+        expectedBytes: TEST_BYTES,
+        sha256: fileDigest,
+      }),
+    );
+
+    const take = async (limit: number) => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/mesh/transfers/poll?limit=${limit}`,
+        headers: nodeAuth(node),
+      });
+      expect(response.statusCode).toBe(200);
+      return (response.json() as { jobs: { requestId: string }[] }).jobs;
+    };
+    const deliver = async (requestId: string) => {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/mesh/transfers/${requestId}`,
+        headers: { ...nodeAuth(node), 'content-type': 'application/octet-stream' },
+        payload: Buffer.alloc(TEST_BYTES, 7),
+      });
+      expect(response.statusCode).toBe(200);
+    };
+
+    const first = await take(2);
+    expect(first).toHaveLength(2);
+    await Promise.all(first.map((job) => deliver(job.requestId)));
+
+    const second = await take(2);
+    expect(second).toHaveLength(1);
+    await deliver(second[0]!.requestId);
+    await expect(Promise.all(requests)).resolves.toHaveLength(3);
   });
 
   it('keeps Node administration private', async () => {

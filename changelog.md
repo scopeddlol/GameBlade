@@ -1,5 +1,16 @@
 # GameBlade Changelog
 
+## Version 0.7.1 - August 31, 2026
+
+### Downloads start immediately and keep every connection busy
+
+- Folder games now download several files concurrently. The v0.7.0 scheduler processed files serially, so a 16,671-file game silently used one connection whenever each file fit in one chunk.
+- The default connection budget is now eight, shared across files and chunks. Large files retain segmented range downloads while small-file games finally use the same parallel pipeline.
+- Nodes advertise their currently free upload capacity when polling. The Coordinator assigns only work that can begin immediately instead of letting claimed requests wait behind a Node-side semaphore and expire.
+- Queued Node work has a short claim deadline, while claimed uploads receive a separate delivery window suitable for slower disks and uplinks.
+- Files with complete chunk hashes are no longer re-read for a redundant whole-file hash after every chunk was already verified in flight.
+- Fresh resume journals are persisted before destination files are preallocated, preventing an interrupted sparse file from looking complete after a crash.
+
 ## Version 0.7.0 - August 31, 2026
 
 ### Downloads now use one dependable HTTPS path
