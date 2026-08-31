@@ -2231,6 +2231,62 @@ textarea::placeholder {
 .download-connection.connecting .download-connection-icon svg {
   animation: connection-spin 1.2s linear infinite;
 }
+
+/* The per-node breakdown under the connection headline. */
+.download-sources-toggle {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.download-sources-toggle:hover {
+  text-decoration: underline;
+}
+.download-sources {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.download-source {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.download-source-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.download-source.connected .download-source-dot {
+  background: var(--success, #3fb950);
+}
+.download-source.failed .download-source-dot {
+  background: var(--danger);
+}
+.download-source-name {
+  font-weight: 600;
+}
+.download-source-route {
+  color: var(--muted);
+}
+.download-source-detail {
+  grid-column: 2 / -1;
+}
+.download-source.failed .download-source-name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
 @keyframes connection-pulse {
   70% {
     box-shadow: 0 0 0 7px transparent;

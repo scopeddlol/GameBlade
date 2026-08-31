@@ -154,6 +154,53 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.10 - August 31, 2026
+
+### Downloads work again for everyone
+
+0.6.8 made coordinator downloads node-only, removing the HTTP origin that used
+to catch a failed node connection. 0.6.9 then removed Desktop's relay path
+entirely and dropped the relay service from the coordinator compose file.
+Together those left a coordinator deployment with exactly one way to get bytes:
+a direct hole punch. When that punch failed there was nothing behind it, so the
+download did not degrade — it stopped.
+
+Desktop asks for the relay again when, and only when, every direct attempt has
+failed. Nothing on the server had actually been removed: `POST
+/mesh/relay/:gameId`, the ticket issuing, the punch instruction and the relay
+image were all still present and still working, so this restores the caller
+rather than rebuilding a feature.
+
+The relay is not a port forward and does not weaken the no-open-ports goal.
+Both the client and the node dial outward to it, which is what a symmetric or
+carrier-grade NAT still permits when a direct punch between two such networks
+cannot work by construction. The QUIC session stays end to end and stays pinned
+to the node's own key, so the relay carries ciphertext it cannot read and never
+learns which game is moving.
+
+0.6.9's punch train and idle NAT keepalive are kept exactly as they are. They
+make the direct path win more often, which is what keeps the relay rare.
+
+### The Downloads drawer names the nodes it is pulling from
+
+The secure-connection card keeps its one-line summary and gains a breakdown
+underneath it: every node the download attempted, whether it is an origin node,
+a mirror or a local peer, and whether it is reached over a direct tunnel or a
+relayed one. Failed sources stay on the list rather than disappearing, because
+a node that could not be reached is the most useful thing on screen when a
+download will not start. Addresses and ports are still not shown.
+
+### "Advertise your library to local peers"
+
+The setting that shared installed games is now named for what it does, in the
+terms Steam's LAN sharing made familiar. Peers on your own network are
+preferred because they win on measured throughput, so for most people this
+costs nothing on the uplink. It is still off by default, still requires the
+operator to allow peers at all, and still stops serving a file the moment it
+no longer matches its hash.
+
+---
+
 ## Version 0.6.9 - August 30, 2026
 
 ### The private tunnel stays reachable while a node is idle

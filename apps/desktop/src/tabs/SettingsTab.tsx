@@ -231,8 +231,8 @@ export function SettingsTab() {
               />
 
               <Toggle
-                label="Share my downloads with other players"
-                hint="Sends pieces of games you have installed to other people on this server, using your upload bandwidth. Off unless you turn it on, and only works if the server allows it. Files are checked before they are sent, so an edited or modded install simply stops being shared."
+                label="Advertise your library to local peers"
+                hint="Lets other players on this server pull pieces of games you already have installed, the way Steam shares a download across machines on a LAN. Peers on your own network are preferred, so this usually costs nothing on your uplink. Off unless you turn it on, and only works if the server allows it. Files are checked before they are sent, so an edited or modded install simply stops being shared."
                 checked={draft.shareDownloads}
                 onChange={(shareDownloads) => update({ shareDownloads })}
               />

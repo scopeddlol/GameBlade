@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { formatBytes, formatEta, formatRate } from '../lib/format.js';
-import { ipc, type DownloadState } from '../lib/ipc.js';
+import { ipc, type DownloadSourceState, type DownloadState } from '../lib/ipc.js';
 import { Badge, Empty, Modal, ProgressBar } from './ui.js';
 
 /** How many speed samples the network graph keeps — about two minutes at the progress event's own cadence. */
@@ -202,7 +202,19 @@ export function DownloadQueue({
   );
 }
 
+/**
+ * Which machines this download is actually pulling from.
+ *
+ * The headline is the summary a player wants at a glance — am I connected, and
+ * to what — and the list under it is the detail an operator wants when the
+ * answer is "not really". Every source the client attempted stays listed,
+ * failures included, because a node that could not be reached is the single
+ * most useful thing on screen when a download will not start.
+ */
 function ConnectionSummary({ download }: { download: DownloadState }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const nodes = download.sources.filter((source) => source.source_type !== 'coordinator');
   const connected = uniqueLabels(
     download.sources
       .filter((source) => source.status === 'connected')
@@ -217,6 +229,9 @@ function ConnectionSummary({ download }: { download: DownloadState }) {
   const names = connected.length ? connected : available.length ? available : attempted;
   const failed = connected.length === 0 && available.length === 0;
   const waiting = !failed && download.status === 'queued';
+  const relayed = download.sources.some(
+    (source) => source.status === 'connected' && source.route === 'relay',
+  );
 
   return (
     <div
@@ -245,13 +260,70 @@ function ConnectionSummary({ download }: { download: DownloadState }) {
           {failed
             ? 'A private tunnel could not be established.'
             : connected.length
-              ? 'Private, encrypted Node-to-Client tunnel'
+              ? relayed
+                ? 'Private, encrypted Node-to-Client tunnel, carried by the relay'
+                : 'Private, encrypted Node-to-Client tunnel'
               : 'Secure GameBlade connection'}
         </span>
+
+        {nodes.length ? (
+          <>
+            <button
+              type="button"
+              className="download-sources-toggle"
+              onClick={() => setExpanded((open) => !open)}
+              aria-expanded={expanded}
+            >
+              {expanded ? 'Hide' : 'Show'}{' '}
+              {nodes.length === 1 ? 'node' : `all ${nodes.length} nodes`}
+            </button>
+
+            {expanded ? (
+              <ul className="download-sources" aria-label="Nodes for this download">
+                {nodes.map((source, index) => (
+                  <li
+                    key={`${source.node_id ?? source.label}-${index}`}
+                    className={clsx('download-source', source.status)}
+                  >
+                    <span className="download-source-dot" aria-hidden />
+                    <span className="download-source-name">{source.label}</span>
+                    <span className="download-source-route">{describeSource(source)}</span>
+                    {source.detail ? (
+                      <span className="download-source-detail muted small">{source.detail}</span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </>
+        ) : null}
       </div>
       <span className="download-connection-pulse" aria-hidden />
     </div>
   );
+}
+
+/** How a source is reached, in the words a player would use for it. */
+function describeSource(source: DownloadSourceState): string {
+  const kind =
+    source.source_type === 'origin_node'
+      ? 'Origin node'
+      : source.source_type === 'mirror_node'
+        ? 'Mirror node'
+        : source.source_type === 'peer_client'
+          ? 'Local peer'
+          : 'Coordinator';
+
+  if (source.status === 'failed') return `${kind} · unreachable`;
+
+  const route =
+    source.route === 'direct'
+      ? 'direct tunnel'
+      : source.route === 'relay'
+        ? 'relayed tunnel'
+        : 'secure server connection';
+
+  return `${kind} · ${route}`;
 }
 
 function uniqueLabels(labels: string[]): string[] {
