@@ -783,8 +783,12 @@ export function describeAvailability(
     };
   }
 
-  // A server holding its own files can stream them straight out, hashed or not.
-  if (offered === null) return { state: 'ready', note: null };
+  if (game.kind !== 'archive' || !game.relPath.toLowerCase().endsWith('.zip')) {
+    return {
+      state: 'coming-soon',
+      note: 'Downloads use one fast, resumable ZIP package. Store this game as a .zip archive and rescan the Node.',
+    };
+  }
 
   if (stats.unhashed > 0) {
     return {
@@ -792,6 +796,10 @@ export function describeAvailability(
       note: `Still being prepared — ${stats.unhashed.toLocaleString('en')} of ${stats.files.toLocaleString('en')} files left to hash. It will appear here as soon as that finishes.`,
     };
   }
+
+  // A standalone server reads the same verified package from local disk. It
+  // does not need a Node announcement, but it still uses the 10 MiB hash grid.
+  if (offered === null) return { state: 'ready', note: null };
 
   if (!offered.has(game.id)) {
     return {

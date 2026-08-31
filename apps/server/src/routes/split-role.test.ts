@@ -305,8 +305,8 @@ describe('the split-role topology', () => {
     const db = app.gameblade.db;
 
     const libraryDir = path.join(dataDir, 'library');
-    await mkdir(path.join(libraryDir, 'Held'), { recursive: true });
-    await writeFile(path.join(libraryDir, 'Held', 'game.bin'), Buffer.alloc(4096, 9));
+    await mkdir(libraryDir, { recursive: true });
+    await writeFile(path.join(libraryDir, 'Held.zip'), Buffer.alloc(4096, 9));
 
     const libraryId = newId('lib');
     db.insert(libraries).values({ id: libraryId, name: 'Local', path: libraryDir }).run();
@@ -316,8 +316,8 @@ describe('the split-role topology', () => {
       .values({
         id: gameId,
         libraryId,
-        relPath: 'Held',
-        kind: 'folder',
+        relPath: 'Held.zip',
+        kind: 'archive',
         title: 'Held',
         sortTitle: 'held',
         searchTitle: 'held',
@@ -329,7 +329,7 @@ describe('the split-role topology', () => {
       .values({
         id: newId('gfl'),
         gameId,
-        relPath: 'game.bin',
+        relPath: 'Held.zip',
         sizeBytes: 4096,
         modifiedAt: new Date().toISOString(),
       })
@@ -495,17 +495,18 @@ describe('the split-role topology', () => {
       'x-gameblade-node': node.nodeId,
     };
     const reportId = '00000000-0000-4000-8000-000000000067';
-    const reported = (relPath: string, fill: string) => ({
-      relPath,
-      kind: 'folder' as const,
+    const reported = (title: string, fill: string) => ({
+      relPath: `${title}.zip`,
+      kind: 'archive' as const,
       sizeBytes: 16,
       contentMtime: '2026-08-30T00:00:00.000Z',
       files: [
         {
-          relPath: 'game.bin',
+          relPath: `${title}.zip`,
           sizeBytes: 16,
           modifiedAt: '2026-08-30T00:00:00.000Z',
           sha256: fill.repeat(64),
+          chunkBytes: MESH_CHUNK_BYTES,
           chunks: [{ index: 0, sha256: fill.repeat(64), sizeBytes: 16 }],
         },
       ],
@@ -531,7 +532,10 @@ describe('the split-role topology', () => {
       .from(games)
       .all()
       .sort((a, b) => a.relPath.localeCompare(b.relPath));
-    expect(catalog.map((game) => game.relPath)).toEqual(['Companion Game', 'Downloadable Game']);
+    expect(catalog.map((game) => game.relPath)).toEqual([
+      'Companion Game.zip',
+      'Downloadable Game.zip',
+    ]);
 
     const announced = catalog.map((game) => ({
       gameId: game.id,
@@ -548,7 +552,7 @@ describe('the split-role topology', () => {
     });
     expect(heartbeat.statusCode).toBe(200);
 
-    const target = catalog.find((game) => game.relPath === 'Downloadable Game')!;
+    const target = catalog.find((game) => game.relPath === 'Downloadable Game.zip')!;
     const manifest = await app.inject({
       method: 'GET',
       url: `/api/games/${target.id}/manifest`,
@@ -566,7 +570,7 @@ describe('the split-role topology', () => {
       gameId: target.id,
       chunkBytes: MESH_CHUNK_BYTES,
       originAvailable: true,
-      files: [{ path: 'game.bin', chunks: [{ index: 0, sizeBytes: 16 }] }],
+      files: [{ path: 'Downloadable Game.zip', chunks: [{ index: 0, sizeBytes: 16 }] }],
     });
     expect(manifestBody.sources).toContainEqual(
       expect.objectContaining({ kind: 'node', nodeId: node.nodeId }),
@@ -584,11 +588,11 @@ describe('the split-role topology', () => {
     const db = app.gameblade.db;
 
     const libraryDir = path.join(dataDir, 'library');
-    await mkdir(path.join(libraryDir, 'Held'), { recursive: true });
-    await writeFile(path.join(libraryDir, 'Held', 'game.bin'), Buffer.alloc(16, 3));
+    await mkdir(libraryDir, { recursive: true });
 
     /** A library holding one fully hashed game, so it is mesh-eligible. */
-    const seed = (name: string, relPath: string) => {
+    const seed = (name: string, title: string) => {
+      const relPath = `${title}.zip`;
       const libraryId = newId('lib');
       // Its own path: library paths are unique, and on a coordinator they are
       // labels a node's catalog is filed under rather than folders it reads.
@@ -602,10 +606,10 @@ describe('the split-role topology', () => {
           id: gameId,
           libraryId,
           relPath,
-          kind: 'folder',
-          title: relPath,
-          sortTitle: relPath.toLowerCase(),
-          searchTitle: relPath.toLowerCase(),
+          kind: 'archive',
+          title,
+          sortTitle: title.toLowerCase(),
+          searchTitle: title.toLowerCase(),
           sizeBytes: 16,
           fileCount: 1,
         })
@@ -616,7 +620,7 @@ describe('the split-role topology', () => {
         .values({
           id: fileId,
           gameId,
-          relPath: 'game.bin',
+          relPath,
           sizeBytes: 16,
           modifiedAt: new Date().toISOString(),
           sha256: 'a'.repeat(64),

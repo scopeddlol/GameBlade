@@ -6,7 +6,13 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
-import { gameFiles, gameLaunchRules, games, libraries } from '../db/schema.js';
+import {
+  gameArchiveExecutables,
+  gameFiles,
+  gameLaunchRules,
+  games,
+  libraries,
+} from '../db/schema.js';
 
 /**
  * The Launch Rules tab.
@@ -64,13 +70,14 @@ describe('launch rules', () => {
       ['g1', 'Cave Story'],
       ['g2', 'Nothing Runnable'],
       ['g3', 'Already Set'],
+      ['g4', 'Packaged Game'],
     ]) {
       db.insert(games)
         .values({
           id,
           libraryId: 'lib1',
-          relPath: title,
-          kind: 'folder',
+          kind: id === 'g4' ? 'archive' : 'folder',
+          relPath: id === 'g4' ? 'Packaged Game.zip' : title,
           title,
           sortTitle: title.toLowerCase(),
           searchTitle: title.toLowerCase(),
@@ -95,6 +102,12 @@ describe('launch rules', () => {
     }
 
     db.insert(gameLaunchRules).values({ id: 'lnr1', gameId: 'g3', executable: 'Game.exe' }).run();
+    db.insert(gameArchiveExecutables)
+      .values([
+        { gameId: 'g4', path: 'bin/Packaged Game.exe', sizeBytes: 20_000_000 },
+        { gameId: 'g4', path: 'tools/setup.exe', sizeBytes: 30_000_000 },
+      ])
+      .run();
   });
 
   afterAll(async () => {
@@ -121,6 +134,13 @@ describe('launch rules', () => {
     const row = await rowFor('g2');
     expect(row?.candidates).toEqual([]);
     expect(row?.suggestion).toBeNull();
+  });
+
+  it('uses executable candidates a Node reported from inside a ZIP', async () => {
+    const row = await rowFor('g4');
+    expect(row?.candidates.map((candidate) => candidate.path)).toContain('bin/Packaged Game.exe');
+    expect(row?.suggestion).toBe('bin/Packaged Game.exe');
+    expect(row?.needsArchiveScan).toBe(false);
   });
 
   it('lists only the games still waiting on a rule by default', async () => {

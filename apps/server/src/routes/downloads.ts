@@ -5,35 +5,12 @@ import { Readable } from 'node:stream';
 import { MESH_CHUNK_BYTES } from '@gameblade/shared';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { ZipFile } from 'yazl';
 import { downloadEvents, gameFiles, games, libraries, type Game } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { assertRealPathWithin, contentDisposition, resolveWithin } from '../lib/paths.js';
 import { ifRangeMatches, makeETag, parseRange } from '../lib/range.js';
 import { createThrottle } from '../lib/throttle.js';
-
-/** Bounded parallel stat so a folder game with thousands of files stays quick. */
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let cursor = 0;
-
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (;;) {
-      const index = cursor;
-      cursor += 1;
-      if (index >= items.length) return;
-      results[index] = await fn(items[index] as T);
-    }
-  });
-
-  await Promise.all(workers);
-  return results;
-}
 
 export async function downloadRoutes(app: FastifyInstance): Promise<void> {
   const { db, downloadTokens, bandwidth, chunks, config, mesh } = app.gameblade;
@@ -238,9 +215,18 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
         source.destroy(new Error('monthly download quota reached'));
       }
     });
-    source.on('close', () => {
-      finishEvent(eventId, sent, sent >= length);
-    });
+    let eventFinished = false;
+    const settleEvent = (completed: boolean) => {
+      if (eventFinished) return;
+      eventFinished = true;
+      finishEvent(eventId, sent, completed);
+    };
+    // `end` means every requested byte was read. `close` also fires on that
+    // path, but may lag behind an in-process response (and even server close),
+    // so accounting on close alone made completed ZIP transfers briefly read
+    // as zero bytes and could touch an already-closed test/ shutdown database.
+    source.on('end', () => settleEvent(sent >= length));
+    source.on('close', () => settleEvent(sent >= length));
     source.on('error', (error) => {
       request.log.warn({ err: error, path: options.absolutePath }, 'download stream failed');
       reply.raw.destroy();
@@ -252,7 +238,7 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
   /**
    * Stream a file held by a Node through the Coordinator.
    *
-   * The Desktop already asks for fixed 8 MiB ranges concurrently. Each range
+   * The Desktop asks for fixed 10 MiB ZIP ranges concurrently. Each range
    * becomes a small authenticated HTTPS job for a Node, and the Coordinator
    * verifies the full chunk before forwarding it. Whole-file requests use a
    * four-chunk read-ahead window so browsers also receive a continuous stream
@@ -377,7 +363,14 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
         source.destroy(new Error('monthly download quota reached'));
       }
     });
-    source.on('close', () => finishEvent(eventId, sent, sent >= length));
+    let eventFinished = false;
+    const settleEvent = (completed: boolean) => {
+      if (eventFinished) return;
+      eventFinished = true;
+      finishEvent(eventId, sent, completed);
+    };
+    source.on('end', () => settleEvent(sent >= length));
+    source.on('close', () => settleEvent(sent >= length));
     source.on('error', (error) => {
       request.log.warn({ err: error, gameId: options.gameId }, 'proxied Node stream failed');
       reply.raw.destroy();
@@ -386,7 +379,7 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(meter(source));
   }
 
-  /** Archive games, and folder games requested as a single ZIP. */
+  /** The game's single, resumable ZIP package. */
   app.route({
     method: ['GET', 'HEAD'],
     url: '/download/:gameId',
@@ -398,12 +391,13 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       const userId = resolveDownloadUser(request, gameId);
       const { game, libraryPath } = loadGame(gameId);
 
+      if (game.kind !== 'archive' || !game.relPath.toLowerCase().endsWith('.zip')) {
+        throw ApiError.conflict(
+          'GameBlade downloads ZIP packages only. Package this game as .zip and rescan the Node.',
+        );
+      }
+
       if (!config.servesLocalFiles) {
-        if (game.kind !== 'archive') {
-          throw ApiError.conflict(
-            'Folder games are installed through the GameBlade Desktop app so they can resume safely.',
-          );
-        }
         const file = db.select().from(gameFiles).where(eq(gameFiles.gameId, gameId)).get();
         if (!file) throw ApiError.gone('This game has no downloadable file');
         return streamNodeFile(request, reply, {
@@ -418,22 +412,18 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
 
       const gameRoot = resolveWithin(libraryPath, game.relPath);
 
-      if (game.kind === 'archive') {
-        const absolute = await assertRealPathWithin(libraryPath, gameRoot);
-        return streamFile(request, reply, {
-          absolutePath: absolute,
-          downloadName: path.basename(game.relPath),
-          userId,
-          gameId,
-          fileId: null,
-        });
-      }
-
-      return streamFolderAsZip(request, reply, { game, gameRoot, libraryPath, userId });
+      const absolute = await assertRealPathWithin(libraryPath, gameRoot);
+      return streamFile(request, reply, {
+        absolutePath: absolute,
+        downloadName: path.basename(game.relPath),
+        userId,
+        gameId,
+        fileId: null,
+      });
     },
   });
 
-  /** One file out of a folder game — resumable, and the desktop client's path. */
+  /** The ZIP package by its manifest file id — the Desktop's resumable path. */
   app.route({
     method: ['GET', 'HEAD'],
     url: '/download/:gameId/files/:fileId',
@@ -460,7 +450,10 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const gameRoot = resolveWithin(libraryPath, game.relPath);
-      const candidate = game.kind === 'archive' ? gameRoot : resolveWithin(gameRoot, file.relPath);
+      if (game.kind !== 'archive' || !game.relPath.toLowerCase().endsWith('.zip')) {
+        throw ApiError.conflict('Only ZIP packages can be downloaded');
+      }
+      const candidate = gameRoot;
       const absolute = await assertRealPathWithin(libraryPath, candidate);
 
       return streamFile(request, reply, {
@@ -489,119 +482,4 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
 
     return downloadTokens.issue({ userId: request.auth.user.id, gameId });
   });
-
-  /**
-   * Package a folder game into a ZIP on the fly.
-   *
-   * Entries are stored, never deflated: game data is already compressed, so
-   * deflate would burn CPU for nothing, and storing lets yazl compute the exact
-   * archive size up front. That gives a real Content-Length, which is what turns
-   * a browser download into one with a progress bar and an ETA.
-   *
-   * A generated ZIP is deliberately not resumable — clients that need resume use
-   * the per-file routes above via the manifest.
-   */
-  async function streamFolderAsZip(
-    request: FastifyRequest,
-    reply: FastifyReply,
-    options: { game: Game; gameRoot: string; libraryPath: string; userId: string },
-  ): Promise<FastifyReply> {
-    const { game, gameRoot, libraryPath, userId } = options;
-
-    const quota = bandwidth.assertWithinQuota(userId);
-
-    const files = db.select().from(gameFiles).where(eq(gameFiles.gameId, game.id)).all();
-    if (files.length === 0) {
-      throw ApiError.gone('This game has no files to download');
-    }
-
-    // Sizes must match the bytes we actually stream, so re-stat rather than
-    // trusting a scan that may predate an update on disk.
-    const resolved = await mapWithConcurrency(files, 16, async (file) => {
-      try {
-        const candidate = resolveWithin(gameRoot, file.relPath);
-        const absolute = await assertRealPathWithin(libraryPath, candidate);
-        const info = await stat(absolute);
-        if (!info.isFile()) return null;
-        return { absolute, relPath: file.relPath, size: info.size, mtime: info.mtime };
-      } catch {
-        return null;
-      }
-    });
-
-    const usable = resolved.filter((f): f is NonNullable<typeof f> => f !== null);
-    if (usable.length === 0) {
-      throw ApiError.gone('None of this game’s files are readable');
-    }
-
-    const zip = new ZipFile();
-    for (const file of usable) {
-      // yazl stats each file itself; passing an explicit size is not supported
-      // by addFile and would be ignored.
-      zip.addFile(file.absolute, file.relPath, {
-        compress: false,
-        mtime: file.mtime,
-      });
-    }
-
-    // yazl can only report a final size once every entry has been stat-ed, and
-    // it stays silent if it cannot work one out. Bound the wait so a slow or
-    // unusual filesystem degrades to a chunked response instead of hanging.
-    const finalSize = await new Promise<number>((resolve) => {
-      let settled = false;
-      const done = (size: number) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(size);
-      };
-      const timer = setTimeout(() => done(-1), 10_000);
-      timer.unref?.();
-      zip.end({ forceZip64Format: false }, (size: number) => done(size));
-    });
-
-    reply
-      .header('Content-Type', 'application/zip')
-      .header('Content-Disposition', contentDisposition(`${game.title}.zip`))
-      .header('Cache-Control', 'private, no-transform')
-      .header('X-Accel-Buffering', 'no')
-      // Resuming a generated archive is not supported; say so explicitly.
-      .header('Accept-Ranges', 'none');
-
-    // yazl reports -1 when it cannot predict the size; fall back to chunked.
-    if (finalSize >= 0) {
-      reply.header('Content-Length', String(finalSize));
-    }
-
-    const output: Readable = zip.outputStream;
-
-    if (request.method === 'HEAD') {
-      output.destroy();
-      return reply.send();
-    }
-
-    const eventId = recordEvent(
-      userId,
-      game.id,
-      null,
-      request.headers.authorization ? 'desktop' : 'web',
-    );
-
-    let sent = 0;
-    output.on('data', (chunk: Buffer) => {
-      sent += chunk.length;
-      if (quota.quotaBytes > 0 && quota.usedBytes + sent >= quota.quotaBytes) {
-        output.destroy(new Error('monthly download quota reached'));
-      }
-    });
-    output.on('close', () => {
-      finishEvent(eventId, sent, finalSize < 0 ? true : sent >= finalSize);
-    });
-    output.on('error', (error: Error) => {
-      request.log.warn({ err: error, game: game.id }, 'zip stream failed');
-      reply.raw.destroy();
-    });
-
-    return reply.send(meter(output));
-  }
 }

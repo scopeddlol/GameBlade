@@ -1228,4 +1228,20 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: '0029_zip_download_packages',
+    sql: /* sql */ `
+      -- A Coordinator does not have the ZIPs stored on its Nodes, but launch
+      -- rule setup still needs to know which executables are inside them. The
+      -- Node reads only the ZIP central directory and reports this small index
+      -- with the ordinary catalog; no package bytes are retained here.
+      CREATE TABLE game_archive_executables (
+        game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        PRIMARY KEY (game_id, path)
+      ) WITHOUT ROWID;
+      CREATE INDEX game_archive_executables_game_idx ON game_archive_executables(game_id);
+    `,
+  },
 ];

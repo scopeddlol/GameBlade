@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../config.js';
 import { createDb, type Db, type DbHandle } from '../db/index.js';
 import {
+  gameArchiveExecutables,
   gameFileChunks,
   gameFiles,
   games,
@@ -242,6 +243,7 @@ describe('CatalogIngestService', () => {
             sizeBytes: 1_024,
             modifiedAt: '2026-01-01T00:00:00.000Z',
             sha256: 'a'.repeat(64),
+            chunkBytes: MESH_CHUNK_BYTES,
             chunks: [{ index: 0, sha256: 'b'.repeat(64), sizeBytes: 1_024 }],
           },
         ],
@@ -283,6 +285,7 @@ describe('CatalogIngestService', () => {
             sizeBytes: 1_024,
             modifiedAt: '2026-01-01T00:00:00.000Z',
             sha256: 'a'.repeat(64),
+            chunkBytes: MESH_CHUNK_BYTES,
             chunks: [{ index: 0, sha256: 'b'.repeat(64), sizeBytes: 1_024 }],
           },
         ],
@@ -305,6 +308,7 @@ describe('CatalogIngestService', () => {
           sizeBytes: 1_024,
           modifiedAt: '2026-01-01T00:00:00.000Z',
           sha256: 'a'.repeat(64),
+          chunkBytes: MESH_CHUNK_BYTES,
           chunks: [{ index: 0, sha256: 'b'.repeat(64), sizeBytes: 1_024 }],
         },
       ],
@@ -315,6 +319,25 @@ describe('CatalogIngestService', () => {
 
     expect(settled.unchanged).toBe(1);
     expect(settled.updated).toBe(0);
+  });
+
+  it('does not trust chunk hashes from an older Node that omitted its grid', () => {
+    ingest.ingest(nodeId, [
+      reported({
+        files: [
+          {
+            relPath: 'game.bin',
+            sizeBytes: 1_024,
+            modifiedAt: '2026-01-01T00:00:00.000Z',
+            sha256: 'a'.repeat(64),
+            chunks: [{ index: 0, sha256: 'b'.repeat(64), sizeBytes: 1_024 }],
+          },
+        ],
+      }),
+    ]);
+
+    expect(db.select().from(gameFiles).get()?.chunkBytes).toBeNull();
+    expect(db.select().from(gameFileChunks).all()).toHaveLength(0);
   });
 
   it('replaces a game’s files rather than accumulating them', () => {
@@ -329,6 +352,29 @@ describe('CatalogIngestService', () => {
     const files = db.select().from(gameFiles).all();
     expect(files).toHaveLength(1);
     expect(files[0]?.relPath).toBe('other.bin');
+  });
+
+  it('keeps launch candidates reported from a ZIP even when its file row is unchanged', () => {
+    const archive = reported({
+      relPath: 'Demo Game.zip',
+      kind: 'archive',
+      files: [
+        {
+          relPath: 'Demo Game.zip',
+          sizeBytes: 1_024,
+          modifiedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      executables: [{ path: 'bin/Demo Game.exe', sizeBytes: 512 }],
+    });
+
+    ingest.ingest(nodeId, [archive]);
+    const settled = ingest.ingest(nodeId, [archive]);
+
+    expect(settled.unchanged).toBe(1);
+    expect(db.select().from(gameArchiveExecutables).all()).toEqual([
+      expect.objectContaining({ path: 'bin/Demo Game.exe', sizeBytes: 512 }),
+    ]);
   });
 
   /* ------------------------------------------------------------- refusals */

@@ -555,7 +555,7 @@ function jobs(status: NodeStatusSnapshot): string {
 
         <div class="job">
           <h3>Hash the files</h3>
-          <p>Reads every byte of every game and records a hash per 8 MiB piece. Nothing on
+          <p>Reads every ZIP package and records a hash per 10 MiB piece. Nothing on
              this node can be served over the mesh until its game is hashed, and on a real
              archive the first pass takes hours — so it is worth starting now rather than
              waiting for the timer.</p>

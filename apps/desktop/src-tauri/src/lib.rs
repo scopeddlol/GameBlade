@@ -669,9 +669,8 @@ async fn list_installed(state: State<'_, AppState>) -> AppResult<Vec<InstalledGa
 
 /// Turns a completed download into an installed game.
 ///
-/// Archive games are extracted and the archive deleted; folder games are
-/// already laid out on disk. Either way the executable is resolved once, here,
-/// so launching later never has to guess.
+/// The downloaded ZIP64 package is extracted and deleted. The executable is
+/// resolved once here, so launching later never has to guess.
 #[tauri::command]
 async fn finish_install(
     state: State<'_, AppState>,

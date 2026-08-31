@@ -48,8 +48,8 @@ describe('bandwidth limits and analytics', () => {
     libraryDir = path.join(dataDir, 'library');
 
     // A real 256 KB file, so a download moves measurable bytes.
-    await mkdir(path.join(libraryDir, 'Demo Game'), { recursive: true });
-    await writeFile(path.join(libraryDir, 'Demo Game', 'game.bin'), Buffer.alloc(256 * 1024, 3));
+    await mkdir(libraryDir, { recursive: true });
+    await writeFile(path.join(libraryDir, 'Demo Game.zip'), Buffer.alloc(256 * 1024, 3));
 
     app = await buildApp(
       loadConfig({
@@ -91,8 +91,8 @@ describe('bandwidth limits and analytics', () => {
       .values({
         id: gameId,
         libraryId,
-        relPath: 'Demo Game',
-        kind: 'folder',
+        relPath: 'Demo Game.zip',
+        kind: 'archive',
         title: 'Demo Game',
         sortTitle: 'demo game',
         searchTitle: 'demo game',
@@ -106,7 +106,7 @@ describe('bandwidth limits and analytics', () => {
       .values({
         id: newId('gfl'),
         gameId,
-        relPath: 'game.bin',
+        relPath: 'Demo Game.zip',
         sizeBytes: 256 * 1024,
         modifiedAt: new Date().toISOString(),
       })

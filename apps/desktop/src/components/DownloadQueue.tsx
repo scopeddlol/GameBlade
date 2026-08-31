@@ -71,6 +71,7 @@ export function DownloadQueue({
                   ? (download.downloaded_bytes / download.total_bytes) * 100
                   : 0;
               const active = download.status === 'downloading' || download.status === 'queued';
+              const installing = download.status === 'installing';
               const paused = download.status === 'paused';
 
               return (
@@ -117,7 +118,7 @@ export function DownloadQueue({
                     ) : null}
                   </p>
 
-                  {download.current_file && active ? (
+                  {download.current_file && (active || installing) ? (
                     <p className={clsx('muted', 'small', 'truncate')}>{download.current_file}</p>
                   ) : null}
 
@@ -126,7 +127,7 @@ export function DownloadQueue({
                   {download.error ? <p className="error small">{download.error}</p> : null}
 
                   <div className="download-actions">
-                    {active ? (
+                    {installing ? null : active ? (
                       <>
                         <button
                           type="button"

@@ -1,5 +1,16 @@
 # GameBlade Changelog
 
+## Version 0.8.0 - August 31, 2026
+
+### ZIP-first downloads and fast automatic installs
+
+- Every installable game is now one `.zip`/ZIP64 package. Folder entries remain in the catalog so curated metadata and launch rules survive conversion, but they are not offered for download.
+- ZIP packages are hashed and transferred exclusively on a fixed 10 MiB grid. Old 8 MiB hashes and resume journals are detected and rebuilt rather than mixed with the new boundaries.
+- The Desktop downloads several package chunks concurrently through the Coordinator, verifies each one in flight, resumes at chunk boundaries, and automatically starts installation when the package is complete.
+- ZIP extraction uses up to eight workers with independent decompression state and 1 MiB I/O buffers. Unsafe paths and symlinks cannot escape the install folder.
+- Nodes report executable candidates from ZIP central directories so launch-rule setup still works on a split Coordinator without copying or extracting game data there.
+- The old non-resumable, on-demand folder-to-ZIP HTTP path and loose-file download fallback were removed.
+
 ## Version 0.7.1 - August 31, 2026
 
 ### Downloads start immediately and keep every connection busy

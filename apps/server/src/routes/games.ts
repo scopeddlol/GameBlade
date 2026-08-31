@@ -123,6 +123,11 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     if (game.missingAt) {
       throw ApiError.gone('This game is no longer present on disk');
     }
+    if (game.kind !== 'archive' || !game.relPath.toLowerCase().endsWith('.zip')) {
+      throw ApiError.conflict(
+        'GameBlade installs ZIP packages only. Store this game as a .zip archive and rescan the Node.',
+      );
+    }
 
     // The store already shows this one as coming soon rather than offering a
     // button, so reaching here means a stale page or a scripted client. Saying
@@ -134,6 +139,9 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const files = db.select().from(gameFiles).where(eq(gameFiles.gameId, id)).all();
+    if (files.length !== 1 || !files[0]?.relPath.toLowerCase().endsWith('.zip')) {
+      throw ApiError.conflict('This game does not have one valid ZIP package to install');
+    }
     const issued = downloadTokens.issue({ userId: context.user.id, gameId: id });
 
     // Installing implies wanting it in the library, so the two never drift.
@@ -149,8 +157,8 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     const body: DownloadManifest = {
       gameId: game.id,
       title: game.title,
-      kind: game.kind,
-      totalBytes: game.sizeBytes,
+      kind: 'archive',
+      totalBytes: files[0].sizeBytes,
       files: files.map((file) => ({
         id: file.id,
         path: file.relPath,

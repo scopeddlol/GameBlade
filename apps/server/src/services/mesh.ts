@@ -616,7 +616,7 @@ export class MeshService {
   /* ------------------------------------------------------ HTTPS chunk proxy */
 
   /**
-   * Fetch one verified 8 MiB piece through an operator node's outbound HTTPS
+   * Fetch one verified 10 MiB ZIP piece through an operator node's outbound HTTPS
    * connection.
    *
    * Desktop already opens several byte-range requests concurrently. Each one

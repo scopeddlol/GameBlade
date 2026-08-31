@@ -1,7 +1,14 @@
 import { MESH_CHUNK_BYTES, type ReportedGame, type ReportedFile } from '@gameblade/shared';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { gameFileChunks, gameFiles, games, libraries, meshNodes } from '../db/schema.js';
+import {
+  gameArchiveExecutables,
+  gameFileChunks,
+  gameFiles,
+  games,
+  libraries,
+  meshNodes,
+} from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { parseTitle, toSearchTitle, toSortTitle } from '../lib/titles.js';
@@ -30,6 +37,11 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 interface FileWork {
   gameId: string;
   files: ReportedFile[];
+}
+
+interface ExecutableWork {
+  gameId: string;
+  executables: NonNullable<ReportedGame['executables']>;
 }
 
 /**
@@ -144,17 +156,23 @@ export class CatalogIngestService {
     const inserts: (typeof games.$inferInsert)[] = [];
     const updates: { id: string; item: ReportedGame }[] = [];
     const fileWork: FileWork[] = [];
+    const executableWork: ExecutableWork[] = [];
 
     for (const item of reported) {
       seen.add(item.relPath);
       const current = existing.get(item.relPath);
 
       if (current) {
+        if (item.executables) {
+          executableWork.push({ gameId: current.id, executables: item.executables });
+        }
         // What the node says it has hashed, against what is stored. Equal is
         // the steady state — a node reporting the same library every five
         // minutes must not rewrite every file row for ever — and different in
         // either direction is work that has happened since the last report.
-        const reportedChunked = item.files.filter((file) => file.chunks?.length).length;
+        const reportedChunked = item.files.filter(
+          (file) => file.chunkBytes === MESH_CHUNK_BYTES && file.chunks?.length,
+        ).length;
         const storedChunked = chunkedFiles.get(current.id) ?? 0;
 
         const unchanged =
@@ -194,6 +212,7 @@ export class CatalogIngestService {
         scannedAt: now,
       });
       fileWork.push({ gameId: id, files: item.files });
+      if (item.executables) executableWork.push({ gameId: id, executables: item.executables });
       result.added += 1;
     }
 
@@ -231,6 +250,7 @@ export class CatalogIngestService {
       }
 
       this.replaceFiles(tx, fileWork);
+      this.replaceArchiveExecutables(tx, executableWork);
       this.markMissing(tx, library.id, vanished, now);
 
       tx.update(meshNodes)
@@ -277,7 +297,9 @@ export class CatalogIngestService {
     for (const { gameId, files } of work) {
       for (const file of files) {
         const id = newId('gfl');
-        const chunked = Boolean(file.chunks?.length);
+        // A pre-v0.8 Node omitted the grid and used 8 MiB. Never relabel those
+        // hashes as the current 10 MiB layout during a rolling upgrade.
+        const chunked = file.chunkBytes === MESH_CHUNK_BYTES && Boolean(file.chunks?.length);
 
         fileRows.push({
           id,
@@ -290,7 +312,7 @@ export class CatalogIngestService {
           chunkBytes: chunked ? MESH_CHUNK_BYTES : null,
         });
 
-        for (const piece of file.chunks ?? []) {
+        for (const piece of chunked ? (file.chunks ?? []) : []) {
           chunkRows.push({
             fileId: id,
             chunkIndex: piece.index,
@@ -307,6 +329,27 @@ export class CatalogIngestService {
     for (const batch of batched(chunkRows)) {
       tx.insert(gameFileChunks).values(batch).run();
     }
+  }
+
+  /** Replace the tiny launch-rule index reported from each ZIP central directory. */
+  private replaceArchiveExecutables(tx: Tx, work: ExecutableWork[]): void {
+    if (work.length === 0) return;
+
+    for (const batch of batched(
+      work.map((entry) => entry.gameId),
+      400,
+    )) {
+      tx.delete(gameArchiveExecutables).where(inArray(gameArchiveExecutables.gameId, batch)).run();
+    }
+
+    const rows = work.flatMap(({ gameId, executables }) =>
+      executables.map((candidate) => ({
+        gameId,
+        path: candidate.path,
+        sizeBytes: candidate.sizeBytes,
+      })),
+    );
+    for (const batch of batched(rows)) tx.insert(gameArchiveExecutables).values(batch).run();
   }
 
   /**

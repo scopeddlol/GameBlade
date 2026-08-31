@@ -273,8 +273,9 @@ export function startSchedules(app: FastifyInstance): () => void {
         if (!(await reporter.ensureRegistered())) return WAITING_INTERVAL_MS;
         await adoptOnce();
 
-        const games = reporter.collect().length;
-        const ok = await reporter.report();
+        const catalog = await reporter.collect();
+        const games = catalog.length;
+        const ok = await reporter.report(catalog);
         nodeStatus.record({
           ok,
           games,

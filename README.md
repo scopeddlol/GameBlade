@@ -29,9 +29,9 @@ file, no build step, and everything below is covered there in depth.
   `gameblade-coordinator` holds the database and the panel; `gameblade-node`s
   hold the games and supply verified chunks to the Coordinator over outbound
   HTTPS. The Coordinator streams those chunks to clients over HTTPS. Nodes
-  need no inbound port and set themselves up from a local page. The Desktop
-  keeps its connection budget busy across both files and chunks, so games with
-  thousands of small files start just as promptly as one large archive.
+  need no inbound port and set themselves up from a local page. Every game is
+  distributed as one ZIP64 package, split into verified 10 MiB chunks so all
+  Desktop connections start immediately and stay busy.
 
 | Piece                        | Who uses it   | What it does                                                           |
 | ---------------------------- | ------------- | ---------------------------------------------------------------------- |
@@ -68,8 +68,16 @@ and invite people from **Admin → Players → Invites**.
 > certainly owned by root while the container runs as uid 1000:
 > `sudo chown -R 1000:1000 ./data`
 
-Anything at the top level of a library root is one game — a directory or an
-archive. Nested folders are that game's files, not separate games.
+Anything at the top level of a library root is one catalog entry. Downloads are
+intentionally ZIP-only: put each installable game in one top-level `.zip` file.
+Folders remain visible so metadata and launch rules are not lost while a library
+is being converted, but the Store marks them as not ready to install.
+
+ZIP packages may be larger than 4 GB; GameBlade uses ZIP64, downloads them in
+parallel 10 MiB ranges, resumes interrupted chunks, verifies each chunk at the
+Node, Coordinator and Desktop, then automatically unpacks the game. The Node
+reads executable names from the ZIP central directory, so launch-rule setup
+continues to work without extracting the archive on the server.
 
 A node can hold more than one library. Mount each drive under `/libraries` in
 the node's compose file and the directory name becomes the library's name:

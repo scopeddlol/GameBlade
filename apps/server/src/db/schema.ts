@@ -413,7 +413,7 @@ export const meshNodeEndpoints = sqliteTable(
  * Which games a node claims a complete copy of.
  *
  * Deliberately per game rather than per chunk: per-chunk would be a row per
- * 8 MiB on the machine with the least disk, and the chunk hashes already make
+ * 10 MiB on the machine with the least disk, and the chunk hashes already make
  * an over-claim harmless — bytes that do not verify are rejected regardless of
  * what the index promised.
  */
@@ -782,6 +782,28 @@ export const gameLaunchRules = sqliteTable(
     createdAt: text('created_at').notNull().default(now),
   },
   (t) => [index('game_launch_rules_game_idx').on(t.gameId)],
+);
+
+/**
+ * Executables discovered inside a ZIP by the machine that actually holds it.
+ *
+ * A split Coordinator cannot open a Node's archive to inspect its central
+ * directory. Keeping this tiny derived index beside the catalog lets launch
+ * rule setup remain identical without copying any game bytes to the server.
+ */
+export const gameArchiveExecutables = sqliteTable(
+  'game_archive_executables',
+  {
+    gameId: text('game_id')
+      .notNull()
+      .references(() => games.id, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.gameId, t.path] }),
+    index('game_archive_executables_game_idx').on(t.gameId),
+  ],
 );
 
 /* ------------------------------------------------------------ social content */

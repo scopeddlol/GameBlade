@@ -4,14 +4,34 @@ import type { Game } from '../db/schema.js';
 
 /** A catalog row with only the fields the verdict actually reads. */
 function game(overrides: Partial<Game> = {}): Game {
-  return { id: 'gam_1', missingAt: null, ...overrides } as Game;
+  return {
+    id: 'gam_1',
+    kind: 'archive',
+    relPath: 'Game.zip',
+    missingAt: null,
+    ...overrides,
+  } as Game;
 }
 
 describe('describeAvailability', () => {
-  it('offers a game whose files are on this server, hashed or not', () => {
-    const verdict = describeAvailability(game(), { files: 12, unhashed: 12 }, null);
-    expect(verdict.state).toBe('ready');
-    expect(verdict.note).toBeNull();
+  it('waits for the ZIP hash grid even when the server holds the file', () => {
+    const verdict = describeAvailability(game(), { files: 1, unhashed: 1 }, null);
+    expect(verdict.state).toBe('coming-soon');
+    expect(verdict.note).toContain('1 of 1');
+  });
+
+  it('offers a fully hashed ZIP held by this server', () => {
+    expect(describeAvailability(game(), { files: 1, unhashed: 0 }, null).state).toBe('ready');
+  });
+
+  it('keeps folder games in the catalog but never offers them as downloads', () => {
+    const verdict = describeAvailability(
+      game({ kind: 'folder', relPath: 'Open Folder' }),
+      { files: 20, unhashed: 0 },
+      null,
+    );
+    expect(verdict.state).toBe('coming-soon');
+    expect(verdict.note).toContain('.zip');
   });
 
   it('holds back a game whose files have gone missing', () => {

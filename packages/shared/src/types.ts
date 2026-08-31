@@ -162,9 +162,10 @@ export interface GameFileEntry {
 }
 
 /**
- * Describes everything a client needs to download a game. Folder games list
- * every file so a client can fetch them in parallel and resume individually;
- * archive games contain exactly one entry.
+ * Describes the one ZIP64 package a client installs. The source catalog may
+ * still contain folder games so metadata and launch rules survive a migration,
+ * but installable manifests always contain exactly one `.zip` file cut into
+ * fixed, independently verifiable chunks.
  */
 export interface DownloadManifest {
   gameId: string;

@@ -18,13 +18,15 @@
  * Bytes per chunk, everywhere: the hashes the server records, the ranges the
  * client asks for, and the units a node advertises.
  *
- * This matches the download engine's existing work-queue chunk size on purpose.
+ * Ten MiB keeps request and proxy overhead low for the single large ZIP every
+ * game is distributed as, while still leaving enough pieces for several HTTPS
+ * connections to stay busy on ordinary game sizes.
  * The engine already cuts transfers here, so aligning content addressing to the
  * same boundary means a chunk it fetches is exactly a chunk it can verify —
  * no re-hashing across a different grid, and a failed chunk retried against a
  * different source lines up byte for byte with the one that failed.
  */
-export const MESH_CHUNK_BYTES = 8 * 1024 * 1024;
+export const MESH_CHUNK_BYTES = 10 * 1024 * 1024;
 
 /** How many chunks a file of this size is cut into. */
 export function chunkCountFor(sizeBytes: number): number {

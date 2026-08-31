@@ -3,7 +3,7 @@
 //!
 //! Design notes, because three decisions here shape everything else:
 //!
-//! * Files are cut into fixed 8 MiB chunks and any idle connection takes the
+//! * ZIP packages are cut into fixed 10 MiB chunks and any idle connection takes the
 //!   next unfinished one. Fixed segment counts made the last segment a
 //!   straggler that throttled the whole file; small chunks make slow
 //!   connections irrelevant because their remainder is simply picked up by
@@ -37,7 +37,7 @@ use tokio::sync::{Mutex, Semaphore};
 /// Chunk size for the dynamic work queue. Small enough that a stalled
 /// connection strands little, large enough that per-chunk overhead (a request
 /// and a journal entry each) stays negligible even for a 100 GB archive.
-const CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+const CHUNK_BYTES: u64 = 10 * 1024 * 1024;
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(400);
 
@@ -139,6 +139,37 @@ fn chunk_hashes_for(file: &ManifestFile, chunk_bytes: Option<u64>) -> Option<Vec
     Some(chunks.clone())
 }
 
+/// The v0.8 download contract is deliberately narrow: one ZIP package, one
+/// 10 MiB hash grid, no per-file fallback. Rejecting anything else before a
+/// destination file is created prevents an older or half-prepared catalog from
+/// turning into an install that can only fail after gigabytes have moved.
+fn validate_package_manifest(manifest: &DownloadManifest) -> AppResult<()> {
+    if manifest.kind != "archive" || manifest.files.len() != 1 {
+        return Err(AppError::Other(
+            "This game is not packaged as one ZIP archive yet".to_string(),
+        ));
+    }
+
+    let package = &manifest.files[0];
+    if !package.path.to_ascii_lowercase().ends_with(".zip") {
+        return Err(AppError::Other(
+            "GameBlade can only install .zip game packages".to_string(),
+        ));
+    }
+    if manifest.total_bytes != package.size_bytes {
+        return Err(AppError::Other(
+            "The ZIP package manifest has an invalid size".to_string(),
+        ));
+    }
+    if chunk_hashes_for(package, manifest.chunk_bytes).is_none() {
+        return Err(AppError::Other(
+            "This ZIP is still being prepared into verified 10 MiB chunks".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 /* ------------------------------------------------------------------- tokens */
 
 /// The signed download token currently authorising this game's transfers.
@@ -205,7 +236,7 @@ impl Tokens {
 ///
 /// `done` holds completed chunk indexes, always kept sorted. One journal per
 /// file, named `<file>.gbpart`, rewritten on every chunk completion: a few
-/// kilobytes every 8 MiB is nothing, and replacing a small file cannot leave
+/// kilobytes every 10 MiB is nothing, and replacing a small file cannot leave
 /// half-old-half-new contents behind the way appending to a log can.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChunkJournal {
@@ -219,7 +250,9 @@ struct ChunkJournal {
     done: Vec<u64>,
 }
 
-const JOURNAL_VERSION: u32 = 2;
+// Version 3 is the ZIP-only 10 MiB grid. Version 2 journals describe 8 MiB
+// boundaries and must never be accepted against the new package hashes.
+const JOURNAL_VERSION: u32 = 3;
 
 impl ChunkJournal {
     fn fresh(size: u64) -> Self {
@@ -338,6 +371,9 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
         }
     }
     let manifest = manifest.expect("the loop above either sets this or returns");
+    if let Err(error) = validate_package_manifest(&manifest) {
+        return Outcome::Fatal(error);
+    }
 
     let tokens = Arc::new(Mutex::new(Tokens::from_manifest(&manifest)));
     let downloaded = Arc::new(AtomicU64::new(0));
@@ -413,11 +449,10 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
         })
     };
 
-    // Keep the whole connection budget useful across files. Previously files
-    // were processed one at a time, so a game made of thousands of sub-8 MiB
-    // files silently collapsed to one connection no matter what the setting
-    // said. A bounded file pipeline gives small-file games the same immediate
-    // parallel start that one large, chunked file already had.
+    // The manifest now contains one ZIP, whose chunk work queue keeps the whole
+    // connection budget busy. The bounded file pipeline remains for journal
+    // compatibility with an interrupted older queue, though new manifests
+    // always have one entry.
     let parallel_files = file_parallelism(job.connections, manifest.files.len());
     if !manifest.files.is_empty() {
         let mut guard = job.state.lock().await;
@@ -1380,10 +1415,45 @@ mod tests {
             .collect()
     }
 
+    fn package_manifest() -> DownloadManifest {
+        DownloadManifest {
+            game_id: "g1".to_string(),
+            title: "Game".to_string(),
+            kind: "archive".to_string(),
+            total_bytes: CHUNK_BYTES,
+            files: vec![ManifestFile {
+                path: "Game.zip".to_string(),
+                ..manifest_file(CHUNK_BYTES, Some(refs(1)))
+            }],
+            token: String::new(),
+            expires_at: None,
+            chunk_bytes: Some(CHUNK_BYTES),
+            origin_available: true,
+            sources: None,
+        }
+    }
+
+    #[test]
+    fn only_one_fully_chunked_zip_is_an_installable_manifest() {
+        assert!(validate_package_manifest(&package_manifest()).is_ok());
+
+        let mut folder = package_manifest();
+        folder.kind = "folder".to_string();
+        assert!(validate_package_manifest(&folder).is_err());
+
+        let mut old_grid = package_manifest();
+        old_grid.chunk_bytes = Some(CHUNK_BYTES - 1);
+        assert!(validate_package_manifest(&old_grid).is_err());
+
+        let mut loose_file = package_manifest();
+        loose_file.files[0].path = "Game.exe".to_string();
+        assert!(validate_package_manifest(&loose_file).is_err());
+    }
+
     /// A grid this build does not cut on must not be used to judge bytes.
     ///
     /// If a later server hashes on, say, 4 MiB and this downloader keeps
-    /// fetching 8 MiB ranges, then "chunk 1" means different bytes to each
+    /// fetching 10 MiB ranges, then "chunk 1" means different bytes to each
     /// side. Verifying anyway would reject perfectly good data — or, worse,
     /// accept a piece whose hash happened to line up.
     #[test]

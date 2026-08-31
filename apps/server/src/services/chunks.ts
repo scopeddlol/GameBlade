@@ -148,6 +148,8 @@ export class ChunkService {
       .where(
         and(
           isNull(games.missingAt),
+          eq(games.kind, 'archive'),
+          sql`lower(${games.relPath}) like '%.zip'`,
           gt(gameFiles.sizeBytes, 0),
           or(isNull(gameFiles.chunkBytes), ne(gameFiles.chunkBytes, MESH_CHUNK_BYTES)),
         ),
@@ -217,6 +219,15 @@ export class ChunkService {
    * so the answer is all or nothing.
    */
   isGameChunked(gameId: string): boolean {
+    const packageGame = this.db
+      .select({ kind: games.kind, relPath: games.relPath })
+      .from(games)
+      .where(eq(games.id, gameId))
+      .get();
+    if (packageGame?.kind !== 'archive' || !packageGame.relPath.toLowerCase().endsWith('.zip')) {
+      return false;
+    }
+
     const files = this.db
       .select({
         id: gameFiles.id,
@@ -247,6 +258,8 @@ export class ChunkService {
       .where(
         and(
           isNull(games.missingAt),
+          eq(games.kind, 'archive'),
+          sql`lower(${games.relPath}) like '%.zip'`,
           // A zero-byte file has no chunks and never will, so a game made only
           // of those is finished rather than pending.
           gt(gameFiles.sizeBytes, 0),
@@ -423,6 +436,9 @@ export class ChunkService {
 
     if (!row) throw ApiError.notFound('Game not found');
     if (row.game.missingAt) throw ApiError.gone('This game is no longer present on disk');
+    if (row.game.kind !== 'archive' || !row.game.relPath.toLowerCase().endsWith('.zip')) {
+      throw ApiError.conflict('Only .zip game packages are chunk-hashed for downloads');
+    }
 
     const files = this.db.select().from(gameFiles).where(eq(gameFiles.gameId, gameId)).all();
 

@@ -63,6 +63,7 @@ import type { MediaStore } from '../services/media.js';
 import { toPublicUser } from '../auth/service.js';
 import {
   discordReactionRoles,
+  gameArchiveExecutables,
   gameAchievementRules,
   gameFiles,
   gameLaunchRules,
@@ -597,6 +598,19 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     if (!row) throw ApiError.notFound('Game not found');
 
     if (row.game.kind === 'archive') {
+      const reported = db
+        .select({ path: gameArchiveExecutables.path, sizeBytes: gameArchiveExecutables.sizeBytes })
+        .from(gameArchiveExecutables)
+        .where(eq(gameArchiveExecutables.gameId, id))
+        .all();
+      if (reported.length > 0) {
+        return {
+          candidates: sortCandidates(
+            reported.filter((entry) => isLikelyGameExecutable(entry.path)),
+          ),
+        };
+      }
+
       const absolute = path.join(row.libraryPath, row.game.relPath);
       try {
         return { candidates: sortCandidates(await listZipExecutables(absolute)) };
@@ -687,6 +701,21 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         list.push({ path: file.relPath, sizeBytes: file.sizeBytes });
         byGame.set(file.gameId, list);
       }
+
+      for (const candidate of db
+        .select({
+          gameId: gameArchiveExecutables.gameId,
+          path: gameArchiveExecutables.path,
+          sizeBytes: gameArchiveExecutables.sizeBytes,
+        })
+        .from(gameArchiveExecutables)
+        .where(inArray(gameArchiveExecutables.gameId, ids))
+        .all()) {
+        if (!isLikelyGameExecutable(candidate.path)) continue;
+        const list = byGame.get(candidate.gameId) ?? [];
+        list.push({ path: candidate.path, sizeBytes: candidate.sizeBytes });
+        byGame.set(candidate.gameId, list);
+      }
     }
 
     const items: LaunchRuleRow[] = rows.map((row) => {
@@ -698,7 +727,11 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         rule: rules.get(row.id) ?? null,
         candidates,
         suggestion: suggestExecutable(row.title, candidates),
-        needsArchiveScan: row.kind === 'archive' && candidates.length === 0,
+        // A standalone server can inspect an old ZIP on demand. A Coordinator
+        // has no archive to open; its Node will fill this list on the next
+        // catalog report instead of sending the UI on an impossible request.
+        needsArchiveScan:
+          row.kind === 'archive' && candidates.length === 0 && config.servesLocalFiles,
       };
     });
 

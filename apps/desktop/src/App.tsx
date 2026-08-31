@@ -211,9 +211,25 @@ function Shell() {
       // A finished download becomes an installed game without the user having
       // to do anything, which is what makes install one click rather than two.
       if (event.payload.status === 'completed') {
+        setDownloads((current) =>
+          current.map((download) =>
+            download.game_id === event.payload.game_id
+              ? { ...download, status: 'installing', current_file: 'Unpacking game files…' }
+              : download,
+          ),
+        );
         void ipc
           .finishInstall(event.payload.game_id, event.payload.title, event.payload.destination)
-          .then(() => queryClient.invalidateQueries({ queryKey: ['installed'] }))
+          .then(() => {
+            setDownloads((current) =>
+              current.map((download) =>
+                download.game_id === event.payload.game_id
+                  ? { ...download, status: 'completed', current_file: null }
+                  : download,
+              ),
+            );
+            return queryClient.invalidateQueries({ queryKey: ['installed'] });
+          })
           .catch((error: unknown) => {
             // A silently swallowed failure here (a corrupt archive, a full
             // disk, a permissions error) used to leave the download entry

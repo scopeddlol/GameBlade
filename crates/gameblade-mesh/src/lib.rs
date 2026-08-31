@@ -2,7 +2,7 @@
 //!
 //! Nodes hold an authenticated outbound HTTPS poll to the Coordinator. When a
 //! Desktop requests a byte range, the Node reads and verifies the corresponding
-//! 8 MiB chunk, posts it to the Coordinator, and the Coordinator streams it to
+//! 10 MiB chunk, posts it to the Coordinator, and the Coordinator streams it to
 //! the Desktop over the same public HTTPS service used by the rest of GameBlade.
 
 pub mod agent;
@@ -18,7 +18,7 @@ pub use identity::NodeIdentity;
 /// between them without anything noticing until a download was already corrupt.
 /// The manifest carries the server's value and the client refuses to use chunk
 /// hashes when the two disagree.
-pub const MESH_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+pub const MESH_CHUNK_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Where a node's games are mounted, and where its identity is kept.
 ///

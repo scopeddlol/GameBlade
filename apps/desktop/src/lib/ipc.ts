@@ -28,7 +28,14 @@ export interface UserInfo {
 }
 
 export type DownloadStatus =
-  'queued' | 'downloading' | 'verifying' | 'completed' | 'failed' | 'canceled' | 'paused';
+  | 'queued'
+  | 'downloading'
+  | 'verifying'
+  | 'installing'
+  | 'completed'
+  | 'failed'
+  | 'canceled'
+  | 'paused';
 
 export interface DownloadSourceState {
   node_id: string | null;

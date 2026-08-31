@@ -87,7 +87,7 @@
   <body>
     <main>
       <h1>GameBlade</h1>
-      <p class="muted">Current deployment and operator guide for version 0.7.</p>
+      <p class="muted">Current deployment and operator guide for version 0.8.</p>
 
       <h2 id="architecture">Architecture</h2>
       <p>
@@ -101,13 +101,13 @@
       </div>
       <p>
         For each Desktop byte range, the Coordinator selects a Node known to hold the game and
-        queues an 8 MiB chunk request. The Node reads and verifies the chunk, posts it to the
+        queues a 10 MiB ZIP chunk request. The Node reads and verifies the chunk, posts it to the
         Coordinator, and the Coordinator verifies it again before streaming it to Desktop.
       </p>
       <p>
-        The Desktop keeps several files and ranges in flight, writes chunks at their offsets,
-        records resume journals, and verifies hashes as bytes arrive. The connection budget is
-        shared across the entire game rather than being reset and drained one file at a time.
+        Every install is one ZIP64 package. The Desktop keeps several ranges in flight, writes
+        chunks at their offsets, records resume journals, verifies hashes as bytes arrive, and
+        automatically unpacks the completed package with a bounded parallel worker pool.
       </p>
 
       <h2 id="quick-start">One-machine quick start</h2>
@@ -203,13 +203,13 @@ volumes:
       <h2 id="downloads">Download behavior</h2>
       <ul>
         <li>
-          Fixed 8 MiB chunks with up to eight concurrent HTTPS requests by default, shared across
-          files so small-file games do not collapse to one connection.
+          One ZIP64 package per game, cut into fixed 10 MiB chunks with up to eight concurrent
+          HTTPS requests by default.
         </li>
         <li>Resume journals survive restarts; transient failures retry with backoff.</li>
         <li>
-          Chunk SHA-256 is checked at Node, Coordinator, and Desktop. Whole-file verification is
-          retained as the compatibility fallback when an older manifest has no chunk hashes.
+          Chunk SHA-256 is checked at Node, Coordinator, and Desktop. A package is never offered
+          until every 10 MiB chunk has a hash on the current grid.
         </li>
         <li>
           Quotas and speed limits are enforced once at Coordinator, without double-counting Node

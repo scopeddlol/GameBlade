@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { MESH_CHUNK_BYTES, type ReportedFile, type ReportedGame } from '@gameblade/shared';
 import { eq, isNull } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { gameFileChunks, gameFiles, games, libraries } from '../db/schema.js';
+import { listZipExecutables, sortCandidates } from '../lib/executables.js';
 import type { Logger } from './metadata/service.js';
 
 /**
@@ -81,6 +83,11 @@ export function splitCatalogBatches(
  */
 export class CatalogReporter {
   private state: NodeState = {};
+  /** ZIP central directories only need reread when the package itself changes. */
+  private readonly executableCache = new Map<
+    string,
+    { fingerprint: string; candidates: NonNullable<ReportedGame['executables']> }
+  >();
 
   constructor(
     private readonly db: Db,
@@ -148,11 +155,11 @@ export class CatalogReporter {
    * held in memory from the scan, so a report after a restart is as complete as
    * one straight after a scan.
    */
-  async report(): Promise<boolean> {
+  async report(collected?: ReportedGame[]): Promise<boolean> {
     const coordinatorUrl = this.coordinatorUrl();
     if (!coordinatorUrl || !this.state.nodeId || !this.state.nodeToken) return false;
 
-    const payload = this.collect();
+    const payload = collected ?? (await this.collect());
 
     const batches = splitCatalogBatches(payload);
     const reportId = randomUUID();
@@ -398,10 +405,23 @@ export class CatalogReporter {
    * that a game already in its database keeps the id it has and everything
    * attached to that id stays attached.
    */
-  collect(): ReportedGame[] {
+  async collect(): Promise<ReportedGame[]> {
     const rows = this.db.select().from(games).all();
     const out: ReportedGame[] = [];
     const prefixes = this.pathPrefixes();
+    const libraryPaths = new Map(
+      this.db
+        .select({ id: libraries.id, path: libraries.path })
+        .from(libraries)
+        .all()
+        .map((library) => [library.id, library.path]),
+    );
+    const archives: Array<{
+      output: number;
+      absolute: string;
+      gameId: string;
+      fingerprint: string;
+    }> = [];
 
     for (const game of rows) {
       // A game the local scanner has flagged as gone is not something to
@@ -425,6 +445,7 @@ export class CatalogReporter {
           sha256: file.sha256,
           ...(chunks.length > 0
             ? {
+                chunkBytes: file.chunkBytes ?? undefined,
                 chunks: chunks.map((piece) => ({
                   index: piece.chunkIndex,
                   sha256: piece.sha256,
@@ -456,7 +477,54 @@ export class CatalogReporter {
         contentMtime: game.contentMtime || game.scannedAt || game.updatedAt,
         files: reportedFiles,
       });
+
+      const libraryPath = libraryPaths.get(game.libraryId);
+      if (game.kind === 'archive' && game.relPath.toLowerCase().endsWith('.zip') && libraryPath) {
+        const fingerprint = `${game.sizeBytes}:${game.contentMtime}`;
+        const cached = this.executableCache.get(game.id);
+        if (cached?.fingerprint === fingerprint) {
+          out[out.length - 1]!.executables = cached.candidates;
+        } else {
+          archives.push({
+            output: out.length - 1,
+            absolute: path.join(libraryPath, game.relPath),
+            gameId: game.id,
+            fingerprint,
+          });
+        }
+      }
     }
+
+    // Reading a central directory is cheap, but a real library can contain
+    // thousands of ZIPs. A small bounded pool keeps network-backed libraries
+    // moving without opening every archive at once.
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(8, archives.length) }, async () => {
+      for (;;) {
+        const current = archives[cursor];
+        cursor += 1;
+        if (!current) return;
+
+        try {
+          const executables = sortCandidates(await listZipExecutables(current.absolute)).slice(
+            0,
+            256,
+          );
+          const reported = out[current.output];
+          if (reported) reported.executables = executables;
+          this.executableCache.set(current.gameId, {
+            fingerprint: current.fingerprint,
+            candidates: executables,
+          });
+        } catch (error) {
+          this.logger.warn(
+            { err: error, gameId: current.gameId },
+            'could not read ZIP executables for the coordinator catalog',
+          );
+        }
+      }
+    });
+    await Promise.all(workers);
 
     return out;
   }

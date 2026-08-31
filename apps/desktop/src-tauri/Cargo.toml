@@ -1,6 +1,6 @@
 [package]
 name = "gameblade-desktop"
-version = "0.7.1"
+version = "0.8.0"
 description = "GameBlade desktop client"
 authors = ["GameBlade"]
 edition = "2021"

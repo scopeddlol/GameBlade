@@ -130,7 +130,7 @@ describe('ChunkService.hashUnhashed', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  /** One folder game of one file, on disk and in the database, unhashed. */
+  /** One ZIP package, on disk and in the database, unhashed. */
   async function seed(name: string, bytes: Buffer, options: { missing?: boolean } = {}) {
     const libraryId = newId('lib');
     const existing = handle.db.select().from(libraries).all();
@@ -142,8 +142,9 @@ describe('ChunkService.hashUnhashed', () => {
     }
     const library = handle.db.select().from(libraries).all()[0]!;
 
-    await mkdir(path.join(libraryDir, name), { recursive: true });
-    await writeFile(path.join(libraryDir, name, 'game.bin'), bytes);
+    await mkdir(libraryDir, { recursive: true });
+    const packageName = `${name}.zip`;
+    await writeFile(path.join(libraryDir, packageName), bytes);
 
     const gameId = newId('gam');
     handle.db
@@ -151,8 +152,8 @@ describe('ChunkService.hashUnhashed', () => {
       .values({
         id: gameId,
         libraryId: library.id,
-        relPath: name,
-        kind: 'folder',
+        relPath: packageName,
+        kind: 'archive',
         title: name,
         sortTitle: name.toLowerCase(),
         searchTitle: name.toLowerCase(),
@@ -167,7 +168,7 @@ describe('ChunkService.hashUnhashed', () => {
       .values({
         id: newId('gfl'),
         gameId,
-        relPath: 'game.bin',
+        relPath: packageName,
         sizeBytes: bytes.length,
         modifiedAt: new Date().toISOString(),
       })

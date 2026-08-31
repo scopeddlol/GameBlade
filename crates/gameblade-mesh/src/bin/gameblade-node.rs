@@ -1,7 +1,7 @@
 //! The GameBlade node agent.
 //!
 //! Runs on a machine holding game files. It keeps an authenticated outbound
-//! HTTPS poll open to the Coordinator, reads requested 8 MiB chunks, and posts
+//! HTTPS poll open to the Coordinator, reads requested 10 MiB chunks, and posts
 //! them back over HTTPS. Nodes need no public listener or game-transfer port.
 //!
 //! Nothing has to be configured for it to start. Every value below has a

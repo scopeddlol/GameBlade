@@ -1,6 +1,8 @@
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet};
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use tokio::sync::RwLock;
 
@@ -246,10 +248,18 @@ pub fn extract_zip(archive: &Path, destination: &Path) -> AppResult<u64> {
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|err| AppError::Other(format!("Could not read the archive: {err}")))?;
 
-    let mut written = 0u64;
+    #[derive(Debug)]
+    struct Entry {
+        index: usize,
+        target: PathBuf,
+        size: u64,
+    }
+
+    let mut files = Vec::new();
+    let mut targets = HashSet::new();
 
     for index in 0..zip.len() {
-        let mut entry = zip
+        let entry = zip
             .by_index(index)
             .map_err(|err| AppError::Other(format!("Could not read an archive entry: {err}")))?;
 
@@ -266,13 +276,96 @@ pub fn extract_zip(archive: &Path, destination: &Path) -> AppResult<u64> {
             continue;
         }
 
+        // ZIP symlinks are platform-dependent and can point outside the
+        // destination after extraction. Portable games do not need them on
+        // Windows, so they are ignored rather than materialised as links or
+        // misleading regular files.
+        if entry.is_symlink() {
+            continue;
+        }
+
+        if !targets.insert(target.clone()) {
+            return Err(AppError::Other(format!(
+                "The archive contains the same output path more than once: {}",
+                target.display()
+            )));
+        }
+
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        let mut out = std::fs::File::create(&target)?;
-        written += std::io::copy(&mut entry, &mut out)?;
+        files.push(Entry {
+            index,
+            target,
+            size: entry.size(),
+        });
     }
+
+    // Largest first balances workers when an archive contains a few big packs
+    // beside thousands of tiny assets. Each worker opens its own ZipArchive,
+    // which gives every decompressor an independent seek/read state and lets
+    // deflate, bzip2 and zstd actually use several CPU cores.
+    files.sort_by_key(|entry| Reverse(entry.size));
+    drop(zip);
+
+    let workers = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(2)
+        .clamp(1, 8)
+        .min(files.len().max(1));
+
+    let written = std::thread::scope(|scope| -> AppResult<u64> {
+        let mut handles = Vec::with_capacity(workers);
+        for worker in 0..workers {
+            let tasks = &files;
+            handles.push(scope.spawn(move || -> Result<u64, String> {
+                let file = std::fs::File::open(archive)
+                    .map_err(|err| format!("Could not reopen the archive: {err}"))?;
+                let mut zip = zip::ZipArchive::new(file)
+                    .map_err(|err| format!("Could not read the archive: {err}"))?;
+                let mut buffer = vec![0u8; 1024 * 1024];
+                let mut written = 0u64;
+
+                for task in tasks.iter().skip(worker).step_by(workers) {
+                    let mut entry = zip
+                        .by_index(task.index)
+                        .map_err(|err| format!("Could not read an archive entry: {err}"))?;
+                    let output = std::fs::File::create(&task.target).map_err(|err| {
+                        format!("Could not create {}: {err}", task.target.display())
+                    })?;
+                    let mut output = std::io::BufWriter::with_capacity(1024 * 1024, output);
+
+                    loop {
+                        let count = entry.read(&mut buffer).map_err(|err| {
+                            format!("Could not unpack {}: {err}", task.target.display())
+                        })?;
+                        if count == 0 {
+                            break;
+                        }
+                        output.write_all(&buffer[..count]).map_err(|err| {
+                            format!("Could not write {}: {err}", task.target.display())
+                        })?;
+                        written += count as u64;
+                    }
+                    output.flush().map_err(|err| {
+                        format!("Could not finish {}: {err}", task.target.display())
+                    })?;
+                }
+
+                Ok(written)
+            }));
+        }
+
+        let mut written = 0u64;
+        for handle in handles {
+            let result = handle.join().map_err(|_| {
+                AppError::Other("A ZIP extraction worker stopped unexpectedly".to_string())
+            })?;
+            written += result.map_err(AppError::Other)?;
+        }
+        Ok(written)
+    })?;
 
     Ok(written)
 }
@@ -424,6 +517,39 @@ pub fn directory_size(root: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zip_packages_unpack_every_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("game.zip");
+        let destination = temp.path().join("installed");
+
+        let file = std::fs::File::create(&archive).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in [
+            ("Game.exe", b"MZ game binary".as_slice()),
+            ("data/first.bin", b"first asset".as_slice()),
+            ("data/second.bin", b"second asset".as_slice()),
+        ] {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+
+        let written = extract_zip(&archive, &destination).unwrap();
+
+        assert_eq!(written, 14 + 11 + 12);
+        assert_eq!(
+            std::fs::read(destination.join("Game.exe")).unwrap(),
+            b"MZ game binary"
+        );
+        assert_eq!(
+            std::fs::read(destination.join("data/second.bin")).unwrap(),
+            b"second asset"
+        );
+    }
 
     #[test]
     fn safe_join_keeps_ordinary_paths() {

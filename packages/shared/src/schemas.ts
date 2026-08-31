@@ -251,6 +251,8 @@ export const reportedFileSchema = z.object({
   modifiedAt: z.string().min(1).max(64),
   /** Whole-file hash, when the node computed one. */
   sha256: z.string().length(64).nullable().optional(),
+  /** Grid used for `chunks`; absent on old Nodes and therefore not trusted. */
+  chunkBytes: z.number().int().positive().optional(),
   /** Per-chunk hashes, so the coordinator never has to read the file itself. */
   chunks: z
     .array(
@@ -271,6 +273,16 @@ export const reportedGameSchema = z.object({
   sizeBytes: z.number().int().min(0),
   contentMtime: z.string().min(1).max(64),
   files: z.array(reportedFileSchema).max(50_000),
+  /** Executables found in a ZIP's central directory by the Node that can read it. */
+  executables: z
+    .array(
+      z.object({
+        path: z.string().min(1).max(4096),
+        sizeBytes: z.number().int().min(0),
+      }),
+    )
+    .max(256)
+    .optional(),
 });
 export type ReportedGame = z.infer<typeof reportedGameSchema>;
 
