@@ -74,7 +74,7 @@ pub struct DownloadSourceState {
     pub label: String,
     /// `origin_node`, `mirror_node`, `peer_client`, or `coordinator`.
     pub source_type: String,
-    /// `direct` or `https`.
+    /// `direct`, `relay`, or `https`.
     pub route: String,
     /// `connecting`, `connected`, `available`, or `failed`.
     pub status: String,

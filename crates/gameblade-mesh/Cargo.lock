@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "gameblade-mesh"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "async-trait",
  "base64",
