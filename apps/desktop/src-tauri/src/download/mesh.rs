@@ -214,14 +214,29 @@ impl MeshContext {
                         continue;
                     }
                 };
-                let Some(address) = socket_address(&session.relay.address, session.relay.port)
+                // Resolved rather than parsed. The relay address comes from
+                // the coordinator's own configuration and defaults to the
+                // coordinator's hostname — the very name this client has just
+                // spoken HTTPS to — so it is usually not an IP literal at all.
+                // Parsing it as one rejected every ordinary deployment before
+                // a single packet was sent, and reported it as the relay's
+                // fault. Node candidate addresses stay literal-only above:
+                // those arrive on a node's say-so, and this does not.
+                let Some(address) = gameblade_mesh::agent::resolve_socket_address(
+                    &session.relay.address,
+                    session.relay.port,
+                )
+                .await
                 else {
                     sources.push(source_state(
                         &resolution,
                         candidate,
                         "relay",
                         "failed",
-                        Some("The relay returned an unusable address.".to_string()),
+                        Some(format!(
+                            "The relay address {} could not be resolved.",
+                            session.relay.address
+                        )),
                     ));
                     continue;
                 };
