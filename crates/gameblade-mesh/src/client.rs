@@ -24,7 +24,7 @@ use crate::transport::MeshEndpoint;
 /// Short on purpose. This is racing against the HTTP path that already works;
 /// a direct connection that takes eight seconds to establish has already lost
 /// to the tunnel it was supposed to beat.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// How long to let the node's announcement reach the relay before handshaking.
 ///
@@ -138,11 +138,10 @@ impl NodeSession {
 
 /// Connect to a node, racing every address it advertised.
 ///
-/// Each candidate gets a hole punch before the dial. Punching costs three
-/// throwaway packets and takes 150 ms, and it is the difference between working
-/// and not working for two machines that are both behind NAT — which, for a
-/// home archive and a player at home, is the normal case rather than the
-/// exception.
+/// Each candidate gets a short train of hole-punch packets alongside the dial.
+/// The overlap tolerates coordinator and proxy latency and is the difference
+/// between working and not working for two machines that are both behind NAT —
+/// which, for a home archive and a player at home, is the normal case.
 pub async fn connect_to_node(
     endpoint: &MeshEndpoint,
     candidate: &NodeCandidate,
@@ -161,13 +160,13 @@ pub async fn connect_to_node(
         let key = candidate.public_key;
 
         attempts.push(async move {
-            // Ignored deliberately: a punch that fails tells us nothing the
-            // dial will not tell us more definitively.
-            let _ = endpoint.punch(address).await;
-            endpoint
-                .connect(address, &key)
-                .await
-                .map(|conn| (address, conn))
+            // Punch and handshake together. Waiting for every punch packet to
+            // leave before starting QUIC made the two sides miss each other on
+            // higher-latency coordinator paths; QUIC retransmits while the
+            // punch train keeps both NAT mappings warm.
+            let (_, connected) =
+                tokio::join!(endpoint.punch(address), endpoint.connect(address, &key));
+            connected.map(|conn| (address, conn))
         });
     }
 

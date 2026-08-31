@@ -2,13 +2,12 @@
 //!
 //! Two decisions shape everything here.
 //!
-//! **There is no virtual network interface.** This is not a VPN and deliberately
-//! not one. A TUN adapter on Windows means a driver, an elevation prompt,
-//! antivirus attention and a firewall dialog, all so the operating system can
-//! route packets that only ever go to one process anyway. Terminating QUIC in
-//! the process gets the same encrypted, NAT-traversing, congestion-controlled
-//! path with none of that — and nothing for a user to notice, install or agree
-//! to, which was the requirement.
+//! **The private overlay is process-local.** A system-wide TUN adapter on Windows
+//! would mean a driver, an elevation prompt, antivirus attention and a firewall
+//! dialog, even though only GameBlade uses the route. Terminating the private
+//! QUIC tunnel in-process provides the same encrypted, NAT-traversing,
+//! congestion-controlled Node-to-Client path without installing a machine-wide
+//! VPN or exposing the rest of either network.
 //!
 //! **Identity is pinned, not delegated.** A node presents a self-signed
 //! certificate carrying its Ed25519 key, and the client checks it against the
@@ -53,11 +52,16 @@ const REFLEXIVE_TIMEOUT: Duration = Duration::from_millis(1_200);
 
 /// How many punch packets to send at a candidate.
 ///
-/// Three, spaced out. One can be lost, and the far side may not have started
-/// punching yet when the first arrives — the two sides are told to punch at the
-/// same time but do not share a clock.
-const PUNCH_PACKETS: usize = 3;
-const PUNCH_SPACING: Duration = Duration::from_millis(50);
+/// A short train, spaced out. Packets can be lost, and the far side may not have
+/// started punching when the first arrives — the two sides are told to punch at
+/// the same time but do not share a clock.
+const PUNCH_PACKETS: usize = 15;
+const PUNCH_SPACING: Duration = Duration::from_millis(100);
+
+/// Refresh an idle node's outbound NAT mapping before ordinary home routers
+/// forget it. This is not a port forward: it is outbound traffic from the same
+/// socket QUIC uses, just like the keepalive on an established tunnel.
+pub const NAT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Deliberately not valid QUIC.
 ///
@@ -466,6 +470,33 @@ impl MeshEndpoint {
         Ok(())
     }
 
+    /// Keep the reflexive mapping learned at startup alive while no client is
+    /// connected.
+    ///
+    /// A valid STUN request is used so the destination is willing to answer,
+    /// though QUIC intentionally consumes and discards that response. The
+    /// outbound packet itself is what refreshes the NAT mapping.
+    pub fn refresh_nat_mapping(&self, stun_servers: &[&str]) -> bool {
+        use rand::RngCore;
+        use std::net::ToSocketAddrs;
+
+        for server in stun_servers {
+            let Ok(mut resolved) = server.to_socket_addrs() else {
+                continue;
+            };
+            let Some(target) = resolved.find(SocketAddr::is_ipv4) else {
+                continue;
+            };
+            let mut transaction_id = [0u8; 12];
+            rand::rngs::OsRng.fill_bytes(&mut transaction_id);
+            let request = crate::stun::binding_request(transaction_id);
+            if self.punch.send_to(&request.bytes, target).is_ok() {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Tell the relay which session this endpoint belongs to.
     ///
     /// Sent from the same socket QUIC uses, for the same reason a punch is: the
@@ -684,6 +715,24 @@ mod tests {
             endpoint.punch_port().unwrap(),
             endpoint.local_addr().unwrap().port()
         );
+        endpoint.close();
+    }
+
+    #[tokio::test]
+    async fn an_idle_nat_keepalive_uses_the_quic_socket() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let endpoint = MeshEndpoint::client(NodeIdentity::generate()).unwrap();
+        let target = receiver.local_addr().unwrap().to_string();
+
+        assert!(endpoint.refresh_nat_mapping(&[target.as_str()]));
+
+        let mut packet = [0u8; 64];
+        let (length, from) = receiver.recv_from(&mut packet).unwrap();
+        assert_eq!(length, 20, "a STUN binding request is a 20-byte header");
+        assert_eq!(from.port(), endpoint.local_addr().unwrap().port());
         endpoint.close();
     }
 

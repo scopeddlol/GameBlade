@@ -14,7 +14,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gameblade_mesh::client::connect_through_relay;
 use gameblade_mesh::{
     connect_to_node, coordinator_key_from_spki, MeshEndpoint, MeshError, NodeCandidate,
     NodeIdentity, NodeSession, PublicKey, SourcePool,
@@ -173,7 +172,6 @@ impl MeshContext {
                         candidate,
                         "direct",
                         "connected",
-                        Some(session.address.to_string()),
                         Some(format!("Connected in {} ms", session.handshake_ms)),
                     ));
                     sessions.push(Arc::new(session));
@@ -184,15 +182,7 @@ impl MeshContext {
                         candidate,
                         "direct",
                         "failed",
-                        Some(
-                            candidate
-                                .addresses
-                                .iter()
-                                .map(ToString::to_string)
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                        ),
-                        Some(err.to_string()),
+                        Some("The private tunnel could not be established.".to_string()),
                     ));
                     tracing_log(&format!(
                         "mesh: {} unreachable ({err}); continuing without it",
@@ -202,75 +192,10 @@ impl MeshContext {
             }
         }
 
-        // Nothing answered directly. Before giving up on the mesh entirely, ask
-        // whether this server runs a relay — on a coordinator holding no game
-        // files there is no HTTP origin behind us, so this is the difference
-        // between a slow download and no download at all.
-        if sessions.is_empty() {
-            for (position, candidate) in nodes.iter().enumerate() {
-                let session = match client.request_relay(game_id, &candidate.node_id).await {
-                    Ok(session) => session,
-                    Err(err) => {
-                        sources.push(source_state(
-                            &resolution,
-                            candidate,
-                            "relay",
-                            "failed",
-                            None,
-                            Some(err.to_string()),
-                        ));
-                        continue;
-                    }
-                };
-                let Some(address) = socket_address(&session.relay.address, session.relay.port)
-                else {
-                    sources.push(source_state(
-                        &resolution,
-                        candidate,
-                        "relay",
-                        "failed",
-                        Some(format!("{}:{}", session.relay.address, session.relay.port)),
-                        Some("The relay returned an unusable address.".to_string()),
-                    ));
-                    continue;
-                };
-
-                match connect_through_relay(&endpoint, address, &session.ticket, candidate).await {
-                    Ok(live) => {
-                        pool.add_node(&candidate.node_id, &candidate.label, position);
-                        sources.push(source_state(
-                            &resolution,
-                            candidate,
-                            "relay",
-                            "connected",
-                            Some(address.to_string()),
-                            Some(format!("Connected in {} ms", live.handshake_ms)),
-                        ));
-                        sessions.push(Arc::new(live));
-                        break;
-                    }
-                    Err(err) => {
-                        sources.push(source_state(
-                            &resolution,
-                            candidate,
-                            "relay",
-                            "failed",
-                            Some(address.to_string()),
-                            Some(err.to_string()),
-                        ));
-                        tracing_log(&format!(
-                            "mesh: relay to {} failed ({err})",
-                            candidate.label
-                        ));
-                    }
-                }
-            }
-        }
-
         if sessions.is_empty() {
             endpoint.close();
             return MeshPreparation::unavailable(
-                "No copy of this game could be reached. Direct node and relay connections both failed; check UDP 47820 on the node and UDP 47821 on the coordinator.",
+                "A private Node-to-Client tunnel could not be established with any active node.",
                 sources,
             );
         }
@@ -390,7 +315,6 @@ fn source_state(
     candidate: &NodeCandidate,
     route: &str,
     status: &str,
-    endpoint: Option<String>,
     detail: Option<String>,
 ) -> DownloadSourceState {
     let role = resolution
@@ -410,7 +334,6 @@ fn source_state(
         label: candidate.label.clone(),
         source_type: source_type.to_string(),
         route: route.to_string(),
-        endpoint,
         status: status.to_string(),
         detail,
     }

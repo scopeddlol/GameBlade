@@ -721,11 +721,10 @@
                 <a href="#deploy-hashing">hashing</a>.
               </li>
               <li>
-                <strong>The relay is part of the coordinator's compose file</strong> and fetches
-                its own key, so there is nothing to look up and paste. Clients use the
-                coordinator's public hostname and UDP port 47821 automatically; set
-                <code>RELAY_ENDPOINT</code> only when the relay is elsewhere. See
-                <a href="#relay">the relay</a>.
+                <strong>Nodes keep their outbound tunnel mapping alive</strong>, so Desktop can
+                establish an encrypted Node-to-Client path after any amount of idle time. No node
+                UDP port is published or forwarded, and game bytes never pass through the
+                coordinator.
               </li>
             </ul>
           </div>
@@ -738,8 +737,7 @@
             <ul>
               <li>
                 <strong>One image per role.</strong>
-                <code>gameblade-coordinator</code>, <code>gameblade-node</code> and
-                <code>gameblade-relay</code> alongside the standalone
+                <code>gameblade-coordinator</code> and <code>gameblade-node</code> alongside the standalone
                 <code>gameblade</code>. Pulling one has already said what it is, so there is no
                 <code>ROLE</code> to set &mdash; and a node is one container rather than two,
                 because the scanner and the mesh agent are an implementation detail rather than
@@ -823,7 +821,7 @@
             <ul>
               <li><a href="#roles">Three roles from one image</a> &mdash; standalone, coordinator, node, chosen with <code>ROLE</code>. 0.6.2 gave each its own image instead; a standalone server behaves exactly as it always has either way.</li>
               <li><a href="#mesh">Clients download straight from the machine holding the files</a>, over QUIC, verified a chunk at a time.</li>
-              <li><a href="#relay">A relay</a> for clients that cannot reach a node directly.</li>
+              <li>A process-local private overlay: coordinator rendezvous, then encrypted QUIC directly from node to client.</li>
               <li><a href="#player-sharing">Players can serve pieces to each other</a>, off by default at both ends.</li>
               <li><a href="#nat-check"><code>mesh-doctor</code></a>, which answers &ldquo;can a client actually reach this machine&rdquo; before anything is deployed.</li>
             </ul>
@@ -871,14 +869,6 @@
                     clients. Has <a href="#node-page">a status page</a> and nothing else.
                   </td>
                 </tr>
-                <tr>
-                  <td><strong>Relay</strong> (<code>gameblade-relay</code>)</td>
-                  <td>Nobody, directly</td>
-                  <td>
-                    Joins a client and a node that cannot reach each other. Optional, and
-                    <a href="#relay">deliberately dim</a>.
-                  </td>
-                </tr>
               </tbody>
             </table>
           </div>
@@ -904,8 +894,9 @@
                   <td><strong>Server images</strong></td>
                   <td>
                     <code>ghcr.io/scopeddlol/gameblade</code> for one machine, plus
-                    <code>-coordinator</code>, <code>-node</code> and <code>-relay</code> for the
-                    split topology. <code>latest</code> and a tag per release on each.
+                    <code>-coordinator</code> and <code>-node</code> for the split topology. A legacy
+                    <code>-relay</code> image is also published for older Desktop builds.
+                    <code>latest</code> and a tag per release on each.
                     <code>linux/amd64</code>, and <code>linux/arm64</code> when a release asks for
                     it.
                   </td>
@@ -1023,7 +1014,7 @@ cp .env.example .env</code></pre>
                 <tr><td><code>ROLE</code></td><td>from the image</td><td>Each image sets its own, so there is normally nothing to put here. Setting it overrides: <code>standalone</code>, <code>coordinator</code> or <code>node</code>. See <a href="#roles">the roles</a>.</td></tr>
                 <tr><td><code>COORDINATOR_URL</code></td><td>—</td><td>Where a node reports. Optional: leave it out and the node's <a href="#deploy-nodes">setup page</a> asks instead, remembering the answer. Set, it wins. No trailing slash needed — one is stripped.</td></tr>
                 <tr><td><code>ENROLMENT_TOKEN</code></td><td>—</td><td>The one-time code from <strong>Admin → Nodes</strong>. Optional for the same reason. Spent on first registration and not kept.</td></tr>
-                <tr><td><code>RELAY_ENDPOINT</code></td><td>coordinator hostname:47821</td><td>Optional relay public-address override as <code>host:port</code>. Set it on the <em>coordinator</em>, not on the relay, only when the relay uses another public name or port. A value with no port is refused rather than half-accepted.</td></tr>
+                <tr><td><code>RELAY_ENDPOINT</code></td><td>—</td><td>Legacy Desktop compatibility only. Current Desktop builds never request a relay.</td></tr>
 
                 <tr><td colspan="3"><strong>Storage and listening</strong></td></tr>
                 <tr><td><code>LIBRARY_PATHS</code></td><td>the mounts, on a node</td><td>Comma- or semicolon-separated library roots <strong>inside the container</strong>. Registered automatically on first start. A node left without it reads its own mounts instead: <code>/library</code>, plus one root per directory under <code>/libraries</code> — so two drives is two volumes and no variable. Setting it names the roots exactly and nothing is discovered underneath it. See <a href="#deploy-libraries-several">a node with several drives</a>.</td></tr>
@@ -1095,7 +1086,7 @@ cp .env.example .env</code></pre>
                 <tr><td><code>GAMEBLADE_LIBRARY</code></td><td>the mounts</td><td>Library roots inside this container, read-only — one path or a comma-separated list. Left unset the agent reads the same two places the server half does, so both halves agree about what this machine holds without being told twice. Nothing mounted anywhere is a warning rather than an exit: a wrong volume is fixed by editing compose, which is easier against a node that is running and saying so.</td></tr>
                 <tr><td><code>GAMEBLADE_ENROLMENT</code></td><td>from the state file</td><td>The one-time code. The agent owns this node's keypair, so it is the process that registers; the setup page writes the code where it will find it.</td></tr>
                 <tr><td><code>GAMEBLADE_STATE</code></td><td><code>/data/node-state.json</code></td><td>Where the identity lives. Shared with the server process beside it — the node image points both at the same file.</td></tr>
-                <tr><td><code>GAMEBLADE_PORT</code></td><td><code>47820</code></td><td>UDP port to serve on. <code>0</code> takes any free port, which makes the node unreachable from outside its NAT, so pin it if you are forwarding.</td></tr>
+                <tr><td><code>GAMEBLADE_PORT</code></td><td><code>47820</code></td><td>The node agent's internal UDP socket. The agent creates and maintains its mapping with outbound traffic; do not publish or forward it.</td></tr>
               </tbody>
             </table>
           </div>
@@ -1108,18 +1099,6 @@ cp .env.example .env</code></pre>
               one file in a node's <code>data/</code> worth backing up; everything else there is a
               rescan away.
             </p>
-          </div>
-
-          <h3 id="config-relay">The relay</h3>
-          <div class="scroller">
-            <table>
-              <thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
-              <tbody>
-                <tr><td><code>GAMEBLADE_COORDINATOR_KEY</code></td><td>—</td><td><strong>Required.</strong> The coordinator's public key, base64url SPKI. See <a href="#relay-key">finding it</a>.</td></tr>
-                <tr><td><code>GAMEBLADE_RELAY_PORT</code></td><td><code>47821</code></td><td>UDP port to listen on</td></tr>
-                <tr><td><code>GAMEBLADE_RELAY_MAX</code></td><td><code>256</code></td><td>Concurrent relayed sessions. The ceiling that stops the fallback becoming the main road.</td></tr>
-              </tbody>
-            </table>
           </div>
 
           <h3 id="config-ports">Ports, and which of them matter</h3>
@@ -1138,17 +1117,9 @@ cp .env.example .env</code></pre>
                   <td>LAN or tunnel only. It is unauthenticated — never straight onto the internet.</td>
                 </tr>
                 <tr>
-                  <td><code>47820/udp</code></td>
-                  <td>Mesh agent on a node</td>
-                  <td>
-                    Optional but the single best thing you can do for download reliability. Forward
-                    it at the router to the node's LAN address.
-                  </td>
-                </tr>
-                <tr>
-                  <td><code>47821/udp</code></td>
-                  <td>Relay, beside the coordinator</td>
-                  <td>Open on the host firewall. A reverse proxy cannot carry it — it is UDP, and the relay is not HTTP.</td>
+                  <td>Outbound UDP</td>
+                  <td>Node and Desktop private tunnel</td>
+                  <td>No published or forwarded port. Both sides establish the mapping from inside their own network.</td>
                 </tr>
               </tbody>
             </table>
@@ -1262,7 +1233,7 @@ cp .env.example .env</code></pre>
 
           <div class="warn">
             <p>
-              <strong>Caddy cannot carry the mesh or the relay.</strong> Both are UDP, and neither
+              <strong>Caddy cannot carry the mesh or a legacy relay.</strong> Both are UDP, and neither
               is HTTP — a reverse proxy has nothing to do with either. A forwarded UDP port goes
               through the firewall and the router, not through Caddy. See
               <a href="#config-ports">ports</a>.
@@ -1366,9 +1337,9 @@ cp .env.example .env</code></pre>
                   <td>Wherever the library lives.</td>
                 </tr>
                 <tr>
-                  <td><code>gameblade-relay</code></td>
+                  <td><code>gameblade-relay</code> (legacy)</td>
                   <td>Nothing. A public UDP address and a table of paired sockets.</td>
-                  <td>Beside the coordinator, if you need it. See <a href="#relay">the relay</a>.</td>
+                  <td>Only beside a coordinator serving older Desktop builds. See <a href="#relay">the relay</a>.</td>
                 </tr>
               </tbody>
             </table>
@@ -1469,12 +1440,11 @@ cp .env.example .env</code></pre>
             </p>
           </div>
 
-          <h3 id="relay">The relay</h3>
+          <h3 id="relay">Legacy relay</h3>
           <p>
-            A coordinator holds no game files, so there is no plain HTTP download to fall back to
-            when a client cannot reach a node directly. The relay is that fallback. Both ends dial
-            <em>out</em> to it &mdash; which always works, because it has a public address &mdash;
-            and it pastes the two connections together.
+            The relay binary remains available for compatibility with older Desktop builds. Current
+            Desktop builds never request it: downloads establish a private direct tunnel from node
+            to client, and no game byte is proxied through the coordinator or a relay.
           </p>
           <p>
             It is the least clever component here on purpose. It never terminates TLS, never parses
@@ -1493,27 +1463,25 @@ cp .env.example .env</code></pre>
 
           <div class="note">
             <p>
-              <strong>It is not faster.</strong> It is strictly slower than a direct connection
-              &mdash; an extra hop, over this host's pipe. It exists so those downloads happen at
-              all. Only clients that failed to connect directly ever use it, relayed bytes count
-              against the same allowance as any others, and
+              <strong>Current Desktop does not use this path.</strong> It is strictly slower than a direct connection
+              &mdash; an extra hop, over this host's pipe. Older clients may request it after a
+              direct connection fails; relayed bytes count against the same allowance as any others, and
               <code>GAMEBLADE_RELAY_MAX</code> caps how many can be in flight so the exception path
               cannot quietly become the main road.
             </p>
           </div>
 
           <p>
-            Leaving <code>RELAY_ENDPOINT</code> unset uses the coordinator request hostname and
-            UDP port 47821, matching the bundled compose file. Run <code>mesh-doctor</code> on the
-            node first: if it reports the connection punchable, most clients will reach it without
-            the relay ever being asked.
+            <code>RELAY_ENDPOINT</code> is ignored by the current direct-only Desktop path. The
+            default coordinator compose file does not run or expose a relay.
           </p>
 
-          <h4 id="relay-running">Running one</h4>
+          <h4 id="relay-running">Running one for a legacy client</h4>
           <div class="new" data-since="0.6.3">
             <p>
-              <strong>Not optional on a coordinator, and no longer fiddly.</strong> It ships in
-              <code>docker-compose.coordinator.yml</code> as a second service, and it fetches the
+              <strong>Legacy compatibility only.</strong> It is not present in
+              <code>docker-compose.coordinator.yml</code>; if an older client still requires one,
+              it can be added as a second service and fetches the
               coordinator's public key from the coordinator itself &mdash; waiting for it if it is
               not up yet, which it usually is not, because the two start together.
             </p>
@@ -1542,13 +1510,11 @@ cp .env.example .env</code></pre>
 
           <div class="warn">
             <p>
-              <strong>Why it is required here and optional on one machine.</strong> On a standalone
-              server, a client that cannot reach a node downloads from the server instead and
-              nobody notices. A coordinator holds no game files, so there is no such fallback:
-              without a relay, a player behind a symmetric or carrier-grade NAT cannot download
-              anything at all, and it reads as a broken archive rather than as the network they
-              happen to be behind. It costs almost nothing to have running and unused &mdash; only
-              clients that already failed to connect directly are ever sent to it.
+              <strong>A hard network boundary still exists.</strong> Two peers behind incompatible
+              symmetric or carrier-grade NATs cannot be guaranteed a direct route without either
+              an inbound mapping or a data relay. GameBlade does not silently violate the direct
+              Node-to-Client contract in that case; <code>mesh-doctor</code> identifies such a
+              network explicitly.
             </p>
           </div>
 
@@ -1722,22 +1688,22 @@ cp .env.example .env</code></pre>
         </section>
 
         <section id="mesh">
-          <h2>The mesh: downloading without the tunnel</h2>
+          <h2>The mesh: a private Node-to-Client tunnel</h2>
           <p>
-            Every byte of every download crosses the proxy, because the proxy is the only thing on
-            the public internet. On a VPS with modest bandwidth that is the ceiling on how fast
-            anyone can install anything. The mesh removes it: a client connects straight to a
+            Without the mesh, every byte of every download crosses the proxy because the proxy is
+            the only thing on the public internet. On a VPS with modest bandwidth that is the ceiling
+            on how fast anyone can install anything. The mesh removes it: a client connects straight to a
             machine holding the files, and the server keeps doing the part that is actually small —
             saying who is out there and granting permission.
           </p>
 
           <div class="note">
             <p>
-              <strong>It is not a VPN, and nothing is installed.</strong> A VPN would mean a virtual
-              network adapter, which on Windows means a driver, an elevation prompt, antivirus
-              attention and a firewall dialog — all so the operating system can route packets that
-              only ever reach one process. The client speaks QUIC directly instead, terminated
-              inside the app. There is nothing for a player to install, approve or notice.
+              <strong>The overlay is private and process-local.</strong> It provides the encrypted,
+              identity-pinned route GameBlade needs without installing a system-wide network
+              adapter. The coordinator introduces the peers and grants access; QUIC then runs
+              directly between Node and Desktop. There is nothing for a player to install, approve
+              or configure, and the coordinator never carries the game data.
             </p>
           </div>
 
@@ -1745,9 +1711,9 @@ cp .env.example .env</code></pre>
             <p>
               <strong>You can watch it working.</strong>
               <a href="#admin-nodes">Admin → Nodes</a> carries the fleet, its analytics, and a live
-              <a href="#tunnel-map">map of the tunnels</a> — including which of them are going
-              direct and which have fallen back through the relay, which is the difference between
-              a mesh that is doing its job and one that is not.
+              <a href="#tunnel-map">map of the tunnels</a>. Current Desktop tunnels are direct;
+              connection details shown to players use friendly node names and never expose an IP,
+              hostname, domain or port.
             </p>
           </div>
 
@@ -1977,9 +1943,9 @@ curl -sS -H "authorization: Bearer $TOKEN" \
           </div>
           <p>
             Run one of them on a prospective node <em>before</em> enrolling it. If it reports the
-            connection punchable, most clients will reach it and the relay will rarely be asked for
-            anything. If it does not, forward a UDP port &mdash; that single change makes the
-            question stop mattering, whatever the client is behind.
+            connection punchable, most clients will reach it directly. If it does not, that
+            network cannot satisfy GameBlade's direct-only, no-inbound-port contract; moving either
+            peer to a punchable network is the available remedy.
           </p>
 
           <h3>When it does not apply</h3>
@@ -2020,14 +1986,8 @@ curl -sS -H "authorization: Bearer $TOKEN" \
               <tbody>
                 <tr>
                   <td><strong>The coordinator</strong><br />a small VPS</td>
-                  <td>
-                    <code>gameblade-coordinator</code>, Caddy, and optionally
-                    <code>gameblade-relay</code>
-                  </td>
-                  <td>
-                    <code>https://games.example.com</code> for everyone, plus
-                    <code>47821/udp</code> for the relay if you run one
-                  </td>
+                  <td><code>gameblade-coordinator</code> and Caddy</td>
+                  <td><code>https://games.example.com</code> for everyone</td>
                 </tr>
                 <tr>
                   <td><strong>Node A</strong><br />on your LAN</td>
@@ -2036,16 +1996,15 @@ curl -sS -H "authorization: Bearer $TOKEN" \
                     mesh agent
                   </td>
                   <td>
-                    <code>http://192.168.1.20:8080</code> on the LAN, a Pangolin hostname from
-                    outside, and <code>47820/udp</code> forwarded at the router
+                    <code>http://192.168.1.20:8080</code> on the LAN if you want the status page;
+                    the private download tunnel needs no published or forwarded port
                   </td>
                 </tr>
                 <tr>
                   <td><strong>Node B</strong><br />elsewhere &mdash; a friend's house is fine</td>
                   <td>the same, with its own <code>data/</code> and its own library</td>
                   <td>
-                    its own address and its own Pangolin hostname, and
-                    <code>47820/udp</code> forwarded on <em>that</em> network
+                    its own identity and outbound coordinator connection; no mesh port is exposed
                   </td>
                 </tr>
               </tbody>
@@ -2075,9 +2034,8 @@ curl -sS -H "authorization: Bearer $TOKEN" \
               <strong>A coordinator holds no game files, so there is no HTTP fallback.</strong> On
               a standalone server, a client that cannot reach a node just downloads from the origin
               and nobody notices. Here the origin has nothing on disk. If the mesh cannot serve a
-              game, that game cannot be downloaded at all. Forwarding the UDP ports &mdash; or
-              running <a href="#relay">the relay</a> &mdash; is not an optimisation in this
-              topology; it is the download path.
+              game, that game cannot be downloaded at all. The private direct tunnel is the
+              download path; the coordinator never substitutes itself as a data proxy.
             </p>
           </div>
 
@@ -2206,9 +2164,6 @@ services:
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: '&lt;something long, used once&gt;'
 
-      # Optional: omit this for the automatic coordinator hostname:47821.
-      # Set it only when the relay has a different public name or port.
-      # RELAY_ENDPOINT: relay.example.com:47821
     volumes:
       - ./data:/data
     ports:
@@ -2218,24 +2173,12 @@ services:
     security_opt:
       - 'no-new-privileges:true'
 
-  # The path for clients whose NAT defeats hole punching. Not optional here:
-  # a coordinator holds no game files, so there is no plain download to fall
-  # back to and those players cannot install anything at all without it.
-  relay:
-    image: ghcr.io/scopeddlol/gameblade-relay:latest
-    container_name: gameblade-relay
-    restart: unless-stopped
-    depends_on: [coordinator]
-    environment:
-      # It fetches the coordinator's public key from here itself.
-      GAMEBLADE_SERVER: http://coordinator:8080
-    ports:
-      - '47821:47821/udp'</code></pre>
+</code></pre>
 
           <p>
             No <code>ROLE</code>, no library mounts, and nothing about scanning: the image is the
-            coordinator, it holds no files, and it will not scan. Open <code>47821/udp</code> on
-            the VPS firewall for the relay; everything else goes through Caddy.
+            coordinator, it holds no files, and it will not scan. Only its HTTPS service goes
+            through Caddy; there is no relay port to expose.
           </p>
 
           <pre><code>mkdir -p data
@@ -2397,7 +2340,6 @@ services:
       # reachable from the network and from nowhere else.
       - '192.168.1.20:8080:8080'
       # Where game bytes leave this machine.
-      - '47820:47820/udp'
     security_opt:
       - 'no-new-privileges:true'</code></pre>
 
@@ -2611,26 +2553,18 @@ services:
               anything &mdash; double NAT is routinely punchable and single NAT routinely is not.
             </li>
             <li>
-              <strong>Forward the UDP port anyway.</strong> <code>47820/udp</code> to the node's
-              LAN address, on each network. Nodes on <em>different</em> networks &mdash; yours and
-              a friend's &mdash; each use the default port and neither knows about the other, so
-              there is nothing to coordinate. Two nodes behind the <em>same</em> router are the
-              only case that needs a second port: give one <code>GAMEBLADE_PORT=47822</code>,
-              publish and forward that instead. One directly reachable side makes the other side's
-              NAT stop mattering, whatever it is.
+              <strong>Do not publish or forward the mesh port.</strong> The node keeps an outbound
+              NAT mapping alive from the same socket its private QUIC tunnel uses, and the
+              coordinator synchronises both peers' punch attempts when a download begins.
             </li>
             <li>
-              <strong>Give each node a stable LAN address</strong>, by DHCP reservation or
-              statically. A node is known by its key rather than its address, so a changed one is
-              not fatal &mdash; but a forwarded port pointing at the wrong machine is. Worth
-              writing down for a node you do not live with.
+              <strong>A stable LAN address is optional.</strong> A node is known by its key rather
+              than its address, and each heartbeat replaces its connection candidates.
             </li>
             <li>
-              <strong><a href="#relay">The relay</a> is already running</strong>, because the
-              coordinator's compose file includes it. With ports forwarded and
-              <code>mesh-doctor</code> content it will rarely be asked for anything, which is the
-              point: it is there for the players whose NAT you cannot do anything about, and you
-              find out who those are by them being unable to download.
+              <strong>Run <a href="#nat-check"><code>mesh-doctor</code></a></strong> if a tunnel
+              still cannot form. It distinguishes a punchable mapping from a symmetric NAT that
+              cannot provide a direct path without violating the no-proxy contract.
             </li>
           </ol>
 
@@ -2845,8 +2779,9 @@ services:
                 <tr>
                   <td>Some players download and some cannot</td>
                   <td>
-                    NAT. Run <code>mesh-doctor</code>, forward the UDP ports, and if it still
-                    happens, run <a href="#relay">the relay</a>.
+                    NAT. Run <code>mesh-doctor</code> on the affected networks. A symmetric or
+                    carrier-grade NAT cannot form this direct-only tunnel; move either peer to a
+                    punchable network.
                   </td>
                 </tr>
                 <tr>
@@ -4277,7 +4212,7 @@ git push origin main --tags</code></pre>
             </li>
             <li>
               <strong>Builds and pushes the four images</strong> &mdash; standalone, coordinator,
-              node, relay &mdash; from one Dockerfile, tagged <code>latest</code>, the version, and
+              node, plus the legacy relay &mdash; from one Dockerfile, tagged <code>latest</code>, the version, and
               the major.minor.
             </li>
             <li><strong>Builds the Windows installers</strong> on a Windows runner.</li>

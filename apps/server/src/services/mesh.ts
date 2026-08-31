@@ -1409,6 +1409,9 @@ export class MeshService {
   ): void {
     const rows = endpoints
       .filter((endpoint) => endpoint.port > 0 && endpoint.port < 65_536)
+      // Wildcard bind addresses describe where a process listens, not where a
+      // client can reach it.
+      .filter((endpoint) => endpoint.address !== '0.0.0.0' && endpoint.address !== '::')
       .slice(0, 16)
       .map((endpoint) => ({
         nodeId,
@@ -1420,7 +1423,9 @@ export class MeshService {
     if (observedAddress) {
       // Paired with whatever ports the node offered: the coordinator sees the
       // address a TCP request came from, never the UDP port a node listens on.
-      for (const endpoint of endpoints.slice(0, 4)) {
+      for (const endpoint of endpoints
+        .filter((candidate) => candidate.address !== '0.0.0.0' && candidate.address !== '::')
+        .slice(0, 4)) {
         rows.push({
           nodeId,
           kind: 'observed' as const,

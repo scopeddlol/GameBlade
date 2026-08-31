@@ -1,6 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { HardDrive, Pause, Play, Trash2, X } from 'lucide-react';
+import {
+  HardDrive,
+  LoaderCircle,
+  Pause,
+  Play,
+  ShieldCheck,
+  Trash2,
+  TriangleAlert,
+  X,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { formatBytes, formatEta, formatRate } from '../lib/format.js';
 import { ipc, type DownloadState } from '../lib/ipc.js';
@@ -112,39 +121,7 @@ export function DownloadQueue({
                     <p className={clsx('muted', 'small', 'truncate')}>{download.current_file}</p>
                   ) : null}
 
-                  {download.sources?.length ? (
-                    <div className="download-sources" aria-label="Download connections">
-                      {download.sources.map((source, index) => (
-                        <div
-                          className={clsx(
-                            'download-source',
-                            source.status === 'failed' && 'failed',
-                          )}
-                          key={`${source.node_id ?? 'coordinator'}-${source.route}-${index}`}
-                        >
-                          <span className="download-source-state" aria-hidden />
-                          <div>
-                            <strong>{source.label}</strong>
-                            <span className="muted small">
-                              {' '}
-                              · {sourceTypeLabel(source.source_type)} · {routeLabel(source.route)}
-                              {source.endpoint ? ` · ${source.endpoint}` : ''}
-                            </span>
-                            {source.detail ? (
-                              <p
-                                className={clsx(
-                                  'small',
-                                  source.status === 'failed' ? 'error' : 'muted',
-                                )}
-                              >
-                                {source.detail}
-                              </p>
-                            ) : null}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
+                  {download.sources?.length ? <ConnectionSummary download={download} /> : null}
 
                   {download.error ? <p className="error small">{download.error}</p> : null}
 
@@ -225,17 +202,67 @@ export function DownloadQueue({
   );
 }
 
-function sourceTypeLabel(sourceType: string): string {
-  if (sourceType === 'peer_client') return 'Desktop client';
-  if (sourceType === 'origin_node') return 'Origin node';
-  if (sourceType === 'mirror_node') return 'Mirror node';
-  return 'Coordinator';
+function ConnectionSummary({ download }: { download: DownloadState }) {
+  const connected = uniqueLabels(
+    download.sources
+      .filter((source) => source.status === 'connected')
+      .map((source) => source.label),
+  );
+  const available = uniqueLabels(
+    download.sources
+      .filter((source) => source.status === 'available')
+      .map((source) => source.label),
+  );
+  const attempted = uniqueLabels(download.sources.map((source) => source.label));
+  const names = connected.length ? connected : available.length ? available : attempted;
+  const failed = connected.length === 0 && available.length === 0;
+  const waiting = !failed && download.status === 'queued';
+
+  return (
+    <div
+      className={clsx('download-connection', failed && 'failed', waiting && 'connecting')}
+      aria-label="Download connection"
+    >
+      <div className="download-connection-icon" aria-hidden>
+        {failed ? (
+          <TriangleAlert size={17} />
+        ) : waiting ? (
+          <LoaderCircle size={17} />
+        ) : (
+          <ShieldCheck size={17} />
+        )}
+      </div>
+      <div className="download-connection-copy">
+        <span className="muted small">Secure connection</span>
+        <strong>
+          {failed
+            ? `Couldn't connect to ${naturalJoin(names)}`
+            : waiting
+              ? `Connecting to ${naturalJoin(names)}`
+              : `Connected to ${naturalJoin(names)}`}
+        </strong>
+        <span className="muted small">
+          {failed
+            ? 'A private tunnel could not be established.'
+            : connected.length
+              ? 'Private, encrypted Node-to-Client tunnel'
+              : 'Secure GameBlade connection'}
+        </span>
+      </div>
+      <span className="download-connection-pulse" aria-hidden />
+    </div>
+  );
 }
 
-function routeLabel(route: string): string {
-  if (route === 'direct') return 'Direct QUIC';
-  if (route === 'relay') return 'Relay QUIC';
-  return 'HTTPS';
+function uniqueLabels(labels: string[]): string[] {
+  return [...new Set(labels.filter(Boolean))];
+}
+
+function naturalJoin(labels: string[]): string {
+  if (labels.length === 0) return 'an available source';
+  if (labels.length === 1) return labels[0]!;
+  if (labels.length === 2) return `${labels[0]} & ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')} & ${labels.at(-1)}`;
 }
 
 /** Whether the download is still running, which decides the dialog's wording. */

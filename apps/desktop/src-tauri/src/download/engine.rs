@@ -357,9 +357,8 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
             label: "Coordinator".to_string(),
             source_type: "coordinator".to_string(),
             route: "https".to_string(),
-            endpoint: Some(job.client.endpoint("/")),
             status: "available".to_string(),
-            detail: Some("HTTP fallback".to_string()),
+            detail: Some("Secure server connection".to_string()),
         });
     }
     {
@@ -990,7 +989,7 @@ async fn download_chunk(
                 continue;
             }
             return Err(Stop::Fatal(AppError::Other(
-                "The connected nodes stopped responding and this coordinator has no local file fallback. Check the node and relay connection, then resume the download."
+                "The connected nodes stopped responding and this coordinator has no local file fallback. Check the Node connection, then resume the download."
                     .to_string(),
             )));
         }

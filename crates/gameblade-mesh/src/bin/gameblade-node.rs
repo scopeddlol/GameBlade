@@ -239,7 +239,11 @@ async fn start(server_url: &str, state_path: &std::path::Path, port: u16) -> Mes
     // Every registration returns a fresh credential, so the enrolment code is
     // only needed the first time. After that the key is the identity.
     let mut endpoints = Vec::new();
-    if let Ok(local) = endpoint.local_addr() {
+    if let Some(local) = endpoint
+        .local_addr()
+        .ok()
+        .filter(|address| !address.ip().is_unspecified())
+    {
         endpoints.push(serde_json::json!({
             "kind": "local",
             "address": local.ip().to_string(),
@@ -377,7 +381,11 @@ fn credential_rejected(status: reqwest::StatusCode) -> bool {
 
 fn advertised_endpoints(endpoint: &MeshEndpoint) -> Vec<serde_json::Value> {
     let mut endpoints = Vec::new();
-    if let Ok(local) = endpoint.local_addr() {
+    if let Some(local) = endpoint
+        .local_addr()
+        .ok()
+        .filter(|address| !address.ip().is_unspecified())
+    {
         endpoints.push(serde_json::json!({
             "kind": "local",
             "address": local.ip().to_string(),
@@ -461,6 +469,22 @@ async fn run(agent: Agent, server_url: String, library_roots: Vec<PathBuf>, stat
     } = agent;
 
     let endpoint = Arc::new(endpoint);
+
+    // STUN discovery at startup creates the exact outbound mapping clients are
+    // handed. Without traffic it expires in roughly thirty seconds on many
+    // routers, leaving every later download aimed at a stale port. Refresh it
+    // from the same socket; no inbound port or router rule is involved.
+    {
+        let endpoint = Arc::clone(&endpoint);
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(gameblade_mesh::transport::NAT_KEEPALIVE_INTERVAL);
+            loop {
+                interval.tick().await;
+                endpoint.refresh_nat_mapping(DEFAULT_STUN_SERVERS);
+            }
+        });
+    }
 
     // The credential rotates; the identity does not.
     //
@@ -643,7 +667,11 @@ async fn reregister(
     state_path: &std::path::Path,
 ) -> MeshResult<String> {
     let mut endpoints = Vec::new();
-    if let Ok(local) = endpoint.local_addr() {
+    if let Some(local) = endpoint
+        .local_addr()
+        .ok()
+        .filter(|address| !address.ip().is_unspecified())
+    {
         endpoints.push(serde_json::json!({
             "kind": "local",
             "address": local.ip().to_string(),

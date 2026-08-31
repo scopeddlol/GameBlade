@@ -89,7 +89,7 @@ them and the other is silently never read.
 | Artifact               | Where                                                                                       |
 | ---------------------- | ------------------------------------------------------------------------------------------- |
 | **One machine**        | `ghcr.io/scopeddlol/gameblade`                                                              |
-| **Coordinator + node** | `ghcr.io/scopeddlol/gameblade-coordinator`, `-node`, and `-relay`                           |
+| **Coordinator + node** | `ghcr.io/scopeddlol/gameblade-coordinator` and `ghcr.io/scopeddlol/gameblade-node`          |
 | **Windows client**     | The `.exe` on the [latest release](https://github.com/scopeddlol/GameBlade/releases/latest) |
 
 Each image is the role it is named for — there is no `ROLE` to set.

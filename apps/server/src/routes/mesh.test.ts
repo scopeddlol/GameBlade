@@ -442,6 +442,28 @@ describe('mesh coordinator', () => {
     expect(addresses).not.toContain('192.168.1.20');
   });
 
+  it('never advertises a wildcard bind address as a client destination', async () => {
+    const node = await enrol('Home archive', 'u'.repeat(44));
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/mesh/heartbeat',
+      headers: nodeAuth(node),
+      payload: {
+        endpoints: [
+          { kind: 'local', address: '0.0.0.0', port: 47820 },
+          { kind: 'observed', address: '203.0.113.8', port: 45191 },
+        ],
+      },
+    });
+
+    const addresses = app.gameblade.mesh
+      .listNodes()[0]
+      ?.endpoints.map((endpoint) => endpoint.address);
+    expect(addresses).toContain('203.0.113.8');
+    expect(addresses).not.toContain('0.0.0.0');
+  });
+
   it('marks a node stale once it stops heartbeating', async () => {
     const node = await enrol('Home archive', 'h'.repeat(44));
 

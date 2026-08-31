@@ -34,8 +34,7 @@ export interface DownloadSourceState {
   node_id: string | null;
   label: string;
   source_type: 'origin_node' | 'mirror_node' | 'peer_client' | 'coordinator';
-  route: 'direct' | 'relay' | 'https';
-  endpoint: string | null;
+  route: 'direct' | 'https';
   status: 'connecting' | 'connected' | 'available' | 'failed';
   detail: string | null;
 }

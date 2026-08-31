@@ -154,6 +154,42 @@ active thumbnail was unmarked.
 
 ---
 
+## Version 0.6.9 - August 30, 2026
+
+### The private tunnel stays reachable while a node is idle
+
+A node learned its public UDP mapping once at startup and then left the socket
+silent. Home routers commonly discard an idle mapping after roughly thirty
+seconds, so the coordinator spent the rest of the node's uptime handing Desktop
+an address that no longer led anywhere. The node now keeps that exact outbound
+mapping alive from the same socket QUIC uses. Nothing is published from Docker,
+no router port is forwarded, and the coordinator remains coordination-only.
+
+Direct connection attempts now punch and handshake concurrently over a wider
+window, tolerating real coordinator, proxy and WAN latency. Wildcard bind
+addresses such as `0.0.0.0` are never advertised as client destinations.
+
+### Direct means Node-to-Client
+
+Desktop no longer requests the relay fallback. A coordinator authorizes and
+introduces the peers; the encrypted, identity-pinned QUIC tunnel then carries
+game bytes directly from Node to Desktop. The default node compose publishes no
+mesh UDP port, and the default coordinator compose contains no relay service.
+
+Networks using incompatible symmetric or carrier-grade NAT cannot be promised a
+direct route without either an inbound mapping or a data relay. GameBlade now
+preserves the direct-only contract instead of silently adding a proxy hop;
+`mesh-doctor` remains the explicit way to identify that network boundary.
+
+### Connection details are for players, not network operators
+
+The Downloads drawer now summarizes friendly node names—“Connected to
+HermesNode & HydraNode”—inside a polished secure-connection card. IP addresses,
+domains, ports and raw transport errors are no longer serialized into Desktop's
+download state or rendered in the user interface.
+
+---
+
 ## Version 0.6.8 - August 30, 2026
 
 ### Coordinator downloads use real sources only

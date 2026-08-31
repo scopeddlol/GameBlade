@@ -94,11 +94,5 @@ services:
       # network, put a tunnel with its own authentication in front.
       - '127.0.0.1:8080:8080'
 
-      # The mesh: where game bytes actually leave this machine. UDP, and
-      # outbound-initiated, so no port forward is strictly required — but
-      # forwarding this one at the router to this host is the single best thing
-      # you can do for download reliability.
-      - '47820:47820/udp'
-
     security_opt:
       - 'no-new-privileges:true'
