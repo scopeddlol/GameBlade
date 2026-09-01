@@ -1,8 +1,11 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { ARCHIVE_EXTENSIONS, IGNORED_ENTRIES } from '@gameblade/shared';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { syncLibraryRoots } from '../bootstrap.js';
+import { games, libraries, nodeEntryPolicies } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
 import { NODE_PAGE_SCRIPT, renderNodePage } from './nodePage.js';
 
@@ -31,6 +34,25 @@ const setupSchema = z.object({
   enrolmentToken: z.string().trim().min(1).max(512),
 });
 
+const entryDecisionSchema = z.object({
+  relPath: z
+    .string()
+    .trim()
+    .min(1)
+    .max(512)
+    .refine((value) => !value.includes('/') && !value.includes('\\') && value !== '.', {
+      message: 'Choose one top-level library entry',
+    }),
+  decision: z.enum(['automatic', 'approved', 'ignored']),
+});
+
+const ignoredEntries = new Set(IGNORED_ENTRIES.map((entry) => entry.toLowerCase()));
+
+function isArchive(name: string): boolean {
+  const lower = name.toLowerCase();
+  return ARCHIVE_EXTENSIONS.some((extension) => lower.endsWith(extension));
+}
+
 /**
  * What a node serves over HTTP: a page about itself, and the same thing as JSON.
  *
@@ -58,7 +80,7 @@ const setupSchema = z.object({
  * offer a second, wrong panel over it — first-run administrator screen and all.
  */
 export async function nodeRoutes(app: FastifyInstance): Promise<void> {
-  const { nodeStatus, config, scanner, chunks } = app.gameblade;
+  const { nodeStatus, nodeBackups, config, db, scanner, chunks } = app.gameblade;
 
   const send = async (reply: FastifyReply): Promise<FastifyReply> =>
     reply
@@ -137,6 +159,156 @@ export async function nodeRoutes(app: FastifyInstance): Promise<void> {
     return { message: 'Stopping after the game being read now.' };
   });
 
+  /* ---------------------------------------------------------- game intake */
+
+  /**
+   * A safe, top-level view of a mounted library.
+   *
+   * GameBlade deliberately treats only top-level folders and supported archive
+   * files as games, so browsing deeper would offer controls that cannot have a
+   * meaningful effect. No absolute path is accepted from the browser and no
+   * file contents are returned.
+   */
+  app.get(`${config.basePath}/api/node/libraries/:libraryId/entries`, async (request) => {
+    const { libraryId } = request.params as { libraryId: string };
+    const library = db.select().from(libraries).where(eq(libraries.id, libraryId)).get();
+    if (!library) throw ApiError.notFound('Library not found');
+
+    const diskEntries = await readdir(library.path, { withFileTypes: true }).catch(() => null);
+    if (!diskEntries) throw ApiError.notFound('That library is not mounted or readable');
+
+    const policies = new Map(
+      db
+        .select({ relPath: nodeEntryPolicies.relPath, decision: nodeEntryPolicies.decision })
+        .from(nodeEntryPolicies)
+        .where(eq(nodeEntryPolicies.libraryId, library.id))
+        .all()
+        .map((row) => [row.relPath, row.decision]),
+    );
+    const catalog = new Map(
+      db
+        .select({
+          relPath: games.relPath,
+          sizeBytes: games.sizeBytes,
+          missingAt: games.missingAt,
+        })
+        .from(games)
+        .where(eq(games.libraryId, library.id))
+        .all()
+        .map((game) => [game.relPath, game]),
+    );
+
+    const entries = await Promise.all(
+      diskEntries.map(async (entry) => {
+        const archive = entry.isFile() && isArchive(entry.name);
+        const eligible = entry.isDirectory() || archive;
+        const systemIgnored =
+          entry.name.startsWith('.') || ignoredEntries.has(entry.name.toLowerCase());
+        const policy = policies.get(entry.name) ?? 'automatic';
+        const known = catalog.get(entry.name);
+        const info = entry.isFile()
+          ? await stat(path.join(library.path, entry.name)).catch(() => null)
+          : null;
+        const willRead =
+          policy !== 'ignored' && eligible && (policy === 'approved' || !systemIgnored);
+
+        return {
+          name: entry.name,
+          kind: entry.isDirectory() ? 'folder' : archive ? 'archive' : 'file',
+          eligible,
+          systemIgnored,
+          decision: policy,
+          willRead,
+          cataloged: Boolean(known && !known.missingAt),
+          sizeBytes: known?.sizeBytes ?? info?.size ?? null,
+          modifiedAt: info ? new Date(info.mtimeMs).toISOString() : null,
+        };
+      }),
+    );
+
+    entries.sort((a, b) => {
+      if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    return { library: { id: library.id, name: library.name, path: library.path }, entries };
+  });
+
+  app.put(`${config.basePath}/api/node/libraries/:libraryId/entries/decision`, async (request) => {
+    const { libraryId } = request.params as { libraryId: string };
+    const input = entryDecisionSchema.parse(request.body);
+    const library = db.select().from(libraries).where(eq(libraries.id, libraryId)).get();
+    if (!library) throw ApiError.notFound('Library not found');
+
+    const entry = (await readdir(library.path, { withFileTypes: true }).catch(() => [])).find(
+      (candidate) => candidate.name === input.relPath,
+    );
+    if (!entry) throw ApiError.notFound('That library entry is no longer on disk');
+    if (
+      input.decision === 'approved' &&
+      !entry.isDirectory() &&
+      !(entry.isFile() && isArchive(entry.name))
+    ) {
+      throw ApiError.badRequest('Only folders and supported game archives can be approved');
+    }
+
+    const where = and(
+      eq(nodeEntryPolicies.libraryId, library.id),
+      eq(nodeEntryPolicies.relPath, input.relPath),
+    );
+    db.transaction((tx) => {
+      tx.delete(nodeEntryPolicies).where(where).run();
+      if (input.decision !== 'automatic') {
+        tx.insert(nodeEntryPolicies)
+          .values({
+            libraryId: library.id,
+            relPath: input.relPath,
+            decision: input.decision,
+            updatedAt: new Date().toISOString(),
+          })
+          .run();
+      }
+
+      // Withdrawal is safe immediately. Restoration is deliberately left to
+      // the next scan: the bytes may have changed while this entry was ignored,
+      // and advertising its old file list/hashes in that window would make the
+      // Node promise chunks it no longer has.
+      if (input.decision === 'ignored') {
+        tx.update(games)
+          .set({ missingAt: new Date().toISOString() })
+          .where(and(eq(games.libraryId, library.id), eq(games.relPath, input.relPath)))
+          .run();
+      }
+    });
+
+    return {
+      ok: true,
+      decision: input.decision,
+      message:
+        input.decision === 'ignored'
+          ? 'Ignored. It will no longer be reported to the Coordinator.'
+          : 'Saved. Run a scan to read any newly approved game files.',
+    };
+  });
+
+  /* -------------------------------------------------------------- backups */
+
+  app.post(`${config.basePath}/api/node/backups`, async (_request, reply) => {
+    const status = await nodeStatus.snapshot();
+    if (!status.enrolled) {
+      throw ApiError.conflict('Finish enrolling this Node before starting a Coordinator backup.');
+    }
+    if (!nodeBackups.start(true)) throw ApiError.conflict('A backup is already in progress.');
+    return reply
+      .code(202)
+      .send({ started: true, message: 'Creating a complete Coordinator backup.' });
+  });
+
+  app.delete(`${config.basePath}/api/node/backups/:name`, async (request) => {
+    const { name } = request.params as { name: string };
+    if (!(await nodeBackups.remove(name))) throw ApiError.badRequest('That is not a backup name');
+    return { ok: true, message: 'Backup removed from this Node.' };
+  });
+
   /**
    * Point this node at a coordinator, once.
    *
@@ -211,7 +383,8 @@ export async function nodeRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({
         error: {
           code: 'not_found',
-          message: 'A node serves /api/health and /api/node/{status,setup,scan,hash} only',
+          message:
+            'A Node serves health, status, setup, scan, hash, game-intake and backup controls only',
         },
       });
     }

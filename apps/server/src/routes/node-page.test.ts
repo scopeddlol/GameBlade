@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { bootstrap } from '../bootstrap.js';
 import { discoverLibraryRoots, loadConfig } from '../config.js';
-import { libraries } from '../db/schema.js';
+import { games, libraries, nodeEntryPolicies } from '../db/schema.js';
 
 /**
  * The page a node serves about itself, and the two things it can start.
@@ -221,6 +222,78 @@ describe('a node’s own page', () => {
     // already finished.
     const stop = await app.inject({ method: 'POST', url: '/api/node/hash/cancel', payload: {} });
     expect(stop.statusCode).toBe(409);
+  });
+
+  it('lets an operator approve or ignore top-level game entries', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'gameblade-intake-'));
+    await mkdir(path.join(root, 'Approved Game'), { recursive: true });
+    await writeFile(path.join(root, 'Approved Game', 'game.bin'), 'game');
+    await mkdir(path.join(root, '.Hidden Game'), { recursive: true });
+    await writeFile(path.join(root, '.Hidden Game', 'game.bin'), 'hidden');
+    await writeFile(path.join(root, 'notes.txt'), 'not a package');
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+
+    const { app } = await bootNode({ LIBRARY_PATHS: root });
+    await bootstrap(app);
+    await app.gameblade.scanner.scan({ fetchMetadata: false });
+    const library = app.gameblade.db.select().from(libraries).get()!;
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/api/node/libraries/${library.id}/entries`,
+    });
+    expect(listed.statusCode).toBe(200);
+    const entries = listed.json().entries as Array<{
+      name: string;
+      eligible: boolean;
+      systemIgnored: boolean;
+      cataloged: boolean;
+    }>;
+    expect(entries.find((entry) => entry.name === 'Approved Game')?.cataloged).toBe(true);
+    expect(entries.find((entry) => entry.name === '.Hidden Game')?.systemIgnored).toBe(true);
+    expect(entries.find((entry) => entry.name === 'notes.txt')?.eligible).toBe(false);
+
+    const ignored = await app.inject({
+      method: 'PUT',
+      url: `/api/node/libraries/${library.id}/entries/decision`,
+      payload: { relPath: 'Approved Game', decision: 'ignored' },
+    });
+    expect(ignored.statusCode).toBe(200);
+    expect(
+      app.gameblade.db.select().from(games).where(eq(games.relPath, 'Approved Game')).get()
+        ?.missingAt,
+    ).not.toBeNull();
+
+    const approved = await app.inject({
+      method: 'PUT',
+      url: `/api/node/libraries/${library.id}/entries/decision`,
+      payload: { relPath: '.Hidden Game', decision: 'approved' },
+    });
+    expect(approved.statusCode).toBe(200);
+    await app.gameblade.scanner.scan({ libraryId: library.id, fetchMetadata: false });
+
+    expect(
+      app.gameblade.db.select().from(games).where(eq(games.relPath, '.Hidden Game')).get()
+        ?.missingAt,
+    ).toBeNull();
+    expect(
+      app.gameblade.db
+        .select()
+        .from(nodeEntryPolicies)
+        .where(eq(nodeEntryPolicies.libraryId, library.id))
+        .all()
+        .map((policy) => [policy.relPath, policy.decision]),
+    ).toEqual([
+      ['.Hidden Game', 'approved'],
+      ['Approved Game', 'ignored'],
+    ]);
+
+    const unsupported = await app.inject({
+      method: 'PUT',
+      url: `/api/node/libraries/${library.id}/entries/decision`,
+      payload: { relPath: 'notes.txt', decision: 'approved' },
+    });
+    expect(unsupported.statusCode).toBe(400);
   });
 
   it('says how to add a second drive while a node still has one', async () => {

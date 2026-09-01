@@ -196,6 +196,7 @@ export function startSchedules(app: FastifyInstance): () => void {
     playtime,
     settings,
     backups,
+    nodeBackups,
     saveManifest,
     discord,
     nodeStatus,
@@ -407,29 +408,55 @@ export function startSchedules(app: FastifyInstance): () => void {
    * the previous one is skipped rather than queued — two zips of the same
    * directory at once is only ever slower.
    */
-  let backupRunning = false;
-  let lastBackupAt = 0;
-  const backupTimer = setInterval(() => {
-    const { backupKeep, backupEveryHours, backupIncludeImages } = settings.get();
-    if (backupEveryHours <= 0 || backupRunning) return;
-    if (Date.now() - lastBackupAt < backupEveryHours * 3_600_000) return;
+  if (config.servesApi) {
+    let backupRunning = false;
+    let lastBackupAt = 0;
+    const backupTimer = setInterval(() => {
+      const { backupKeep, backupEveryHours, backupIncludeImages } = settings.get();
+      if (backupEveryHours <= 0 || backupRunning) return;
+      if (Date.now() - lastBackupAt < backupEveryHours * 3_600_000) return;
 
-    backupRunning = true;
-    lastBackupAt = Date.now();
-    void backups
-      .create({
-        keep: backupKeep,
-        everyHours: backupEveryHours,
-        includeImages: backupIncludeImages,
-      })
-      .then((info) => app.log.info({ backup: info.name, bytes: info.sizeBytes }, 'backup written'))
-      .catch((error: unknown) => app.log.error({ err: error }, 'scheduled backup failed'))
-      .finally(() => {
-        backupRunning = false;
-      });
-  }, 60 * 60_000);
-  backupTimer.unref();
-  timers.push(backupTimer);
+      backupRunning = true;
+      lastBackupAt = Date.now();
+      void backups
+        .create({
+          keep: backupKeep,
+          everyHours: backupEveryHours,
+          includeImages: backupIncludeImages,
+        })
+        .then((info) =>
+          app.log.info({ backup: info.name, bytes: info.sizeBytes }, 'backup written'),
+        )
+        .catch((error: unknown) => app.log.error({ err: error }, 'scheduled backup failed'))
+        .finally(() => {
+          backupRunning = false;
+        });
+    }, 60 * 60_000);
+    backupTimer.unref();
+    timers.push(backupTimer);
+  }
+
+  /**
+   * A Node keeps one fresh, complete Coordinator archive without opening an
+   * inbound backup port. The first enrolled Node that notices an old/missing
+   * archive asks the Coordinator to make it; every other Node reuses that copy.
+   */
+  if (config.reportsCatalogUpstream) {
+    const syncBackup = () => {
+      if (!nodeBackups.isRunning) nodeBackups.start(false);
+    };
+
+    const firstNodeBackup = setTimeout(syncBackup, 60_000);
+    firstNodeBackup.unref();
+    timers.push(firstNodeBackup);
+
+    // Cheap when nothing changed (one authenticated listing), and short enough
+    // that a Node enrolled after the first attempt does not wait hours for its
+    // first durable copy.
+    const nodeBackupTimer = setInterval(syncBackup, 15 * 60_000);
+    nodeBackupTimer.unref();
+    timers.push(nodeBackupTimer);
+  }
 
   /**
    * A daily pull of the save-path manifest.

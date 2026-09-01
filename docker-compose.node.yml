@@ -67,9 +67,10 @@ services:
       # LIBRARY_PATHS: /library,/mnt/extra
 
     volumes:
-      # The node's identity, its local index, and nothing else worth keeping.
-      # node-state.json in here is what makes this machine *this node* — copy it
-      # if you ever move the node to different hardware.
+      # The node's identity, local index, scan decisions, and the complete
+      # Coordinator backups it retains. Leave enough room here for seven copies
+      # of the Coordinator data directory. node-state.json is what makes this
+      # machine *this node* — copy it if you ever move the node to new hardware.
       - ./data:/data
       # Your games. Read-only: a node serves these files and must never write to
       # them. Change the left-hand side; the right-hand side is where the image
@@ -83,8 +84,8 @@ services:
       # - /mnt/E:/libraries/E:ro
 
     ports:
-      # The node's own page: setup while it is unenrolled, then what it scanned,
-      # whether it is reporting, and how much of it is servable.
+      # The node's own control center: setup, scan/hash progress, game intake
+      # decisions, and the Coordinator backups stored on this machine.
       #
       # Bound to localhost by default because the page has no authentication of
       # its own. To reach it from the rest of your network, bind it to this

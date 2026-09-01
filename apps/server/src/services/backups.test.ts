@@ -120,6 +120,21 @@ describe('BackupService', () => {
     expect(names).toContain('images/cover.webp');
   });
 
+  it('makes complete archives include regenerable and future data trees too', async () => {
+    await writeFile(path.join(dataDir, 'save-manifest.json'), '{"games":[]}');
+    await mkdir(path.join(dataDir, 'future-config'), { recursive: true });
+    await writeFile(path.join(dataDir, 'future-config', 'rules.json'), '{"keep":true}');
+
+    const complete = await service.create({ ...DEFAULT_BACKUP_SETTINGS, includeImages: true });
+    const completeNames = await entriesIn(path.join(dataDir, 'backups', complete.name));
+    expect(completeNames).toContain('save-manifest.json');
+    expect(completeNames).toContain('future-config/rules.json');
+
+    const essential = await service.create({ ...DEFAULT_BACKUP_SETTINGS, includeImages: false });
+    const essentialNames = await entriesIn(path.join(dataDir, 'backups', essential.name));
+    expect(essentialNames).not.toContain('save-manifest.json');
+  });
+
   it('never archives its own archives', async () => {
     await service.create(DEFAULT_BACKUP_SETTINGS);
     const second = await service.create(DEFAULT_BACKUP_SETTINGS);

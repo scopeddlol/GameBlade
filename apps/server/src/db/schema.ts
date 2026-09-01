@@ -133,6 +133,30 @@ export const libraries = sqliteTable(
   (t) => [uniqueIndex('libraries_path_idx').on(t.path)],
 );
 
+/**
+ * Operator decisions about top-level entries on a Node's library disk.
+ *
+ * Unlisted entries retain the historic automatic behaviour. An explicit
+ * approval is still useful: it documents that somebody reviewed the item and
+ * can override a built-in dot/system-name exclusion. Ignored entries disappear
+ * from the next catalog report without anything ever being deleted from disk.
+ */
+export const nodeEntryPolicies = sqliteTable(
+  'node_entry_policies',
+  {
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => libraries.id, { onDelete: 'cascade' }),
+    relPath: text('rel_path').notNull(),
+    decision: text('decision', { enum: ['approved', 'ignored'] }).notNull(),
+    updatedAt: text('updated_at').notNull().default(now),
+  },
+  (t) => [
+    primaryKey({ columns: [t.libraryId, t.relPath] }),
+    index('node_entry_policies_decision_idx').on(t.libraryId, t.decision),
+  ],
+);
+
 export const games = sqliteTable(
   'games',
   {

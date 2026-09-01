@@ -14,6 +14,7 @@ import { CollectionService } from './services/collections.js';
 import { ChecksumService } from './services/checksums.js';
 import { CatalogIngestService } from './services/catalogIngest.js';
 import { NodeStatusService } from './services/nodeStatus.js';
+import { NodeBackupService } from './services/nodeBackups.js';
 import { ChunkService } from './services/chunks.js';
 import { DownloadTokenService } from './services/downloads.js';
 import { FriendService } from './services/friends.js';
@@ -65,6 +66,8 @@ export interface GamebladeContext {
   catalogIngest: CatalogIngestService;
   /** What this machine can say about itself when it is a node. */
   nodeStatus: NodeStatusService;
+  /** Complete Coordinator archives retained on a Node's own data volume. */
+  nodeBackups: NodeBackupService;
   downloadTokens: DownloadTokenService;
   images: ImageCache;
   installer: InstallerService;
@@ -130,6 +133,14 @@ export function createContext(
   const saveManifest = new SaveManifestService(config.dataDir);
   const discord = new DiscordService(db, settings, config.basePath, logger);
   const backups = new BackupService(config.dataDir, sqlite);
+  const nodeBackups = new NodeBackupService(
+    {
+      dataDir: config.dataDir,
+      statePath: config.nodeStatePath,
+      coordinatorUrl: config.coordinatorUrl,
+    },
+    logger,
+  );
   const scanner = new ScannerService(db, metadata, logger);
   // Zero is the "work it out" default, and `undefined` is what the services
   // read as that — passing 0 straight through would clamp to one file at a time.
@@ -138,7 +149,7 @@ export function createContext(
   const chunks = new ChunkService(db, logger, hashConcurrency);
   const mesh = new MeshService(db, logger);
   const catalogIngest = new CatalogIngestService(db, logger);
-  const nodeStatus = new NodeStatusService(db, config, scanner, chunks);
+  const nodeStatus = new NodeStatusService(db, config, scanner, chunks, nodeBackups);
   const auth = new AuthService(db);
   const downloadTokens = new DownloadTokenService(db, config.sessionSecret);
   const installer = new InstallerService(db, config);
@@ -199,6 +210,7 @@ export function createContext(
     mesh,
     catalogIngest,
     nodeStatus,
+    nodeBackups,
     downloadTokens,
     images,
     installer,

@@ -9,7 +9,14 @@ import {
 } from '@gameblade/shared';
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { gameFiles, games, libraries, type Game, type Library } from '../db/schema.js';
+import {
+  gameFiles,
+  games,
+  libraries,
+  nodeEntryPolicies,
+  type Game,
+  type Library,
+} from '../db/schema.js';
 import { newId } from '../lib/ids.js';
 import { toPosixPath } from '../lib/paths.js';
 import { parseTitle, toSearchTitle, toSortTitle } from '../lib/titles.js';
@@ -397,9 +404,7 @@ export class ScannerService {
 
       const controller = new AbortController();
       this.currentItem = controller;
-      const read = await withDeadline(READ_DEADLINE_MS, controller, () =>
-        this.discover(library.path),
-      );
+      const read = await withDeadline(READ_DEADLINE_MS, controller, () => this.discover(library));
       this.currentItem = null;
 
       if (read.timedOut) {
@@ -594,10 +599,26 @@ export class ScannerService {
    * it finishes — but a number that climbs is the whole difference between a
    * run somebody can watch and one they assume has died.
    */
-  private async discover(root: string): Promise<DiscoveredGame[]> {
+  private async discover(library: Library): Promise<DiscoveredGame[]> {
+    const root = library.path;
     const entries = await readdir(root, { withFileTypes: true });
     const results: DiscoveredGame[] = [];
-    const candidates = entries.filter((entry) => !isIgnored(entry.name));
+    const policies = new Map(
+      this.db
+        .select({ relPath: nodeEntryPolicies.relPath, decision: nodeEntryPolicies.decision })
+        .from(nodeEntryPolicies)
+        .where(eq(nodeEntryPolicies.libraryId, library.id))
+        .all()
+        .map((row) => [row.relPath, row.decision]),
+    );
+    const candidates = entries.filter((entry) => {
+      const decision = policies.get(toPosixPath(entry.name));
+      if (decision === 'ignored') return false;
+      // An explicit approval can rescue a normally hidden/system-named folder
+      // or archive. Unsupported loose files remain unsupported: approving one
+      // must never make a downloader treat arbitrary bytes as a game package.
+      return decision === 'approved' || !isIgnored(entry.name);
+    });
 
     // Now that the top level is known, the phase has a real denominator: it is
     // the folders to inspect, not the games that will come out of them.

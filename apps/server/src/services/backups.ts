@@ -9,6 +9,8 @@ export interface BackupInfo {
   name: string;
   sizeBytes: number;
   createdAt: string;
+  /** A complete copy also carries the regenerable artwork cache. */
+  complete: boolean;
 }
 
 export interface BackupSettings {
@@ -33,13 +35,16 @@ export const DEFAULT_BACKUP_SETTINGS: BackupSettings = {
   includeImages: false,
 };
 
-/** Files that are regenerated on demand and not worth carrying. */
-const SKIP_AT_ROOT = new Set([
+/** Trees/partials that must never be copied into an archive. */
+const ALWAYS_SKIP_AT_ROOT = new Set([
   'backups',
-  'save-manifest.json',
+  'coordinator-backups',
   'save-manifest.yaml.part',
   'save-manifest.json.part',
 ]);
+
+/** Regenerable files omitted only from the smaller, essential archive. */
+const ESSENTIAL_SKIP_AT_ROOT = new Set(['save-manifest.json']);
 
 /** Names of the parts of the data directory, in the order they are added. */
 const CONTENT_DIRS = ['saves', 'media', 'client'] as const;
@@ -57,6 +62,8 @@ const CONTENT_DIRS = ['saves', 'media', 'client'] as const;
  * every catalog row from it.
  */
 export class BackupService {
+  private running: Promise<BackupInfo> | null = null;
+
   constructor(
     private readonly dataDir: string,
     private readonly sqlite: Database.Database,
@@ -78,6 +85,7 @@ export class BackupService {
         name,
         sizeBytes: info.size,
         createdAt: new Date(info.mtimeMs).toISOString(),
+        complete: name.startsWith('gameblade-full-'),
       });
     }
 
@@ -110,10 +118,29 @@ export class BackupService {
    * restores to a corrupt state.
    */
   async create(settings: BackupSettings): Promise<BackupInfo> {
+    // A scheduled run and two Nodes may all ask at the same moment. They want
+    // the same point-in-time copy, not three competing SQLite snapshots and
+    // three ZIP writers fighting over the Coordinator's disk.
+    if (this.running) return this.running;
+
+    this.running = this.write(settings).finally(() => {
+      this.running = null;
+    });
+    return this.running;
+  }
+
+  get isRunning(): boolean {
+    return this.running !== null;
+  }
+
+  private async write(settings: BackupSettings): Promise<BackupInfo> {
     await mkdir(this.dir, { recursive: true });
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const name = `gameblade-${stamp}.zip`;
+    // Complete archives are identifiable without opening a potentially huge
+    // ZIP. Nodes only accept these for off-machine retention: artwork can be
+    // fetched again, but "back up everything" should still mean everything.
+    const name = `gameblade-${settings.includeImages ? 'full-' : ''}${stamp}.zip`;
     const target = path.join(this.dir, name);
     const staging = `${target}.part`;
 
@@ -133,11 +160,19 @@ export class BackupService {
         await addTree(zip, path.join(this.dataDir, 'images'), 'images');
       }
 
-      // Anything else sitting at the root that is not a directory we have
-      // already covered, so a future addition is not silently left out.
+      // Anything else sitting at the root. Complete Node copies recursively
+      // include future directories too, so adding a new kind of Coordinator
+      // state cannot silently make the disaster-recovery archive incomplete.
+      const covered = new Set<string>([...CONTENT_DIRS, 'images']);
       for (const entry of await readdir(this.dataDir, { withFileTypes: true }).catch(() => [])) {
+        if (ALWAYS_SKIP_AT_ROOT.has(entry.name) || covered.has(entry.name)) continue;
+        if (!settings.includeImages && ESSENTIAL_SKIP_AT_ROOT.has(entry.name)) continue;
+
+        if (entry.isDirectory()) {
+          await addTree(zip, path.join(this.dataDir, entry.name), entry.name);
+          continue;
+        }
         if (!entry.isFile()) continue;
-        if (SKIP_AT_ROOT.has(entry.name)) continue;
         if (entry.name.startsWith('gameblade.db')) continue;
         zip.addFile(path.join(this.dataDir, entry.name), entry.name);
       }
@@ -162,7 +197,12 @@ export class BackupService {
     await this.prune(settings.keep);
 
     const info = await stat(target);
-    return { name, sizeBytes: info.size, createdAt: new Date(info.mtimeMs).toISOString() };
+    return {
+      name,
+      sizeBytes: info.size,
+      createdAt: new Date(info.mtimeMs).toISOString(),
+      complete: settings.includeImages,
+    };
   }
 
   /** Deletes the oldest archives beyond the number to keep. */

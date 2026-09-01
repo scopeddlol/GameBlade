@@ -6,6 +6,7 @@ import type { Db } from '../db/index.js';
 import { gameFiles, games, libraries } from '../db/schema.js';
 import { VERSION } from '../lib/version.js';
 import type { ChunkProgress, SweepProgress } from './chunks.js';
+import type { NodeBackupService, NodeBackupSnapshot } from './nodeBackups.js';
 
 /**
  * What the node agent beside this process wrote about itself.
@@ -76,6 +77,8 @@ export interface NodeStatusSnapshot {
    * and a page you can tell is alive.
    */
   hashingGame: ChunkProgress;
+  /** Off-machine Coordinator copies kept on this Node's writable volume. */
+  backups: NodeBackupSnapshot;
   lastReport: ReportAttempt | null;
   startedAt: string;
 }
@@ -122,6 +125,7 @@ export class NodeStatusService {
       getSweepProgress(): SweepProgress;
       getProgress(): ChunkProgress;
     },
+    private readonly backups: NodeBackupService,
   ) {}
 
   /** Called by the reporter loop after every attempt, successful or not. */
@@ -215,6 +219,7 @@ export class NodeStatusService {
       scan: this.scanner.getProgress(),
       hashing: this.chunks.getSweepProgress(),
       hashingGame: this.chunks.getProgress(),
+      backups: await this.backups.snapshot(),
       lastReport: this.lastReport,
       startedAt: this.startedAt,
     };

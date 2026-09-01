@@ -40,56 +40,115 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
     <style>
       :root {
         color-scheme: light dark;
-        --bg: #0e1116;
-        --raised: #161b22;
-        --border: #262d36;
-        --text: #e6edf3;
-        --muted: #8b949e;
-        --ok: #3fb950;
-        --warn: #d29922;
-        --bad: #f85149;
-        --accent: #2f81f7;
+        --bg: #080a0f;
+        --raised: rgba(20, 23, 31, 0.9);
+        --raised-strong: #171a23;
+        --soft: #202430;
+        --border: rgba(255, 255, 255, 0.09);
+        --border-strong: rgba(255, 255, 255, 0.16);
+        --text: #f5f6fa;
+        --muted: #969baa;
+        --ok: #5ee8a2;
+        --warn: #ffc96b;
+        --bad: #ff7c86;
+        --accent: #a78bfa;
+        --accent-strong: #8b5cf6;
+        --accent-soft: rgba(139, 92, 246, 0.14);
+        --blue: #6eb7ff;
+        --shadow: 0 24px 70px rgba(0, 0, 0, 0.26);
       }
       @media (prefers-color-scheme: light) {
         :root {
-          --bg: #f6f8fa;
-          --raised: #fff;
-          --border: #d0d7de;
-          --text: #1f2328;
-          --muted: #656d76;
-          --ok: #1a7f37;
-          --warn: #9a6700;
-          --bad: #cf222e;
-          --accent: #0969da;
+          --bg: #f5f4f8;
+          --raised: rgba(255, 255, 255, 0.92);
+          --raised-strong: #fff;
+          --soft: #efedf5;
+          --border: rgba(34, 25, 54, 0.1);
+          --border-strong: rgba(34, 25, 54, 0.18);
+          --text: #201a2b;
+          --muted: #706a7b;
+          --ok: #087a46;
+          --warn: #9b5f00;
+          --bad: #c52d3b;
+          --accent: #7047c8;
+          --accent-strong: #6136ba;
+          --accent-soft: rgba(112, 71, 200, 0.1);
+          --blue: #1769aa;
+          --shadow: 0 24px 70px rgba(50, 36, 74, 0.1);
         }
       }
       * { box-sizing: border-box; }
+      html { min-height: 100%; }
       body {
         margin: 0;
-        padding: 32px 20px 64px;
+        min-height: 100vh;
+        padding: 0 20px 56px;
         background: var(--bg);
         color: var(--text);
-        font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        font: 14px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+        background-image:
+          radial-gradient(circle at 12% -8%, rgba(139, 92, 246, 0.22), transparent 32rem),
+          radial-gradient(circle at 90% 5%, rgba(46, 132, 255, 0.12), transparent 27rem);
+        background-attachment: fixed;
       }
-      main { max-width: 820px; margin: 0 auto; }
-      h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.01em; }
-      .sub { color: var(--muted); margin: 0 0 28px; font-size: 14px; }
+      main { max-width: 1160px; margin: 0 auto; }
+      .topbar {
+        min-height: 76px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--border);
+      }
+      .brand, .top-status, .hero-line, .metric-head, .panel-head, .path,
+      .file-main, .file-actions, .backup-main { display: flex; align-items: center; }
+      .brand { gap: 11px; font-weight: 750; letter-spacing: -0.02em; }
+      .mark {
+        width: 31px; height: 31px; border-radius: 10px; display: grid; place-items: center;
+        color: white; font-size: 16px; background: linear-gradient(145deg, #b7a2ff, #6d3fe0);
+        box-shadow: 0 9px 28px rgba(124, 79, 220, 0.35);
+      }
+      .top-status { gap: 9px; color: var(--muted); font-size: 12px; }
+      .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 5px rgba(94,232,162,.1); }
+      .hero { padding: 42px 0 28px; }
+      .hero-line { justify-content: space-between; gap: 24px; align-items: flex-end; }
+      .eyebrow { margin: 0 0 6px; color: var(--accent); font-weight: 750; font-size: 11px; text-transform: uppercase; letter-spacing: .14em; }
+      h1 { font-size: clamp(30px, 5vw, 48px); line-height: 1.05; margin: 0; letter-spacing: -0.055em; }
+      .sub { color: var(--muted); margin: 13px 0 0; max-width: 660px; font-size: 15px; }
+      .node-id { color: var(--muted); font-size: 12px; text-align: right; }
+      .node-id code { display: block; color: var(--text); margin-top: 4px; }
+      .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 24px; }
+      .metric { padding: 17px 18px; border-radius: 16px; background: var(--raised); border: 1px solid var(--border); box-shadow: var(--shadow); }
+      .metric-head { gap: 8px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; }
+      .metric-icon { width: 24px; height: 24px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+      .metric strong { display: block; font-size: 23px; line-height: 1.2; margin-top: 10px; letter-spacing: -.035em; }
+      .metric small { color: var(--muted); }
+      .tabs { display: flex; gap: 5px; margin: 0 0 16px; padding: 5px; width: fit-content; border-radius: 13px; background: var(--raised); border: 1px solid var(--border); }
+      .tab { color: var(--muted); background: transparent; border: 0; box-shadow: none; padding: 8px 14px; }
+      .tab.active { color: var(--text); background: var(--soft); }
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; animation: enter .18s ease-out; }
+      @keyframes enter { from { opacity: .4; transform: translateY(3px); } }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
       section {
         background: var(--raised);
         border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 16px 18px;
+        border-radius: 18px;
+        padding: 21px 22px;
         margin-bottom: 14px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(16px);
       }
       h2 {
-        font-size: 12px;
+        font-size: 11px;
         text-transform: uppercase;
-        letter-spacing: 0.07em;
+        letter-spacing: 0.1em;
         color: var(--muted);
-        margin: 0 0 12px;
+        margin: 0;
       }
-      .head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-      dl { display: grid; grid-template-columns: minmax(140px, auto) 1fr; gap: 8px 20px; margin: 0; }
+      .panel-head { justify-content: space-between; gap: 16px; margin-bottom: 17px; }
+      .panel-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+      .panel-head h2 + p { margin-top: 5px; }
+      dl { display: grid; grid-template-columns: minmax(120px, auto) 1fr; gap: 10px 20px; margin: 0; }
       dt { color: var(--muted); }
       dd { margin: 0; overflow-wrap: anywhere; }
       code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.92em; }
@@ -100,18 +159,19 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
       .dot { font-size: 11px; vertical-align: 1px; margin-right: 5px; }
       table { width: 100%; border-collapse: collapse; }
       th { text-align: left; color: var(--muted); font-weight: 500; font-size: 13px; }
-      th, td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+      th, td { padding: 10px 10px 10px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
       tr:last-child th, tr:last-child td { border-bottom: 0; }
       td.num { text-align: right; white-space: nowrap; }
       .empty { color: var(--muted); margin: 0; }
-      footer { color: var(--muted); font-size: 13px; text-align: center; margin-top: 26px; }
-      a { color: inherit; }
+      footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 30px; }
+      a { color: var(--blue); text-decoration: none; }
+      a:hover { text-decoration: underline; }
 
       .note {
         margin: 12px 0 0;
         padding: 10px 12px;
         border: 1px solid var(--border);
-        border-radius: 8px;
+        border-radius: 12px;
         color: var(--muted);
         font-size: 13px;
       }
@@ -119,37 +179,41 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
       .note pre { margin: 8px 0 0; white-space: pre-wrap; color: var(--text); }
 
       /* Setup. Only ever drawn while this node has not enrolled. */
-      .setup { border-color: var(--accent); }
+      .setup { border-color: rgba(167,139,250,.55); background: linear-gradient(145deg, var(--raised), var(--accent-soft)); }
       .setup h2 { color: var(--accent); }
       label { display: block; margin-bottom: 14px; }
       label span { display: block; margin-bottom: 5px; font-size: 13px; }
       label small { display: block; color: var(--muted); font-weight: 400; margin-top: 4px; }
-      input {
+      input, select {
         width: 100%;
-        padding: 9px 11px;
+        padding: 10px 12px;
         font: inherit;
         color: var(--text);
-        background: var(--bg);
+        background: var(--soft);
         border: 1px solid var(--border);
-        border-radius: 7px;
+        border-radius: 10px;
       }
-      input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+      input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       button {
         font: inherit;
         font-weight: 600;
         color: #fff;
-        background: var(--accent);
+        background: var(--accent-strong);
         border: 0;
-        border-radius: 7px;
-        padding: 9px 16px;
+        border-radius: 10px;
+        padding: 9px 14px;
         cursor: pointer;
+        transition: transform .15s ease, border-color .15s ease, background .15s ease;
       }
+      button:hover:not([disabled]) { transform: translateY(-1px); }
       button.ghost {
         color: var(--text);
-        background: transparent;
+        background: var(--soft);
         border: 1px solid var(--border);
         font-weight: 500;
       }
+      button.danger { color: var(--bad); }
+      button.small { padding: 6px 9px; border-radius: 8px; font-size: 12px; }
       button[disabled] { opacity: 0.6; cursor: not-allowed; }
       .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
       .msg { margin: 12px 0 0; font-size: 13px; }
@@ -157,16 +221,17 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
       ol.steps li { margin-bottom: 4px; }
 
       .bar {
-        height: 6px;
-        border-radius: 3px;
-        background: var(--border);
+        height: 7px;
+        border-radius: 20px;
+        background: var(--soft);
         overflow: hidden;
-        margin: 8px 0 4px;
+        margin: 10px 0 6px;
       }
-      .bar > i { display: block; height: 100%; background: var(--accent); }
-      .job { margin-bottom: 18px; }
+      .bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-strong), #5ab5ff); border-radius: inherit; }
+      .job { margin-bottom: 21px; padding-bottom: 21px; border-bottom: 1px solid var(--border); }
       .job:last-child { margin-bottom: 0; }
-      .job h3 { font-size: 14px; margin: 0 0 2px; }
+      .job:last-child { padding-bottom: 0; border-bottom: 0; }
+      .job h3 { font-size: 15px; margin: 0 0 3px; }
       .job p { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
       /* The live readout under the hashing bar. Monospaced paths, because a
          file name is the one thing here somebody may want to copy exactly. */
@@ -174,51 +239,129 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
       .hashing-now code {
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         word-break: break-all;
-        color: var(--fg);
+        color: var(--text);
+      }
+      .browser-toolbar { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(220px, 1fr); gap: 10px; margin-bottom: 12px; }
+      .filters { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }
+      .filter { color: var(--muted); background: transparent; border: 1px solid var(--border); padding: 6px 10px; font-size: 12px; }
+      .filter.active { color: var(--text); background: var(--accent-soft); border-color: rgba(167,139,250,.35); }
+      .path { gap: 8px; margin-bottom: 12px; color: var(--muted); font-size: 12px; min-width: 0; }
+      .path code { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .file-list, .backup-list { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: rgba(0,0,0,.06); }
+      .file-row, .backup-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 13px 14px; border-bottom: 1px solid var(--border); }
+      .file-row:last-child, .backup-row:last-child { border-bottom: 0; }
+      .file-main, .backup-main { gap: 12px; min-width: 0; }
+      .file-icon { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 10px; background: var(--soft); color: var(--muted); font-size: 16px; }
+      .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 620; }
+      .file-meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+      .file-actions { gap: 7px; }
+      .badge { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 99px; padding: 2px 7px; margin-left: 6px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; vertical-align: 1px; }
+      .badge.approved { color: var(--ok); border-color: rgba(94,232,162,.25); background: rgba(94,232,162,.07); }
+      .badge.ignored { color: var(--bad); border-color: rgba(255,124,134,.25); background: rgba(255,124,134,.07); }
+      .browser-empty { padding: 38px 20px; text-align: center; color: var(--muted); }
+      .backup-copy { min-width: 0; }
+      .backup-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .backup-copy span { color: var(--muted); font-size: 12px; }
+      .backup-callout { padding: 15px; border-radius: 13px; margin-bottom: 14px; background: var(--accent-soft); border: 1px solid rgba(167,139,250,.22); }
+      .backup-callout p { margin: 4px 0 0; color: var(--muted); }
+      .wide { grid-column: 1 / -1; }
+      @media (max-width: 760px) {
+        body { padding-inline: 14px; }
+        .topbar { min-height: 64px; }
+        .hero { padding-top: 30px; }
+        .hero-line { align-items: flex-start; }
+        .node-id { display: none; }
+        .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .grid { grid-template-columns: 1fr; }
+        .wide { grid-column: auto; }
+        .browser-toolbar { grid-template-columns: 1fr; }
+        .file-row, .backup-row { grid-template-columns: 1fr; }
+        .file-actions { padding-left: 46px; }
+      }
+      @media (max-width: 430px) {
+        .metrics { grid-template-columns: 1fr; }
+        .tabs { width: 100%; }
+        .tab { flex: 1; padding-inline: 8px; }
+        section { padding: 18px 16px; }
       }
     </style>
   </head>
   <body>
     <main>
-      <h1>GameBlade node</h1>
-      <p class="sub">
-        This machine holds game files and serves them to players directly. It has no
-        catalog, no accounts and no settings of its own — those live on the coordinator.
-      </p>
+      <div class="topbar">
+        <div class="brand"><span class="mark">◆</span> GameBlade</div>
+        <div class="top-status"><span class="live-dot"></span>${status.enrolled ? 'Node connected' : 'Setup needed'}</div>
+      </div>
+
+      <header class="hero">
+        <div class="hero-line">
+          <div>
+            <p class="eyebrow">Node control center</p>
+            <h1>Your archive, at a glance.</h1>
+            <p class="sub">Review what this machine reads, keep its library ready to serve, and hold complete off-machine copies of the Coordinator.</p>
+          </div>
+          <div class="node-id">Node identity
+            <code>${status.nodeId ? escapeHtml(status.nodeId) : 'waiting for enrolment'}</code>
+          </div>
+        </div>
+      </header>
 
       ${setupPanel(status)}
 
-      <section>
-        <h2>Coordinator</h2>
-        <dl>
-          <dt>Reports to</dt><dd>${link}</dd>
-          <dt>Enrolment</dt><dd>${enrolment(status)}</dd>
-          <dt>Node ID</dt>
-          <dd>${status.nodeId ? `<code>${escapeHtml(status.nodeId)}</code>` : '<span class="muted">—</span>'}</dd>
-          <dt>Last report</dt><dd>${lastReport(status)}</dd>
-        </dl>
-      </section>
+      <div class="metrics">
+        ${metric('◫', 'Games held', status.games.toLocaleString('en'), formatBytes(status.bytes))}
+        ${metric('✓', 'Ready to serve', status.servableGames.toLocaleString('en'), `of ${status.games.toLocaleString('en')} games`)}
+        ${metric('⌁', 'Libraries', status.libraries.length.toLocaleString('en'), status.libraries.every((library) => library.mounted) ? 'all mounted' : 'mount needs attention')}
+        ${metric('↗', 'Node backups', status.backups.copies.length.toLocaleString('en'), formatBytes(status.backups.totalBytes))}
+      </div>
 
-      <section>
-        <h2>Libraries</h2>
-        ${libraryTable(status)}
-        ${mountHint(status)}
-      </section>
+      <nav class="tabs" aria-label="Node workspaces">
+        <button class="tab active" type="button" data-tab="overview">Overview</button>
+        <button class="tab" type="button" data-tab="games">Game intake</button>
+        <button class="tab" type="button" data-tab="backups">Backups</button>
+      </nav>
 
-      <section>
-        <h2>Getting this library ready</h2>
-        ${jobs(status)}
-        <p class="msg" id="job-msg"></p>
-      </section>
+      <div class="tab-panel active" data-panel="overview">
+        <div class="grid">
+          <section>
+            <div class="panel-head"><div><h2>Coordinator</h2><p>Where this Node publishes and serves.</p></div></div>
+            <dl>
+              <dt>Reports to</dt><dd>${link}</dd>
+              <dt>Enrolment</dt><dd>${enrolment(status)}</dd>
+              <dt>Last report</dt><dd>${lastReport(status)}</dd>
+            </dl>
+          </section>
 
-      <section>
-        <h2>Serving</h2>
-        <dl>
-          <dt>Games held</dt><dd>${status.games.toLocaleString('en')} · ${formatBytes(status.bytes)}</dd>
-          <dt>Ready to serve</dt><dd>${servable(status)}</dd>
-          <dt>Files hashed</dt><dd>${hashed(status)}</dd>
-        </dl>
-      </section>
+          <section>
+            <div class="panel-head"><div><h2>Serving health</h2><p>What players can fetch right now.</p></div></div>
+            <dl>
+              <dt>Ready to serve</dt><dd>${servable(status)}</dd>
+              <dt>Files hashed</dt><dd>${hashed(status)}</dd>
+              <dt>Stored locally</dt><dd>${formatBytes(status.bytes)}</dd>
+            </dl>
+          </section>
+
+          <section class="wide">
+            <div class="panel-head"><div><h2>Libraries</h2><p>Every mounted root managed by this Node.</p></div></div>
+            ${libraryTable(status)}
+            ${mountHint(status)}
+          </section>
+
+          <section class="wide">
+            <div class="panel-head"><div><h2>Prepare the archive</h2><p>Scan what is mounted, then hash it for verified transfers.</p></div></div>
+            ${jobs(status)}
+            <p class="msg" id="job-msg"></p>
+          </section>
+        </div>
+      </div>
+
+      <div class="tab-panel" data-panel="games">
+        ${gameIntakePanel(status)}
+      </div>
+
+      <div class="tab-panel" data-panel="backups">
+        ${backupPanel(status)}
+      </div>
 
       <footer>
         GameBlade ${escapeHtml(status.version)} · ${escapeHtml(status.role)} ·
@@ -240,8 +383,9 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
  * setup form came to do nothing at all when it was submitted.
  */
 export const NODE_PAGE_SCRIPT = `(function () {
-  var base = document.documentElement.getAttribute('data-base') || '';
-  var refreshIn = Number(document.documentElement.getAttribute('data-refresh')) || 15000;
+  var root = document.documentElement;
+  var base = root.getAttribute('data-base') || '';
+  var refreshIn = Number(root.getAttribute('data-refresh')) || 15000;
   var form = document.getElementById('setup');
   var initialSetup = form ? {
     coordinatorUrl: form.elements.coordinatorUrl.value,
@@ -251,10 +395,6 @@ export const NODE_PAGE_SCRIPT = `(function () {
 
   function setupInProgress() {
     if (!form || !initialSetup) return false;
-
-    // A status refresh must never steal focus or throw away an enrolment code.
-    // Compare with what the server rendered so a saved coordinator URL does
-    // not pause refreshes by itself while the node is still registering.
     return form.contains(document.activeElement) ||
       form.elements.coordinatorUrl.value !== initialSetup.coordinatorUrl ||
       form.elements.enrolmentToken.value !== initialSetup.enrolmentToken;
@@ -263,7 +403,9 @@ export const NODE_PAGE_SCRIPT = `(function () {
   function scheduleRefresh(delay) {
     clearTimeout(timer);
     timer = setTimeout(function refreshWhenIdle() {
-      if (setupInProgress()) {
+      var active = document.activeElement;
+      var editing = active && (active.tagName === 'INPUT' || active.tagName === 'SELECT');
+      if (setupInProgress() || editing || document.hidden) {
         timer = setTimeout(refreshWhenIdle, 1000);
         return;
       }
@@ -271,120 +413,371 @@ export const NODE_PAGE_SCRIPT = `(function () {
     }, delay);
   }
 
-  // The page is a status readout, so it goes stale the moment it is drawn.
-  // Reloading beats asking somebody to press F5 to find out whether the thing
-  // they are waiting for has happened. The interval comes from the server,
-  // which knows whether anything is currently moving.
-  scheduleRefresh(refreshIn);
+  function request(path, options) {
+    clearTimeout(timer);
+    return fetch(base + path, options || {})
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) {
+          if (!response.ok) {
+            throw new Error((data.error && data.error.message) || 'The Node refused that.');
+          }
+          return data;
+        });
+      });
+  }
 
   function post(path, onDone) {
-    clearTimeout(timer);
-    return fetch(base + path, {
+    return request(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}'
-    })
-      .then(function (response) {
-        return response.json().catch(function () { return {}; }).then(function (data) {
-          return { ok: response.ok, data: data };
-        });
-      })
-      .then(function (result) {
-        if (!result.ok) {
-          throw new Error(
-            (result.data && result.data.error && result.data.error.message) ||
-            'The node refused that.'
-          );
-        }
-        return result.data;
-      })
-      .then(function (data) { onDone(null, data); })
+    }).then(function (data) { onDone(null, data); })
       .catch(function (error) { onDone(error); });
   }
 
-  /* ------------------------------------------------------------ scan / hash */
-
-  var jobMessage = document.getElementById('job-msg');
-
-  function say(text, tone) {
-    if (!jobMessage) return;
-    jobMessage.className = 'msg' + (tone ? ' ' + tone : '');
-    jobMessage.textContent = text;
+  function messageAt(id, text, tone) {
+    var target = document.getElementById(id || 'job-msg');
+    if (!target) return;
+    target.className = 'msg' + (tone ? ' ' + tone : '');
+    target.textContent = text;
   }
+
+  /* --------------------------------------------------------------- tabs */
+
+  var savedTab = 'overview';
+  try { savedTab = sessionStorage.getItem('gameblade-node-tab') || savedTab; } catch (_) {}
+
+  function activateTab(name) {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-tab]'), function (tab) {
+      tab.classList.toggle('active', tab.getAttribute('data-tab') === name);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-panel]'), function (panel) {
+      panel.classList.toggle('active', panel.getAttribute('data-panel') === name);
+    });
+    try { sessionStorage.setItem('gameblade-node-tab', name); } catch (_) {}
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('[data-tab]'), function (tab) {
+    tab.addEventListener('click', function () { activateTab(tab.getAttribute('data-tab')); });
+  });
+  if (document.querySelector('[data-panel="' + savedTab + '"]')) activateTab(savedTab);
+
+  /* ------------------------------------------------------ scan/hash/backup */
 
   Array.prototype.forEach.call(document.querySelectorAll('[data-post]'), function (button) {
     button.addEventListener('click', function () {
       var path = button.getAttribute('data-post');
+      var messageId = button.getAttribute('data-message') || 'job-msg';
       button.disabled = true;
-      say(button.getAttribute('data-busy') || 'Working…');
+      messageAt(messageId, button.getAttribute('data-busy') || 'Working…');
 
       post(path, function (error, data) {
         if (error) {
-          say(error.message, 'bad');
+          messageAt(messageId, error.message, 'bad');
           button.disabled = false;
           scheduleRefresh(8000);
           return;
         }
-        say((data && data.message) || 'Done.', 'ok');
-        // Straight away rather than on the next tick: the whole point of
-        // pressing this was to watch it start.
-        setTimeout(function () { location.reload(); }, 600);
+        messageAt(messageId, (data && data.message) || 'Done.', 'ok');
+        setTimeout(function () { location.reload(); }, 700);
       });
     });
   });
 
-  /* ----------------------------------------------------------------- setup */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-delete-backup]'), function (button) {
+    button.addEventListener('click', function () {
+      var name = button.getAttribute('data-delete-backup');
+      if (!confirm('Remove this backup from this Node?\\n\\n' + name)) return;
+      button.disabled = true;
+      request('/api/node/backups/' + encodeURIComponent(name), { method: 'DELETE' })
+        .then(function (data) {
+          messageAt('backup-msg', data.message || 'Backup removed.', 'ok');
+          setTimeout(function () { location.reload(); }, 500);
+        })
+        .catch(function (error) {
+          messageAt('backup-msg', error.message, 'bad');
+          button.disabled = false;
+          scheduleRefresh(8000);
+        });
+    });
+  });
+
+  /* --------------------------------------------------------- game intake */
+
+  var librarySelect = document.getElementById('library-select');
+  var fileList = document.getElementById('file-list');
+  var search = document.getElementById('entry-search');
+  var entries = [];
+  var intakeFilter = 'all';
+
+  function bytes(value) {
+    if (!Number.isFinite(value) || value <= 0) return 'size unavailable';
+    var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var power = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+    var number = value / Math.pow(1024, power);
+    return number.toFixed(power === 0 ? 0 : number >= 100 ? 0 : 1) + ' ' + units[power];
+  }
+
+  function make(tag, className, text) {
+    var element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text !== undefined) element.textContent = text;
+    return element;
+  }
+
+  function matchesFilter(entry) {
+    if (intakeFilter === 'review') return entry.eligible && entry.decision === 'automatic';
+    if (intakeFilter === 'approved') return entry.decision === 'approved';
+    if (intakeFilter === 'ignored') return entry.decision === 'ignored';
+    if (intakeFilter === 'unsupported') return !entry.eligible;
+    return true;
+  }
+
+  function renderEntries() {
+    if (!fileList) return;
+    fileList.textContent = '';
+    var term = search ? search.value.trim().toLowerCase() : '';
+    var shown = entries.filter(function (entry) {
+      return matchesFilter(entry) && (!term || entry.name.toLowerCase().indexOf(term) >= 0);
+    });
+
+    if (!shown.length) {
+      fileList.appendChild(make('div', 'browser-empty', 'No entries match this view.'));
+      return;
+    }
+
+    shown.forEach(function (entry) {
+      var row = make('div', 'file-row');
+      var main = make('div', 'file-main');
+      main.appendChild(make('div', 'file-icon', entry.kind === 'folder' ? '▰' : entry.kind === 'archive' ? '◇' : '·'));
+      var copy = make('div', 'backup-copy');
+      var title = make('div', 'file-name', entry.name);
+      if (entry.decision !== 'automatic') {
+        title.appendChild(make('span', 'badge ' + entry.decision, entry.decision));
+      } else if (entry.systemIgnored) {
+        title.appendChild(make('span', 'badge ignored', 'system ignored'));
+      } else if (entry.cataloged) {
+        title.appendChild(make('span', 'badge approved', 'in catalog'));
+      }
+      copy.appendChild(title);
+      copy.appendChild(make('div', 'file-meta', entry.kind + ' · ' + bytes(entry.sizeBytes) + (entry.willRead ? ' · included on scan' : ' · not read')));
+      main.appendChild(copy);
+      row.appendChild(main);
+
+      var actions = make('div', 'file-actions');
+      function decisionButton(label, decision, danger) {
+        var control = make('button', 'ghost small' + (danger ? ' danger' : ''), label);
+        control.type = 'button';
+        control.addEventListener('click', function () { setDecision(entry.name, decision, control); });
+        return control;
+      }
+      if (entry.eligible && entry.decision !== 'approved') actions.appendChild(decisionButton('Approve', 'approved'));
+      if (entry.decision !== 'ignored') actions.appendChild(decisionButton('Ignore', 'ignored', true));
+      if (entry.decision !== 'automatic') actions.appendChild(decisionButton('Reset', 'automatic'));
+      row.appendChild(actions);
+      fileList.appendChild(row);
+    });
+  }
+
+  function loadEntries() {
+    if (!librarySelect || !fileList || !librarySelect.value) return;
+    fileList.textContent = '';
+    fileList.appendChild(make('div', 'browser-empty', 'Reading this library…'));
+    request('/api/node/libraries/' + encodeURIComponent(librarySelect.value) + '/entries')
+      .then(function (data) {
+        entries = data.entries || [];
+        var path = document.getElementById('library-path');
+        if (path) path.textContent = data.library.path;
+        renderEntries();
+        scheduleRefresh(refreshIn);
+      })
+      .catch(function (error) {
+        fileList.textContent = '';
+        fileList.appendChild(make('div', 'browser-empty bad', error.message));
+        scheduleRefresh(8000);
+      });
+  }
+
+  function setDecision(name, decision, control) {
+    control.disabled = true;
+    messageAt('intake-msg', 'Saving ' + name + '…');
+    request('/api/node/libraries/' + encodeURIComponent(librarySelect.value) + '/entries/decision', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ relPath: name, decision: decision })
+    }).then(function (data) {
+      messageAt('intake-msg', data.message || 'Decision saved.', 'ok');
+      loadEntries();
+    }).catch(function (error) {
+      messageAt('intake-msg', error.message, 'bad');
+      control.disabled = false;
+      scheduleRefresh(8000);
+    });
+  }
+
+  if (librarySelect) {
+    librarySelect.addEventListener('change', loadEntries);
+    if (search) search.addEventListener('input', renderEntries);
+    Array.prototype.forEach.call(document.querySelectorAll('[data-filter]'), function (filter) {
+      filter.addEventListener('click', function () {
+        intakeFilter = filter.getAttribute('data-filter');
+        Array.prototype.forEach.call(document.querySelectorAll('[data-filter]'), function (candidate) {
+          candidate.classList.toggle('active', candidate === filter);
+        });
+        renderEntries();
+      });
+    });
+    loadEntries();
+  }
+
+  scheduleRefresh(refreshIn);
+
+  /* --------------------------------------------------------------- setup */
 
   if (!form) return;
-
   var message = document.getElementById('setup-msg');
   var button = form.querySelector('button');
 
   form.addEventListener('submit', function (event) {
     event.preventDefault();
-    // Whatever happens next, a reload mid-request would throw away what was
-    // typed and the answer at the same time.
     clearTimeout(timer);
-
     var body = {
       coordinatorUrl: form.elements.coordinatorUrl.value.trim(),
       enrolmentToken: form.elements.enrolmentToken.value.trim()
     };
-
     button.disabled = true;
     message.className = 'msg';
     message.textContent = 'Saving…';
 
-    fetch(base + '/api/node/setup', {
+    request('/api/node/setup', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body)
-    })
-      .then(function (response) {
-        return response.json().catch(function () { return {}; }).then(function (data) {
-          return { ok: response.ok, data: data };
-        });
-      })
-      .then(function (result) {
-        if (!result.ok) throw new Error(
-          (result.data && result.data.error && result.data.error.message) ||
-          'The node refused that.'
-        );
-        message.className = 'msg ok';
-        message.textContent =
-          'Saved. Registering with the coordinator — this page will update by itself.';
-        setTimeout(function () { location.reload(); }, 3000);
-      })
-      .catch(function (error) {
-        message.className = 'msg bad';
-        message.textContent = error.message;
-        button.disabled = false;
-        // Back to the slow refresh so a failed attempt is readable.
-        scheduleRefresh(15000);
-      });
+    }).then(function () {
+      message.className = 'msg ok';
+      message.textContent = 'Saved. Registering with the coordinator — this page will update by itself.';
+      setTimeout(function () { location.reload(); }, 3000);
+    }).catch(function (error) {
+      message.className = 'msg bad';
+      message.textContent = error.message;
+      button.disabled = false;
+      scheduleRefresh(15000);
+    });
   });
 })();
 `;
+
+function metric(icon: string, label: string, value: string, hint: string): string {
+  return `<div class="metric">
+          <div class="metric-head"><span class="metric-icon">${icon}</span>${escapeHtml(label)}</div>
+          <strong>${escapeHtml(value)}</strong>
+          <small>${escapeHtml(hint)}</small>
+        </div>`;
+}
+
+/** The file-browser workspace; rows are populated from disk by node.js. */
+function gameIntakePanel(status: NodeStatusSnapshot): string {
+  const options = status.libraries
+    .map(
+      (library) =>
+        `<option value="${escapeHtml(library.id)}">${escapeHtml(library.name)}${library.mounted ? '' : ' — not mounted'}</option>`,
+    )
+    .join('');
+  const firstPath = status.libraries[0]?.path ?? 'No mounted library';
+
+  return `<section>
+          <div class="panel-head">
+            <div>
+              <h2>Game intake</h2>
+              <p>Review the top-level folders and archives that become games.</p>
+            </div>
+            <button type="button" class="ghost" data-post="/api/node/scan"
+                    data-message="intake-msg" data-busy="Starting a fresh scan…"
+                    ${status.scanning || status.libraries.length === 0 ? 'disabled' : ''}>
+              ${status.scanning ? 'Scanning…' : 'Scan changes'}
+            </button>
+          </div>
+          <div class="backup-callout">
+            <strong>Safe by default, controllable when you need it.</strong>
+            <p>Normal folders and supported game archives remain automatic. Approve records an explicit decision; Ignore withdraws an existing game immediately and keeps it out of future scans. Nothing here changes or deletes the source file.</p>
+          </div>
+          <div class="browser-toolbar">
+            <select id="library-select" aria-label="Library" ${status.libraries.length === 0 ? 'disabled' : ''}>
+              ${options || '<option>No libraries mounted</option>'}
+            </select>
+            <input id="entry-search" type="search" placeholder="Search files and folders…" aria-label="Search library entries" />
+          </div>
+          <div class="path"><span>▰</span><code id="library-path">${escapeHtml(firstPath)}</code></div>
+          <div class="filters" aria-label="Entry filters">
+            <button type="button" class="filter active" data-filter="all">Everything</button>
+            <button type="button" class="filter" data-filter="review">Needs review</button>
+            <button type="button" class="filter" data-filter="approved">Approved</button>
+            <button type="button" class="filter" data-filter="ignored">Ignored</button>
+            <button type="button" class="filter" data-filter="unsupported">Other files</button>
+          </div>
+          <div id="file-list" class="file-list">
+            <div class="browser-empty">${status.libraries.length > 0 ? 'Reading this library…' : 'Mount a library to manage its games.'}</div>
+          </div>
+          <p class="msg" id="intake-msg"></p>
+        </section>`;
+}
+
+/** Complete Coordinator copies stored on this Node, never the game library. */
+function backupPanel(status: NodeStatusSnapshot): string {
+  const backup = status.backups;
+  const progress = backup.progress;
+  const progressDetail = progress.running
+    ? `<div class="backup-callout">
+         <strong>${progress.phase === 'downloading' ? 'Copying the archive to this Node…' : 'The Coordinator is preparing a complete archive…'}</strong>
+         ${
+           progress.phase === 'downloading' && progress.totalBytes
+             ? `${progressBar(progress.bytesReceived, progress.totalBytes)}<p>${formatBytes(progress.bytesReceived)} of ${formatBytes(progress.totalBytes)}</p>`
+             : '<p>Database snapshots can take a moment; this continues safely if you leave the page.</p>'
+         }
+       </div>`
+    : progress.lastError
+      ? `<div class="backup-callout"><strong class="bad">The last backup did not finish.</strong><p>${escapeHtml(progress.lastError)}</p></div>`
+      : progress.lastSuccessfulAt
+        ? `<div class="backup-callout"><strong class="ok">Protected by a Node copy.</strong><p>Last completed ${escapeHtml(progress.lastSuccessfulAt)}.</p></div>`
+        : `<div class="backup-callout"><strong>No Coordinator copy stored yet.</strong><p>Start one now, or leave this Node running and it will keep a fresh daily copy automatically.</p></div>`;
+
+  const copies = backup.copies
+    .map(
+      (copy) => `<div class="backup-row">
+          <div class="backup-main">
+            <div class="file-icon">▣</div>
+            <div class="backup-copy">
+              <strong>${escapeHtml(copy.name)} <span class="badge approved">complete</span></strong>
+              <span>${formatBytes(copy.sizeBytes)} · ${escapeHtml(copy.createdAt)}</span>
+            </div>
+          </div>
+          <button type="button" class="ghost small danger" data-delete-backup="${escapeHtml(copy.name)}">Remove</button>
+        </div>`,
+    )
+    .join('');
+
+  return `<section>
+          <div class="panel-head">
+            <div>
+              <h2>Coordinator backups</h2>
+              <p>Complete disaster-recovery copies stored off the Coordinator.</p>
+            </div>
+            <button type="button" data-post="/api/node/backups" data-message="backup-msg"
+                    data-busy="Asking the Coordinator to build a backup…"
+                    ${progress.running || !status.enrolled ? 'disabled' : ''}>
+              ${progress.running ? 'Backup running…' : 'Back up now'}
+            </button>
+          </div>
+          <div class="note" style="margin:0 0 14px">
+            Each copy contains the SQLite database, Coordinator settings and config state, every cloud save version, uploaded media, the published client, and cached artwork. Game library packages are already held by Nodes and are not duplicated inside the archive. This Node keeps the newest ${backup.keep} copies.
+          </div>
+          ${progressDetail}
+          <div class="backup-list">
+            ${copies || '<div class="browser-empty">No backups are stored on this Node.</div>'}
+          </div>
+          <p class="msg" id="backup-msg"></p>
+        </section>`;
+}
 
 /**
  * How soon the page should draw itself again.
@@ -394,7 +787,7 @@ export const NODE_PAGE_SCRIPT = `(function () {
  * to change. A fixed interval has to be one or the other.
  */
 function refreshInterval(status: NodeStatusSnapshot): number {
-  if (status.scanning || status.hashing.running) return 3000;
+  if (status.scanning || status.hashing.running || status.backups.progress.running) return 3000;
   if (!status.enrolled) return 5000;
   return 15000;
 }

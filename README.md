@@ -33,13 +33,13 @@ file, no build step, and everything below is covered there in depth.
   distributed as one ZIP64 package, split into verified 10 MiB chunks so all
   Desktop connections start immediately and stay busy.
 
-| Piece                        | Who uses it   | What it does                                                           |
-| ---------------------------- | ------------- | ---------------------------------------------------------------------- |
-| **Server** (Docker)          | You           | Reads the library from disk, serves the API, stores saves and profiles |
-| **Landing page** (`/`)       | Everyone      | Explains the archive and links the Windows client download             |
-| **Admin panel** (`/admin`)   | Administrator | Invites, users, catalog, metadata, featured games, settings            |
-| **Desktop client** (Windows) | Players       | The whole player experience                                            |
-| **Node** (`ROLE=node`)       | You           | Holds files, scans them, and supplies chunks over outbound HTTPS       |
+| Piece                        | Who uses it   | What it does                                                            |
+| ---------------------------- | ------------- | ----------------------------------------------------------------------- |
+| **Server** (Docker)          | You           | Reads the library from disk, serves the API, stores saves and profiles  |
+| **Landing page** (`/`)       | Everyone      | Explains the archive and links the Windows client download              |
+| **Admin panel** (`/admin`)   | Administrator | Invites, users, catalog, metadata, featured games, settings             |
+| **Desktop client** (Windows) | Players       | The whole player experience                                             |
+| **Node** (`ROLE=node`)       | You           | Holds games, manages intake, supplies chunks, and keeps recovery copies |
 
 ---
 

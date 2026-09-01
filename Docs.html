@@ -174,6 +174,23 @@ docker compose up -d</code></pre>
         inline from Fleet. Nodes store identity in <code>/data/node-state.json</code>; back that
         file up.
       </p>
+      <p>
+        The local Node control center has three workspaces. <strong>Overview</strong> shows mounts,
+        reporting, scan progress, and hashing progress. <strong>Game intake</strong> is a
+        file-browser view of every top-level folder and supported archive: approve an entry to
+        record an explicit decision, ignore it to withdraw it from the Coordinator and future
+        scans, or reset it to automatic behavior. These actions never alter the read-only game
+        disk.
+      </p>
+      <p>
+        <strong>Backups</strong> keeps complete Coordinator recovery archives on the Node. A copy
+        includes SQLite, settings and config state, every cloud-save version, uploaded media, the
+        published client, and cached artwork. Use <strong>Back up now</strong> to force a new one;
+        otherwise the Node keeps a fresh daily copy automatically and retains the newest seven in
+        <code>/data/coordinator-backups</code>. Size the Node's writable <code>/data</code> mount
+        accordingly. Game packages are not duplicated inside these archives because the Nodes
+        already hold them.
+      </p>
       <pre><code># Several libraries
 volumes:
   - /mnt/3TB:/libraries/3TB:ro
@@ -234,6 +251,14 @@ volumes:
             <th>File is no longer available</th>
             <td>
               Confirm the game is in an online Node catalog and every file is fully chunk-hashed.
+            </td>
+          </tr>
+          <tr>
+            <th>Node backup failed</th>
+            <td>
+              Confirm the Node is enrolled, can reach the exact Coordinator URL, and has enough
+              free space in its writable <code>/data</code> mount. The Backups workspace retains
+              the last error and can force a retry.
             </td>
           </tr>
           <tr>

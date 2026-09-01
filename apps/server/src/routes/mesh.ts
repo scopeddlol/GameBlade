@@ -10,6 +10,8 @@ import {
 } from '@gameblade/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { requireAdmin } from '../auth/middleware.js';
 import { gameFiles, games, meshNodes } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
@@ -53,7 +55,7 @@ interface CatalogBatchSession {
 }
 
 export async function meshRoutes(app: FastifyInstance): Promise<void> {
-  const { db, mesh, settings, chunks, catalogIngest } = app.gameblade;
+  const { db, mesh, settings, chunks, catalogIngest, backups } = app.gameblade;
 
   // In memory on purpose. A coordinator restart between pieces makes the next
   // piece fail safely and the node retries the whole report; persisting partial
@@ -323,6 +325,59 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
       if (body.final) catalogBatchSessions.delete(key);
       return response;
     },
+  });
+
+  /* -------------------------------------------------------------- backups */
+
+  /**
+   * Complete Coordinator archives available for authenticated Node retention.
+   *
+   * Nodes pull these over the same outbound connection they already use for
+   * catalogs and chunks. No Coordinator needs to know a Node's LAN address,
+   * and no backup is exposed through the Node's unauthenticated status API.
+   */
+  app.get('/mesh/backups', async (request) => {
+    requireNode(request);
+    return { backups: await backups.list() };
+  });
+
+  /** Force a new, complete point-in-time archive. */
+  app.post('/mesh/backups', async (request, reply) => {
+    requireNode(request);
+    const current = settings.get();
+    const options = {
+      keep: Math.max(current.backupKeep, 1),
+      everyHours: current.backupEveryHours,
+      // Node copies are disaster-recovery copies. They deliberately include
+      // even the artwork cache so "everything" has no quiet exception.
+      includeImages: true,
+    };
+
+    let info = await backups.create(options);
+    // If a smaller scheduled archive was already being written, `create`
+    // shared that in-flight work. Follow it with the complete copy this route
+    // promises rather than handing a Node an archive with artwork omitted.
+    if (!info.complete) info = await backups.create(options);
+    return reply.code(201).send(info);
+  });
+
+  app.get('/mesh/backups/:name', async (request, reply) => {
+    requireNode(request);
+    const { name } = request.params as { name: string };
+    const target = backups.pathFor(name);
+    if (!target || !name.startsWith('gameblade-full-')) {
+      throw ApiError.badRequest('That is not a complete backup name');
+    }
+
+    const info = await stat(target).catch(() => null);
+    if (!info?.isFile()) throw ApiError.notFound('Backup not found');
+
+    return reply
+      .header('Cache-Control', 'no-store')
+      .header('Content-Type', 'application/zip')
+      .header('Content-Length', String(info.size))
+      .header('Content-Disposition', `attachment; filename="${name}"`)
+      .send(createReadStream(target));
   });
 
   /**

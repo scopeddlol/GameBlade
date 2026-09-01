@@ -1244,4 +1244,21 @@ export const migrations: Migration[] = [
       CREATE INDEX game_archive_executables_game_idx ON game_archive_executables(game_id);
     `,
   },
+  {
+    id: '0030_node_entry_policies',
+    sql: /* sql */ `
+      -- A Node reads the policy before walking a top-level game candidate.
+      -- Paths are scoped to the library because two mounted drives may carry
+      -- the same name and the operator may intentionally treat them differently.
+      CREATE TABLE node_entry_policies (
+        library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+        rel_path TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK (decision IN ('approved', 'ignored')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        PRIMARY KEY (library_id, rel_path)
+      ) WITHOUT ROWID;
+      CREATE INDEX node_entry_policies_decision_idx
+        ON node_entry_policies(library_id, decision);
+    `,
+  },
 ];

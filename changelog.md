@@ -1,5 +1,19 @@
 # GameBlade Changelog
 
+## Version 0.8.2 - September 1, 2026
+
+### A real Node control center
+
+- Rebuilt the Node page as responsive Overview, Game intake, and Backups workspaces with clear health metrics, live task progress, search, filters, and mobile layouts.
+- Game intake lists each library's top-level folders, supported archives, and other files. Operators can approve, ignore, or reset an entry; the decision persists across restarts and feeds the scanner directly without writing to the game disk.
+- Ignoring an existing game withdraws it from Coordinator reports immediately. Approving a normally hidden eligible entry makes the next scan read it.
+
+### Complete Coordinator backups on Nodes
+
+- Enrolled Nodes can force a complete Coordinator backup, pull it over their authenticated outbound connection, view transfer progress, list stored copies, and remove old copies from the Node UI.
+- Complete archives include the live SQLite snapshot, settings/config state, saves, media, published client, cached artwork, and other Coordinator data files. Partial files are never exposed as completed backups.
+- Nodes automatically retain a fresh complete copy and keep the newest seven under their writable data volume. Concurrent requests share one Coordinator snapshot instead of starting competing ZIP jobs.
+
 ## Version 0.8.1 - August 31, 2026
 
 ### Node controls work on direct LAN addresses
