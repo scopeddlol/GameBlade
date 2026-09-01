@@ -1,6 +1,6 @@
 [package]
 name = "gameblade-mesh"
-version = "0.8.2"
+version = "0.8.3"
 description = "GameBlade Node catalog and HTTPS chunk worker"
 edition = "2021"
 rust-version = "1.77.2"
