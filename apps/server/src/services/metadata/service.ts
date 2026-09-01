@@ -11,7 +11,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../../db/index.js';
 import { games, type Game } from '../../db/schema.js';
 import { ApiError } from '../../lib/errors.js';
-import { matchKey } from '../../lib/titles.js';
+import { matchKey, toSearchTitle, toSortTitle } from '../../lib/titles.js';
 import type { SettingsService } from '../settings.js';
 import { IgdbClient, igdbImageUrl, normalizeIgdbGame, type IgdbGame } from './igdb.js';
 import { ImageCache } from './images.js';
@@ -19,6 +19,8 @@ import { SteamGridDbClient } from './steamgriddb.js';
 
 /** How long a discovery shelf is held before IGDB is asked again. */
 const TRENDING_TTL_MS = 60 * 60_000;
+/** Candidate lists back a catalog-sized review screen, not one throwaway picker. */
+const CANDIDATE_TTL_MS = 10 * 60_000;
 
 /** One title offered on the request page, before the catalog is consulted. */
 export interface DiscoveryCandidate {
@@ -125,6 +127,8 @@ export class MetadataService {
 
   /** Every shelf is identical for every caller, so each is held once. */
   private shelfCache = new Map<DiscoveryShelfId, { at: number; items: DiscoveryCandidate[] }>();
+  private candidateCache = new Map<string, { at: number; items: MetadataCandidate[] }>();
+  private candidateSearches = new Map<string, Promise<MetadataCandidate[]>>();
   private sgdb: { client: SteamGridDbClient; key: string } | null = null;
   private health: Record<'igdb' | 'steamgriddb', ProviderHealth> = {
     igdb: { reachable: null, lastError: null, lastCheckedAt: null },
@@ -244,6 +248,8 @@ export class MetadataService {
     const key = `${igdbClientId}:${igdbClientSecret}`;
     if (this.igdb?.key !== key) {
       this.igdb = { client: new IgdbClient(igdbClientId, igdbClientSecret), key };
+      this.candidateCache.clear();
+      this.candidateSearches.clear();
     }
     return this.igdb.client;
   }
@@ -318,21 +324,39 @@ export class MetadataService {
       throw ApiError.unavailable('IGDB is not configured. Add credentials in Settings.');
     }
 
-    const results = await igdb.search(title, limit);
-    return results
-      .map((raw) => {
-        const game = normalizeIgdbGame(raw);
-        return {
-          provider: 'igdb' as const,
-          id: game.igdbId,
-          title: game.title,
-          releaseDate: game.releaseDate,
-          summary: game.summary,
-          coverUrl: game.coverUrl,
-          platforms: game.platforms,
-        };
-      })
-      .sort((a, b) => similarity(title, b.title) - similarity(title, a.title));
+    const key = `${limit}:${matchKey(title)}`;
+    const cached = this.candidateCache.get(key);
+    if (cached && Date.now() - cached.at < CANDIDATE_TTL_MS) return cached.items;
+
+    let search = this.candidateSearches.get(key);
+    if (!search) {
+      search = igdb.search(title, limit).then((results) =>
+        results
+          .map((raw) => {
+            const game = normalizeIgdbGame(raw);
+            return {
+              provider: 'igdb' as const,
+              id: game.igdbId,
+              title: game.title,
+              confidence: Math.round(similarity(title, game.title) * 100),
+              releaseDate: game.releaseDate,
+              summary: game.summary,
+              coverUrl: game.coverUrl ? this.proxied(game.coverUrl) : null,
+              platforms: game.platforms,
+            };
+          })
+          .sort((a, b) => b.confidence - a.confidence),
+      );
+      this.candidateSearches.set(key, search);
+    }
+
+    try {
+      const items = await search;
+      this.candidateCache.set(key, { at: Date.now(), items });
+      return items;
+    } finally {
+      this.candidateSearches.delete(key);
+    }
   }
 
   /**
@@ -403,7 +427,7 @@ export class MetadataService {
     gameId: string,
     igdbId: number,
     matchStatus: 'auto' | 'manual',
-    options: { refreshArtwork?: boolean; signal?: AbortSignal } = {},
+    options: { refreshArtwork?: boolean; setTitle?: boolean; signal?: AbortSignal } = {},
   ): Promise<void> {
     const igdb = this.getIgdb();
     if (!igdb) {
@@ -429,30 +453,34 @@ export class MetadataService {
       options.signal,
     );
 
-    this.db
-      .update(games)
-      .set({
-        igdbId: meta.igdbId,
-        matchStatus,
-        summary: meta.summary,
-        storyline: meta.storyline,
-        releaseDate: meta.releaseDate,
-        rating: meta.rating,
-        developers: meta.developers,
-        publishers: meta.publishers,
-        genres: meta.genres,
-        platforms: meta.platforms,
-        screenshots: screenshotIds,
-        videos: meta.videoIds,
-        coverImageId,
-        updatedAt: new Date().toISOString(),
-        // A provider has now written to this row, so the automatic pass leaves
-        // it alone from here. A deliberate re-match comes back through this
-        // same method and simply re-stamps it.
-        metadataLockedAt: new Date().toISOString(),
-      })
-      .where(eq(games.id, gameId))
-      .run();
+    const patch: Partial<typeof games.$inferInsert> = {
+      igdbId: meta.igdbId,
+      matchStatus,
+      summary: meta.summary,
+      storyline: meta.storyline,
+      releaseDate: meta.releaseDate,
+      rating: meta.rating,
+      developers: meta.developers,
+      publishers: meta.publishers,
+      genres: meta.genres,
+      platforms: meta.platforms,
+      screenshots: screenshotIds,
+      videos: meta.videoIds,
+      coverImageId,
+      updatedAt: new Date().toISOString(),
+      // A provider has now written to this row, so the automatic pass leaves
+      // it alone from here. A deliberate re-match comes back through this
+      // same method and simply re-stamps it.
+      metadataLockedAt: new Date().toISOString(),
+    };
+
+    if (options.setTitle ?? matchStatus === 'manual') {
+      patch.title = meta.title;
+      patch.sortTitle = toSortTitle(meta.title);
+      patch.searchTitle = toSearchTitle(meta.title);
+    }
+
+    this.db.update(games).set(patch).where(eq(games.id, gameId)).run();
 
     if (options.refreshArtwork !== false) {
       await this.fetchArtwork(gameId, meta.title, options.signal);

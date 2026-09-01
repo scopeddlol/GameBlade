@@ -66,15 +66,17 @@ describe('a node’s own page', () => {
     expect(script.statusCode).toBe(200);
     expect(script.headers['content-type']).toContain('javascript');
     expect(script.body).toContain('/api/node/setup');
-    // Status updates still reload the page, but never while somebody is in
-    // the form or after they have pasted a one-time code. The old unconditional
-    // three-second timer made a busy node almost impossible to enrol.
-    expect(script.body).toContain('function setupInProgress()');
-    expect(script.body).toContain('form.contains(document.activeElement)');
-    expect(script.body).toContain('form.elements.enrolmentToken.value !==');
-    expect(script.body).not.toContain(
-      'var timer = setTimeout(function () { location.reload(); }, refreshIn);',
-    );
+    // Status updates replace only live fragments. The old unconditional page
+    // reload destroyed the active tab, library search and anything being
+    // edited while a long hash pass was running.
+    expect(script.body).toContain("request('/api/node/live')");
+    expect(script.body).toContain("replaceHtml('live-jobs', data.jobs)");
+    expect(script.body).not.toContain('setTimeout(function () { location.reload();');
+
+    const live = await app.inject({ method: 'GET', url: '/api/node/live' });
+    expect(live.statusCode).toBe(200);
+    expect(live.json()).toMatchObject({ enrolled: false, refreshIn: 3000 });
+    expect(live.json().jobs).toContain('Rescan &amp; rebuild all hashes');
 
     // And the policy that broke it is still on, so this cannot regress into an
     // inline block that happens to work in one browser.
@@ -222,6 +224,18 @@ describe('a node’s own page', () => {
     // already finished.
     const stop = await app.inject({ method: 'POST', url: '/api/node/hash/cancel', payload: {} });
     expect(stop.statusCode).toBe(409);
+  });
+
+  it('offers one operation that chains a forced rescan into a hash rebuild', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'gameblade-rebuild-'));
+    await writeFile(path.join(root, 'Demo.zip'), Buffer.alloc(64));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+
+    const { app } = await bootNode({ LIBRARY_PATHS: root });
+    const response = await app.inject({ method: 'POST', url: '/api/node/rebuild', payload: {} });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json().message).toMatch(/hash rebuild will start automatically/i);
   });
 
   it('lets an operator approve or ignore top-level game entries', async () => {

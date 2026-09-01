@@ -1261,4 +1261,14 @@ export const migrations: Migration[] = [
         ON node_entry_policies(library_id, decision);
     `,
   },
+  {
+    id: '0031_archive_inspection_state',
+    sql: /* sql */ `
+      -- An empty executable report is meaningful: it says the Node inspected
+      -- the ZIP and found nothing launchable. Without a separate timestamp the
+      -- Coordinator cannot distinguish that from "the Node has not looked yet"
+      -- and the Admin UI either polls forever or gives up too early.
+      ALTER TABLE games ADD COLUMN archive_inspected_at TEXT;
+    `,
+  },
 ];

@@ -22,10 +22,6 @@ import type { NodeStatusSnapshot } from '../services/nodeStatus.js';
  * on the one screen an operator reaches before anything else works.
  */
 export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): string {
-  const link = status.coordinatorUrl
-    ? `<a href="${escapeHtml(status.coordinatorUrl)}">${escapeHtml(status.coordinatorUrl)}</a>`
-    : '<span class="bad">not configured</span>';
-
   // Absolute, so every request works from whatever URL this page was reached
   // at — including the 404 handler, which serves it at paths that do not exist.
   const asset = (name: string) => escapeHtml(`${basePath}/${name}`);
@@ -290,7 +286,7 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
     <main>
       <div class="topbar">
         <div class="brand"><span class="mark">◆</span> GameBlade</div>
-        <div class="top-status"><span class="live-dot"></span>${status.enrolled ? 'Node connected' : 'Setup needed'}</div>
+        <div class="top-status" id="live-top-status">${topStatus(status)}</div>
       </div>
 
       <header class="hero">
@@ -308,12 +304,7 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
 
       ${setupPanel(status)}
 
-      <div class="metrics">
-        ${metric('◫', 'Games held', status.games.toLocaleString('en'), formatBytes(status.bytes))}
-        ${metric('✓', 'Ready to serve', status.servableGames.toLocaleString('en'), `of ${status.games.toLocaleString('en')} games`)}
-        ${metric('⌁', 'Libraries', status.libraries.length.toLocaleString('en'), status.libraries.every((library) => library.mounted) ? 'all mounted' : 'mount needs attention')}
-        ${metric('↗', 'Node backups', status.backups.copies.length.toLocaleString('en'), formatBytes(status.backups.totalBytes))}
-      </div>
+      <div class="metrics" id="live-metrics">${metrics(status)}</div>
 
       <nav class="tabs" aria-label="Node workspaces">
         <button class="tab active" type="button" data-tab="overview">Overview</button>
@@ -325,31 +316,22 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
         <div class="grid">
           <section>
             <div class="panel-head"><div><h2>Coordinator</h2><p>Where this Node publishes and serves.</p></div></div>
-            <dl>
-              <dt>Reports to</dt><dd>${link}</dd>
-              <dt>Enrolment</dt><dd>${enrolment(status)}</dd>
-              <dt>Last report</dt><dd>${lastReport(status)}</dd>
-            </dl>
+            <dl id="live-coordinator">${coordinatorDetails(status)}</dl>
           </section>
 
           <section>
             <div class="panel-head"><div><h2>Serving health</h2><p>What players can fetch right now.</p></div></div>
-            <dl>
-              <dt>Ready to serve</dt><dd>${servable(status)}</dd>
-              <dt>Files hashed</dt><dd>${hashed(status)}</dd>
-              <dt>Stored locally</dt><dd>${formatBytes(status.bytes)}</dd>
-            </dl>
+            <dl id="live-serving">${servingDetails(status)}</dl>
           </section>
 
           <section class="wide">
             <div class="panel-head"><div><h2>Libraries</h2><p>Every mounted root managed by this Node.</p></div></div>
-            ${libraryTable(status)}
-            ${mountHint(status)}
+            <div id="live-libraries">${librariesDetail(status)}</div>
           </section>
 
           <section class="wide">
             <div class="panel-head"><div><h2>Prepare the archive</h2><p>Scan what is mounted, then hash it for verified transfers.</p></div></div>
-            ${jobs(status)}
+            <div id="live-jobs">${jobs(status)}</div>
             <p class="msg" id="job-msg"></p>
           </section>
         </div>
@@ -360,7 +342,7 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
       </div>
 
       <div class="tab-panel" data-panel="backups">
-        ${backupPanel(status)}
+        <div id="live-backups">${backupPanel(status)}</div>
       </div>
 
       <footer>
@@ -387,30 +369,44 @@ export const NODE_PAGE_SCRIPT = `(function () {
   var base = root.getAttribute('data-base') || '';
   var refreshIn = Number(root.getAttribute('data-refresh')) || 15000;
   var form = document.getElementById('setup');
-  var initialSetup = form ? {
-    coordinatorUrl: form.elements.coordinatorUrl.value,
-    enrolmentToken: form.elements.enrolmentToken.value
-  } : null;
+  var initialEnrolled = !form;
   var timer;
 
-  function setupInProgress() {
-    if (!form || !initialSetup) return false;
-    return form.contains(document.activeElement) ||
-      form.elements.coordinatorUrl.value !== initialSetup.coordinatorUrl ||
-      form.elements.enrolmentToken.value !== initialSetup.enrolmentToken;
+  function replaceHtml(id, html) {
+    var target = document.getElementById(id);
+    if (target && typeof html === 'string') target.innerHTML = html;
   }
 
-  function scheduleRefresh(delay) {
+  function refreshLive() {
+    if (document.hidden) {
+      scheduleLive(1000);
+      return;
+    }
+
+    request('/api/node/live')
+      .then(function (data) {
+        // Enrolment adds or removes the setup form, the one structural page
+        // change that needs a complete redraw. Everything else stays put.
+        if (Boolean(data.enrolled) !== initialEnrolled) {
+          location.reload();
+          return;
+        }
+        replaceHtml('live-top-status', data.topStatus);
+        replaceHtml('live-metrics', data.metrics);
+        replaceHtml('live-coordinator', data.coordinator);
+        replaceHtml('live-serving', data.serving);
+        replaceHtml('live-libraries', data.libraries);
+        replaceHtml('live-jobs', data.jobs);
+        replaceHtml('live-backups', data.backups);
+        refreshIn = Number(data.refreshIn) || refreshIn;
+        scheduleLive(refreshIn);
+      })
+      .catch(function () { scheduleLive(5000); });
+  }
+
+  function scheduleLive(delay) {
     clearTimeout(timer);
-    timer = setTimeout(function refreshWhenIdle() {
-      var active = document.activeElement;
-      var editing = active && (active.tagName === 'INPUT' || active.tagName === 'SELECT');
-      if (setupInProgress() || editing || document.hidden) {
-        timer = setTimeout(refreshWhenIdle, 1000);
-        return;
-      }
-      location.reload();
-    }, delay);
+    timer = setTimeout(refreshLive, delay);
   }
 
   function request(path, options) {
@@ -464,10 +460,13 @@ export const NODE_PAGE_SCRIPT = `(function () {
 
   /* ------------------------------------------------------ scan/hash/backup */
 
-  Array.prototype.forEach.call(document.querySelectorAll('[data-post]'), function (button) {
-    button.addEventListener('click', function () {
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest && event.target.closest('[data-post]');
+    if (button) {
       var path = button.getAttribute('data-post');
       var messageId = button.getAttribute('data-message') || 'job-msg';
+      var confirmation = button.getAttribute('data-confirm');
+      if (confirmation && !confirm(confirmation)) return;
       button.disabled = true;
       messageAt(messageId, button.getAttribute('data-busy') || 'Working…');
 
@@ -475,31 +474,31 @@ export const NODE_PAGE_SCRIPT = `(function () {
         if (error) {
           messageAt(messageId, error.message, 'bad');
           button.disabled = false;
-          scheduleRefresh(8000);
+          scheduleLive(8000);
           return;
         }
         messageAt(messageId, (data && data.message) || 'Done.', 'ok');
-        setTimeout(function () { location.reload(); }, 700);
+        refreshLive();
       });
-    });
-  });
+      return;
+    }
 
-  Array.prototype.forEach.call(document.querySelectorAll('[data-delete-backup]'), function (button) {
-    button.addEventListener('click', function () {
+    button = event.target.closest && event.target.closest('[data-delete-backup]');
+    if (button) {
       var name = button.getAttribute('data-delete-backup');
       if (!confirm('Remove this backup from this Node?\\n\\n' + name)) return;
       button.disabled = true;
       request('/api/node/backups/' + encodeURIComponent(name), { method: 'DELETE' })
         .then(function (data) {
           messageAt('backup-msg', data.message || 'Backup removed.', 'ok');
-          setTimeout(function () { location.reload(); }, 500);
+          refreshLive();
         })
         .catch(function (error) {
           messageAt('backup-msg', error.message, 'bad');
           button.disabled = false;
-          scheduleRefresh(8000);
+          scheduleLive(8000);
         });
-    });
+    }
   });
 
   /* --------------------------------------------------------- game intake */
@@ -589,12 +588,12 @@ export const NODE_PAGE_SCRIPT = `(function () {
         var path = document.getElementById('library-path');
         if (path) path.textContent = data.library.path;
         renderEntries();
-        scheduleRefresh(refreshIn);
+        scheduleLive(refreshIn);
       })
       .catch(function (error) {
         fileList.textContent = '';
         fileList.appendChild(make('div', 'browser-empty bad', error.message));
-        scheduleRefresh(8000);
+        scheduleLive(8000);
       });
   }
 
@@ -611,7 +610,7 @@ export const NODE_PAGE_SCRIPT = `(function () {
     }).catch(function (error) {
       messageAt('intake-msg', error.message, 'bad');
       control.disabled = false;
-      scheduleRefresh(8000);
+      scheduleLive(8000);
     });
   }
 
@@ -630,7 +629,7 @@ export const NODE_PAGE_SCRIPT = `(function () {
     loadEntries();
   }
 
-  scheduleRefresh(refreshIn);
+  scheduleLive(refreshIn);
 
   /* --------------------------------------------------------------- setup */
 
@@ -656,16 +655,96 @@ export const NODE_PAGE_SCRIPT = `(function () {
     }).then(function () {
       message.className = 'msg ok';
       message.textContent = 'Saved. Registering with the coordinator — this page will update by itself.';
-      setTimeout(function () { location.reload(); }, 3000);
+      scheduleLive(500);
     }).catch(function (error) {
       message.className = 'msg bad';
       message.textContent = error.message;
       button.disabled = false;
-      scheduleRefresh(15000);
+      scheduleLive(15000);
     });
   });
 })();
 `;
+
+/**
+ * The portions of the Node page that change while it is open.
+ *
+ * Returning already-rendered fragments keeps all formatting in one place and
+ * lets the browser update a live hashing row without replacing tabs, search
+ * input, scroll position, or a decision the operator is in the middle of.
+ */
+export function renderNodeLive(status: NodeStatusSnapshot): {
+  enrolled: boolean;
+  refreshIn: number;
+  topStatus: string;
+  metrics: string;
+  coordinator: string;
+  serving: string;
+  libraries: string;
+  jobs: string;
+  backups: string;
+} {
+  return {
+    enrolled: status.enrolled,
+    refreshIn: refreshInterval(status),
+    topStatus: topStatus(status),
+    metrics: metrics(status),
+    coordinator: coordinatorDetails(status),
+    serving: servingDetails(status),
+    libraries: librariesDetail(status),
+    jobs: jobs(status),
+    backups: backupPanel(status),
+  };
+}
+
+function topStatus(status: NodeStatusSnapshot): string {
+  return `<span class="live-dot"></span>${status.enrolled ? 'Node connected' : 'Setup needed'}`;
+}
+
+function metrics(status: NodeStatusSnapshot): string {
+  return [
+    metric('◫', 'Games held', status.games.toLocaleString('en'), formatBytes(status.bytes)),
+    metric(
+      '✓',
+      'Ready to serve',
+      status.servableGames.toLocaleString('en'),
+      `of ${status.games.toLocaleString('en')} games`,
+    ),
+    metric(
+      '⌁',
+      'Libraries',
+      status.libraries.length.toLocaleString('en'),
+      status.libraries.every((library) => library.mounted)
+        ? 'all mounted'
+        : 'mount needs attention',
+    ),
+    metric(
+      '↗',
+      'Node backups',
+      status.backups.copies.length.toLocaleString('en'),
+      formatBytes(status.backups.totalBytes),
+    ),
+  ].join('');
+}
+
+function coordinatorDetails(status: NodeStatusSnapshot): string {
+  const link = status.coordinatorUrl
+    ? `<a href="${escapeHtml(status.coordinatorUrl)}">${escapeHtml(status.coordinatorUrl)}</a>`
+    : '<span class="bad">not configured</span>';
+  return `<dt>Reports to</dt><dd>${link}</dd>
+          <dt>Enrolment</dt><dd>${enrolment(status)}</dd>
+          <dt>Last report</dt><dd>${lastReport(status)}</dd>`;
+}
+
+function servingDetails(status: NodeStatusSnapshot): string {
+  return `<dt>Ready to serve</dt><dd>${servable(status)}</dd>
+          <dt>Files hashed</dt><dd>${hashed(status)}</dd>
+          <dt>Stored locally</dt><dd>${formatBytes(status.bytes)}</dd>`;
+}
+
+function librariesDetail(status: NodeStatusSnapshot): string {
+  return libraryTable(status) + mountHint(status);
+}
 
 function metric(icon: string, label: string, value: string, hint: string): string {
   return `<div class="metric">
@@ -787,9 +866,9 @@ function backupPanel(status: NodeStatusSnapshot): string {
  * to change. A fixed interval has to be one or the other.
  */
 function refreshInterval(status: NodeStatusSnapshot): number {
-  if (status.scanning || status.hashing.running || status.backups.progress.running) return 3000;
-  if (!status.enrolled) return 5000;
-  return 15000;
+  if (status.scanning || status.hashing.running || status.backups.progress.running) return 1000;
+  if (!status.enrolled) return 3000;
+  return 10000;
 }
 
 /**
@@ -867,7 +946,7 @@ function enrolment(status: NodeStatusSnapshot): string {
     return '<span class="bad"><span class="dot">●</span>enrolment failed — correct the form above and try again</span>';
   }
   if (!status.keyPresent) {
-    return '<span class="warn"><span class="dot">●</span>waiting for the mesh agent to generate this node’s key</span>';
+    return '<span class="warn"><span class="dot">●</span>waiting for the Node agent to generate this machine’s key</span>';
   }
   if (status.configured || status.enrolmentPending) {
     return '<span class="warn"><span class="dot">●</span>registering…</span>';
@@ -913,7 +992,7 @@ function jobs(status: NodeStatusSnapshot): string {
   const hashing = status.hashing;
   const hashDone = hashing.total - hashing.remaining;
   const hashDetail = hashing.running
-    ? `${hashDone.toLocaleString('en')} of ${hashing.total.toLocaleString('en')} games${
+    ? `${hashing.mode === 'rebuild' ? 'Verifying' : 'Preparing'} ${hashDone.toLocaleString('en')} of ${hashing.total.toLocaleString('en')} games${
         hashing.stopping ? ' — stopping after this one' : ''
       }`
     : hashing.finishedAt
@@ -947,11 +1026,10 @@ function jobs(status: NodeStatusSnapshot): string {
         </div>
 
         <div class="job">
-          <h3>Hash the files</h3>
+          <h3>Verify the ZIP packages</h3>
           <p>Reads every ZIP package and records a hash per 10 MiB piece. Nothing on
-             this node can be served over the mesh until its game is hashed, and on a real
-             archive the first pass takes hours — so it is worth starting now rather than
-             waiting for the timer.</p>
+             this Node can be served through the Coordinator until its package is hashed.
+             The live view below shows the game, bytes, read rate, open file and ETA.</p>
           ${
             hashing.running
               ? progressBar(hashing.bytesHashed, hashing.bytesTotal) + hashingNow(status)
@@ -961,7 +1039,7 @@ function jobs(status: NodeStatusSnapshot): string {
           <div class="actions">
             <button type="button" data-post="/api/node/hash" data-busy="Starting the pass…"
                     ${hashing.running ? 'disabled' : ''}>
-              ${hashing.running ? 'Hashing…' : 'Hash everything now'}
+              ${hashing.running ? 'Hashing…' : 'Hash anything missing'}
             </button>
             ${
               hashing.running
@@ -971,6 +1049,18 @@ function jobs(status: NodeStatusSnapshot): string {
                    </button>`
                 : ''
             }
+          </div>
+          <div class="note">
+            <strong>Want a clean verification?</strong> Rescan every mounted library and
+            rebuild every package hash from the bytes on disk. Existing hashes are replaced.
+            <div class="actions" style="margin-top:12px">
+              <button type="button" class="ghost" data-post="/api/node/rebuild"
+                      data-busy="Starting a complete rescan…"
+                      data-confirm="Rescan every library and rebuild every ZIP hash? This reads every package and can take a long time."
+                      ${scanning || hashing.running ? 'disabled' : ''}>
+                Rescan &amp; rebuild all hashes
+              </button>
+            </div>
           </div>
         </div>
 `;
@@ -1057,7 +1147,7 @@ function hashed(status: NodeStatusSnapshot): string {
   // so the number is worth showing rather than a tick.
   return done
     ? `<span class="ok"><span class="dot">●</span>${counts}</span>`
-    : `${counts} <span class="muted">— only hashed files can be served over the mesh</span>`;
+    : `${counts} <span class="muted">— only hashed files can be proxied through the Coordinator</span>`;
 }
 
 function libraryTable(status: NodeStatusSnapshot): string {

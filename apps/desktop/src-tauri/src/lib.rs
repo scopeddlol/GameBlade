@@ -678,6 +678,18 @@ async fn finish_install(
     title: String,
     downloaded_path: String,
 ) -> AppResult<InstalledGame> {
+    // The UI deliberately retries this after a restart if the downloader had
+    // already persisted "completed". Returning the existing live install makes
+    // that recovery idempotent, including after the source ZIP was deleted.
+    if let Some(existing) = state.installs.get(&game_id).await {
+        if tokio::fs::try_exists(&existing.install_path)
+            .await
+            .unwrap_or(false)
+        {
+            return Ok(existing);
+        }
+    }
+
     let source = PathBuf::from(&downloaded_path);
     let install_root = state.install_dir().await.join(sanitise_folder_name(&title));
 

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MESH_CHUNK_BYTES } from '@gameblade/shared';
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDb, type DbHandle } from '../db/index.js';
 import { gameFiles, games, libraries } from '../db/schema.js';
@@ -199,6 +200,20 @@ describe('ChunkService.hashUnhashed', () => {
 
     expect(service.unhashedGameIds()).toEqual([]);
     expect(await service.hashUnhashed()).toEqual({ hashed: 0, failed: 0 });
+  });
+
+  it('can deliberately rebuild hashes that are already complete', async () => {
+    const gameId = await seed('One', Buffer.alloc(4096, 1));
+    await service.hashUnhashed();
+    const before = handle.db.select().from(gameFiles).where(eq(gameFiles.gameId, gameId)).get()!;
+
+    await writeFile(path.join(libraryDir, 'One.zip'), Buffer.alloc(4096, 2));
+    const result = await service.hashUnhashed(() => false, { force: true });
+    const after = handle.db.select().from(gameFiles).where(eq(gameFiles.gameId, gameId)).get()!;
+
+    expect(result).toEqual({ hashed: 1, failed: 0 });
+    expect(after.sha256).not.toBe(before.sha256);
+    expect(service.getSweepProgress().mode).toBe('rebuild');
   });
 
   it('leaves a game that is no longer on disk alone', async () => {

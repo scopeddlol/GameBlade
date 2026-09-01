@@ -362,6 +362,7 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
 
     await metadata.applyIgdbGame(id, input.igdbId, 'manual', {
       refreshArtwork: input.refreshArtwork,
+      setTitle: input.setTitle,
     });
     return { ok: true, matchStatus: 'manual' };
   });

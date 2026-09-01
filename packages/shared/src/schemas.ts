@@ -149,6 +149,8 @@ export const matchGameSchema = z.object({
   igdbId: z.number().int().positive().nullable(),
   /** Re-fetch artwork from SteamGridDB after applying the match. */
   refreshArtwork: z.boolean().default(true),
+  /** Adopt the provider's canonical title when a human confirms the match. */
+  setTitle: z.boolean().default(true),
 });
 export type MatchGameInput = z.infer<typeof matchGameSchema>;
 

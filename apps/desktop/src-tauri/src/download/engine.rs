@@ -348,29 +348,33 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
     // Fetching the manifest is itself network work, so it gets the same
     // patience as the transfers: a server restarting just as the queue
     // reached this game should not fail it.
-    let mut manifest = None;
-    for attempt in 0..5u32 {
+    let mut attempt = 0u32;
+    let manifest = loop {
         if cancelled(&job.cancel_flag) {
             return Outcome::Stopped;
         }
         match job.client.manifest(&job.game_id).await {
-            Ok(fetched) => {
-                manifest = Some(fetched);
-                break;
-            }
+            Ok(fetched) => break fetched,
             Err(err) => {
                 // Refused access will not heal by waiting.
                 if is_authorisation_error(&err) {
                     return Outcome::Fatal(err);
                 }
-                if attempt == 4 {
+
+                // A Coordinator restart or an interrupted connection must not
+                // turn a queued install into a permanent failure. Network and
+                // explicit offline failures wait for the service to return;
+                // other server errors retain a bounded retry so a bad request
+                // still becomes actionable rather than looping forever.
+                let outage = matches!(err, AppError::Network(_) | AppError::Offline(_));
+                if !outage && attempt >= 4 {
                     return Outcome::Fatal(err);
                 }
                 tokio::time::sleep(backoff_delay(attempt)).await;
+                attempt = attempt.saturating_add(1);
             }
         }
-    }
-    let manifest = manifest.expect("the loop above either sets this or returns");
+    };
     if let Err(error) = validate_package_manifest(&manifest) {
         return Outcome::Fatal(error);
     }

@@ -28,6 +28,8 @@ export type ChunkProgress = HashProgress;
  */
 export interface SweepProgress {
   running: boolean;
+  /** Missing hashes only, or a deliberate verification rebuild of every ZIP. */
+  mode: 'missing' | 'rebuild';
   /** Set while a stop has been asked for and the current game is finishing. */
   stopping: boolean;
   startedAt: string | null;
@@ -120,9 +122,12 @@ export class ChunkService {
 
   /** How the pass over everything unhashed is going. */
   getSweepProgress(): SweepProgress {
-    // Counted live so the number falls as work lands, rather than only at the
-    // end of a run that takes hours.
-    const remaining = this.sweep.running ? this.unhashedGameIds().length : this.sweep.remaining;
+    // Derived from this run rather than the database. During a rebuild the old
+    // hashes are still present until each game is replaced, so an "unhashed"
+    // query would incorrectly say there is no work left from the first second.
+    const remaining = this.sweep.running
+      ? Math.max(0, this.sweep.total - this.sweep.hashed - this.sweep.failed)
+      : this.sweep.remaining;
     const bytesPerSecond = this.sweep.running ? this.sweepRate.rate() : 0;
     const bytesLeft = Math.max(0, this.sweep.bytesTotal - this.sweep.bytesHashed);
     return {
@@ -152,6 +157,24 @@ export class ChunkService {
           sql`lower(${games.relPath}) like '%.zip'`,
           gt(gameFiles.sizeBytes, 0),
           or(isNull(gameFiles.chunkBytes), ne(gameFiles.chunkBytes, MESH_CHUNK_BYTES)),
+        ),
+      )
+      .get();
+    return Number(row?.bytes ?? 0);
+  }
+
+  /** Every byte in every present ZIP package, for a full verification pass. */
+  packageBytes(): number {
+    const row = this.db
+      .select({ bytes: sql<number>`coalesce(sum(${gameFiles.sizeBytes}), 0)` })
+      .from(gameFiles)
+      .innerJoin(games, eq(games.id, gameFiles.gameId))
+      .where(
+        and(
+          isNull(games.missingAt),
+          eq(games.kind, 'archive'),
+          sql`lower(${games.relPath}) like '%.zip'`,
+          gt(gameFiles.sizeBytes, 0),
         ),
       )
       .get();
@@ -270,6 +293,24 @@ export class ChunkService {
       .map((row) => row.gameId);
   }
 
+  /** Every present ZIP game, including games that already carry valid hashes. */
+  packageGameIds(): string[] {
+    return this.db
+      .selectDistinct({ gameId: gameFiles.gameId })
+      .from(gameFiles)
+      .innerJoin(games, eq(games.id, gameFiles.gameId))
+      .where(
+        and(
+          isNull(games.missingAt),
+          eq(games.kind, 'archive'),
+          sql`lower(${games.relPath}) like '%.zip'`,
+          gt(gameFiles.sizeBytes, 0),
+        ),
+      )
+      .all()
+      .map((row) => row.gameId);
+  }
+
   /**
    * Hash everything that is not hashed yet, one game at a time.
    *
@@ -290,19 +331,26 @@ export class ChunkService {
    * means a restart resumes instead of starting again, since a game already
    * hashed is skipped by the query above.
    */
-  async hashUnhashed(shouldStop: () => boolean = () => false): Promise<{
+  async hashUnhashed(
+    shouldStop: () => boolean = () => false,
+    options: { force?: boolean } = {},
+  ): Promise<{
     hashed: number;
     failed: number;
   }> {
-    const pending = this.unhashedGameIds();
+    const force = options.force ?? false;
+    const pending = force ? this.packageGameIds() : this.unhashedGameIds();
+
+    this.sweepRate.reset();
 
     this.sweep = {
       ...idleSweep(),
       running: true,
+      mode: force ? 'rebuild' : 'missing',
       startedAt: new Date().toISOString(),
       remaining: pending.length,
       total: pending.length,
-      bytesTotal: this.unhashedBytes(),
+      bytesTotal: force ? this.packageBytes() : this.unhashedBytes(),
     };
 
     let hashed = 0;
@@ -323,7 +371,7 @@ export class ChunkService {
         }
 
         try {
-          await this.start(gameId);
+          await this.start(gameId, { force });
           if (this.isGameChunked(gameId)) hashed += 1;
           else failed += 1;
         } catch (error) {
@@ -350,7 +398,7 @@ export class ChunkService {
         finishedAt: new Date().toISOString(),
         hashed,
         failed,
-        remaining: this.unhashedGameIds().length,
+        remaining: Math.max(0, pending.length - hashed - failed),
         note,
       };
     }
@@ -366,11 +414,11 @@ export class ChunkService {
    * request open for the length of it. Two callers — the timer a node runs and
    * an operator pressing the button on its page — drive the same one run.
    */
-  startSweep(shouldPause: () => boolean = () => false): boolean {
+  startSweep(shouldPause: () => boolean = () => false, options: { force?: boolean } = {}): boolean {
     if (this.sweeping) return false;
 
     this.stopSweepRequested = false;
-    this.sweeping = this.hashUnhashed(shouldPause)
+    this.sweeping = this.hashUnhashed(shouldPause, options)
       .then((result) => {
         if (result.hashed > 0 || result.failed > 0) {
           this.logger.info(result, 'hashed games so they can be served from this node');
@@ -442,10 +490,27 @@ export class ChunkService {
 
     const files = this.db.select().from(gameFiles).where(eq(gameFiles.gameId, gameId)).all();
 
+    // A rebuild is verification, not a best-effort refresh. Invalidate the old
+    // answers before reading so one file that can no longer be opened cannot
+    // leave the game looking healthy on hashes calculated from older bytes.
+    if (force && files.length > 0) {
+      this.db.transaction((tx) => {
+        for (let offset = 0; offset < files.length; offset += 400) {
+          const ids = files.slice(offset, offset + 400).map((file) => file.id);
+          tx.delete(gameFileChunks).where(inArray(gameFileChunks.fileId, ids)).run();
+          tx.update(gameFiles)
+            .set({ sha256: null, chunkedAt: null, chunkBytes: null })
+            .where(inArray(gameFiles.id, ids))
+            .run();
+        }
+      });
+    }
+
     // A file already hashed on this grid is skipped; one hashed on a different
     // grid is not, because its rows describe boundaries nobody uses any more.
     const pending = force ? files : files.filter((file) => file.chunkBytes !== MESH_CHUNK_BYTES);
 
+    this.gameRate.reset();
     this.progress = {
       ...idleHashProgress(),
       gameId,
@@ -584,6 +649,7 @@ export const expectedChunkCount = chunkCountFor;
 function idleSweep(): SweepProgress {
   return {
     running: false,
+    mode: 'missing',
     stopping: false,
     startedAt: null,
     finishedAt: null,

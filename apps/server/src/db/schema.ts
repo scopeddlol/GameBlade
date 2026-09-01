@@ -177,6 +177,8 @@ export const games = sqliteTable(
     fileCount: integer('file_count').notNull().default(0),
     /** Newest mtime across the game's files, used to skip unchanged entries. */
     contentMtime: text('content_mtime'),
+    /** When a Node last reported the ZIP's launchable-file index, even if empty. */
+    archiveInspectedAt: text('archive_inspected_at'),
 
     matchStatus: text('match_status', {
       enum: ['unmatched', 'auto', 'manual', 'skipped'],

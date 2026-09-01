@@ -493,6 +493,8 @@ export interface MetadataCandidate {
   provider: 'igdb';
   id: number;
   title: string;
+  /** Title similarity to the catalog entry, from 0 to 100. */
+  confidence: number;
   releaseDate: string | null;
   summary: string | null;
   coverUrl: string | null;

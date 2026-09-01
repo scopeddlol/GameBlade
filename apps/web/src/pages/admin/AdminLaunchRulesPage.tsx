@@ -320,10 +320,14 @@ function RuleRow({
   const archiveQuery = useQuery({
     queryKey: ['admin', 'executables', row.gameId],
     queryFn: () =>
-      api.get<{ candidates: Array<{ path: string; sizeBytes: number }> }>(
-        `/admin/games/${row.gameId}/executables`,
-      ),
+      api.get<{
+        candidates: Array<{ path: string; sizeBytes: number }>;
+        ready: boolean;
+        inspectedAt: string | null;
+        source: 'node' | 'local';
+      }>(`/admin/games/${row.gameId}/executables`),
     enabled: row.needsArchiveScan && expanded,
+    refetchInterval: (query) => (query.state.data?.ready === false ? 3000 : false),
   });
 
   const candidates = row.needsArchiveScan ? (archiveQuery.data?.candidates ?? []) : row.candidates;
@@ -365,13 +369,15 @@ function RuleRow({
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             {row.needsArchiveScan && !expanded ? (
               <p className="text-ink-400 text-xs">
-                Open this row to read the archive and list what is inside it.
+                Open this row to inspect the ZIP and list what is inside it.
               </p>
             ) : options.length === 0 ? (
               <p className="text-ink-400 text-xs">
                 {archiveQuery.isLoading
-                  ? 'Reading the archive…'
-                  : 'Nothing in this game looks like an executable. Type a path below if you know it.'}
+                  ? 'Reading the ZIP index…'
+                  : archiveQuery.data?.ready === false
+                    ? 'Waiting for the Node to report the ZIP contents…'
+                    : 'Nothing in this game looks like an executable. Type a path below if you know it.'}
               </p>
             ) : (
               <select

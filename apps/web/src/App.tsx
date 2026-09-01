@@ -20,6 +20,7 @@ import { AdminDiscordPage } from './pages/admin/AdminDiscordPage.js';
 import { AdminBugsPage } from './pages/admin/AdminBugsPage.js';
 import { AdminHealthPage } from './pages/admin/AdminHealthPage.js';
 import { AdminLaunchRulesPage } from './pages/admin/AdminLaunchRulesPage.js';
+import { AdminMetadataMatchesPage } from './pages/admin/AdminMetadataMatchesPage.js';
 import { AdminSavePathsPage } from './pages/admin/AdminSavePathsPage.js';
 import { AdminClientPage } from './pages/admin/AdminClientPage.js';
 import { AdminFeaturedPage } from './pages/admin/AdminFeaturedPage.js';
@@ -129,6 +130,7 @@ export function App() {
         <Route element={<AdminSection />}>
           <Route path="catalog">
             <Route index element={<AdminCatalogPage />} />
+            <Route path="matches" element={<AdminMetadataMatchesPage />} />
             <Route path="achievements" element={<AdminAchievementsPage />} />
             <Route path="featured" element={<AdminFeaturedPage />} />
             <Route path="save-paths" element={<AdminSavePathsPage />} />

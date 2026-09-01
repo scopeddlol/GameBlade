@@ -608,15 +608,40 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           candidates: sortCandidates(
             reported.filter((entry) => isLikelyGameExecutable(entry.path)),
           ),
+          ready: true,
+          inspectedAt: row.game.archiveInspectedAt,
+          source: 'node' as const,
+        };
+      }
+
+      // A Coordinator intentionally has no path to the Node's archive. Polling
+      // this endpoint waits for the next catalog report, whose separate marker
+      // distinguishes "inspected and empty" from "not inspected yet".
+      if (!config.servesLocalFiles) {
+        return {
+          candidates: [],
+          ready: Boolean(row.game.archiveInspectedAt),
+          inspectedAt: row.game.archiveInspectedAt,
+          source: 'node' as const,
         };
       }
 
       const absolute = path.join(row.libraryPath, row.game.relPath);
       try {
-        return { candidates: sortCandidates(await listZipExecutables(absolute)) };
+        return {
+          candidates: sortCandidates(await listZipExecutables(absolute)),
+          ready: true,
+          inspectedAt: new Date().toISOString(),
+          source: 'local' as const,
+        };
       } catch (error) {
         request.log.warn({ err: error, gameId: id }, 'could not read archive for executables');
-        return { candidates: [] };
+        return {
+          candidates: [],
+          ready: false,
+          inspectedAt: null,
+          source: 'local' as const,
+        };
       }
     }
 
@@ -628,7 +653,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const candidates = files
       .filter((file) => isLikelyGameExecutable(file.relPath))
       .map((file) => ({ path: file.relPath, sizeBytes: file.sizeBytes }));
-    return { candidates: sortCandidates(candidates) };
+    return {
+      candidates: sortCandidates(candidates),
+      ready: true,
+      inspectedAt: row.game.scannedAt,
+      source: 'local' as const,
+    };
   });
 
   /**
@@ -666,7 +696,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         .get()?.n ?? 0;
 
     const rows = db
-      .select({ id: games.id, title: games.title, kind: games.kind })
+      .select({
+        id: games.id,
+        title: games.title,
+        kind: games.kind,
+        archiveInspectedAt: games.archiveInspectedAt,
+      })
       .from(games)
       .where(where)
       .orderBy(asc(games.sortTitle))
@@ -728,10 +763,13 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         candidates,
         suggestion: suggestExecutable(row.title, candidates),
         // A standalone server can inspect an old ZIP on demand. A Coordinator
-        // has no archive to open; its Node will fill this list on the next
-        // catalog report instead of sending the UI on an impossible request.
+        // polls until its Node reports the central-directory index; an explicit
+        // inspection timestamp lets an empty result settle instead of polling
+        // forever.
         needsArchiveScan:
-          row.kind === 'archive' && candidates.length === 0 && config.servesLocalFiles,
+          row.kind === 'archive' &&
+          candidates.length === 0 &&
+          (config.servesLocalFiles || !row.archiveInspectedAt),
       };
     });
 

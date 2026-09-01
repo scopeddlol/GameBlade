@@ -500,6 +500,7 @@ describe('the split-role topology', () => {
       kind: 'archive' as const,
       sizeBytes: 16,
       contentMtime: '2026-08-30T00:00:00.000Z',
+      executables: [{ path: `bin/${title}.exe`, sizeBytes: 8 }],
       files: [
         {
           relPath: `${title}.zip`,
@@ -575,6 +576,18 @@ describe('the split-role topology', () => {
     expect(manifestBody.sources).toContainEqual(
       expect.objectContaining({ kind: 'node', nodeId: node.nodeId }),
     );
+
+    const executableIndex = await app.inject({
+      method: 'GET',
+      url: `/api/admin/games/${target.id}/executables`,
+      headers: auth(admin),
+    });
+    expect(executableIndex.statusCode).toBe(200);
+    expect(executableIndex.json()).toMatchObject({
+      ready: true,
+      source: 'node',
+      candidates: [{ path: 'bin/Downloadable Game.exe', sizeBytes: 8 }],
+    });
   });
 
   /* --------------------------------------------------- what a node is told */

@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { syncLibraryRoots } from '../bootstrap.js';
 import { games, libraries, nodeEntryPolicies } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
-import { NODE_PAGE_SCRIPT, renderNodePage } from './nodePage.js';
+import { NODE_PAGE_SCRIPT, renderNodeLive, renderNodePage } from './nodePage.js';
 
 /**
  * What setup accepts, and nothing else.
@@ -90,6 +90,13 @@ export async function nodeRoutes(app: FastifyInstance): Promise<void> {
 
   app.get(`${config.basePath}/api/node/status`, async () => nodeStatus.snapshot());
 
+  // Small live fragments for the status page. Unlike a full document refresh,
+  // this preserves the active tab, intake search, scroll position and anything
+  // the operator is editing while hashing progress updates once per second.
+  app.get(`${config.basePath}/api/node/live`, async () =>
+    renderNodeLive(await nodeStatus.snapshot()),
+  );
+
   /**
    * The page's script, as a file.
    *
@@ -157,6 +164,33 @@ export async function nodeRoutes(app: FastifyInstance): Promise<void> {
   app.post(`${config.basePath}/api/node/hash/cancel`, async () => {
     if (!chunks.stopSweep()) throw ApiError.conflict('Nothing is being hashed.');
     return { message: 'Stopping after the game being read now.' };
+  });
+
+  /**
+   * Re-read the catalog and then replace every package hash from source bytes.
+   *
+   * This is intentionally one operation: after copying or repairing a library,
+   * an operator should not have to remember whether scan or hashing comes first
+   * to establish that the Node is internally consistent.
+   */
+  app.post(`${config.basePath}/api/node/rebuild`, async (_request, reply) => {
+    if (scanner.isRunning) throw ApiError.conflict('A scan is already running.');
+    if (chunks.isSweeping) throw ApiError.conflict('Files are already being hashed.');
+
+    const mounts = await syncLibraryRoots(app);
+    void scanner.scan({ force: true, fetchMetadata: false }).then(() => {
+      // Scanner failures and cancellation are recorded in progress rather than
+      // thrown. Only a completed scan is allowed to feed a verification pass.
+      if (scanner.getProgress().state === 'idle') {
+        chunks.startSweep(() => scanner.isRunning, { force: true });
+      }
+    });
+
+    return reply.code(202).send({
+      started: true,
+      message: 'Rescanning every library. A complete hash rebuild will start automatically.',
+      mounts,
+    });
   });
 
   /* ---------------------------------------------------------- game intake */

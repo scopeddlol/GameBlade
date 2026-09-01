@@ -377,6 +377,19 @@ describe('CatalogIngestService', () => {
     ]);
   });
 
+  it('records a completed ZIP inspection even when no executable was found', () => {
+    ingest.ingest(nodeId, [
+      reported({
+        relPath: 'Quiet Game.zip',
+        kind: 'archive',
+        executables: [],
+      }),
+    ]);
+
+    expect(db.select().from(games).get()?.archiveInspectedAt).not.toBeNull();
+    expect(db.select().from(gameArchiveExecutables).all()).toEqual([]);
+  });
+
   /* ------------------------------------------------------------- refusals */
 
   it('refuses a node with no library assigned rather than guessing', () => {

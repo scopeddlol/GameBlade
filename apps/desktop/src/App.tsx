@@ -179,6 +179,57 @@ function Shell() {
   // a launch was implemented, pushing afterwards was not.
   useAutoSync(settingsQuery.data, Boolean(session));
 
+  // Installation is deliberately recoverable across a UI or app restart. The
+  // Rust downloader persists a completed queue entry before it emits the final
+  // event, so relying on that event alone could leave a fully downloaded ZIP
+  // sitting forever if the window closed in between. A small in-flight set also
+  // makes the event and startup recovery safe when they arrive together.
+  const finishingDownloads = useRef(new Set<string>());
+  const finishCompletedDownload = useCallback(
+    (download: DownloadState) => {
+      if (download.status !== 'completed' || finishingDownloads.current.has(download.game_id)) {
+        return;
+      }
+
+      finishingDownloads.current.add(download.game_id);
+      setDownloads((current) =>
+        current.map((item) =>
+          item.game_id === download.game_id
+            ? { ...item, status: 'installing', current_file: 'Unpacking game files…' }
+            : item,
+        ),
+      );
+
+      void ipc
+        .finishInstall(download.game_id, download.title, download.destination)
+        .then(() => {
+          setDownloads((current) =>
+            current.map((item) =>
+              item.game_id === download.game_id
+                ? { ...item, status: 'completed', current_file: null, error: null }
+                : item,
+            ),
+          );
+          return queryClient.invalidateQueries({ queryKey: ['installed'] });
+        })
+        .catch((error: unknown) => {
+          setDownloads((current) =>
+            current.map((item) =>
+              item.game_id === download.game_id
+                ? {
+                    ...item,
+                    status: 'failed',
+                    error: error instanceof Error ? error.message : 'Could not finish installing',
+                  }
+                : item,
+            ),
+          );
+        })
+        .finally(() => finishingDownloads.current.delete(download.game_id));
+    },
+    [queryClient],
+  );
+
   // A game closing is what ends a session, so the chip in the title bar and
   // anything keyed on "is this running" have to hear about it immediately
   // rather than on the next twenty-second poll.
@@ -199,7 +250,10 @@ function Shell() {
   useEffect(() => {
     if (!session) return;
 
-    void ipc.listDownloads().then(setDownloads);
+    void ipc.listDownloads().then((saved) => {
+      setDownloads(saved);
+      saved.forEach(finishCompletedDownload);
+    });
 
     const unlisten = listen<DownloadState>('download://progress', (event) => {
       setDownloads((current) => {
@@ -210,52 +264,13 @@ function Shell() {
 
       // A finished download becomes an installed game without the user having
       // to do anything, which is what makes install one click rather than two.
-      if (event.payload.status === 'completed') {
-        setDownloads((current) =>
-          current.map((download) =>
-            download.game_id === event.payload.game_id
-              ? { ...download, status: 'installing', current_file: 'Unpacking game files…' }
-              : download,
-          ),
-        );
-        void ipc
-          .finishInstall(event.payload.game_id, event.payload.title, event.payload.destination)
-          .then(() => {
-            setDownloads((current) =>
-              current.map((download) =>
-                download.game_id === event.payload.game_id
-                  ? { ...download, status: 'completed', current_file: null }
-                  : download,
-              ),
-            );
-            return queryClient.invalidateQueries({ queryKey: ['installed'] });
-          })
-          .catch((error: unknown) => {
-            // A silently swallowed failure here (a corrupt archive, a full
-            // disk, a permissions error) used to leave the download entry
-            // sitting at "Completed" forever with the game never actually
-            // installed and nothing telling the user why. Surfacing it
-            // through the same download entry reuses the queue's existing
-            // failed-state UI instead of adding a new one.
-            setDownloads((current) =>
-              current.map((d) =>
-                d.game_id === event.payload.game_id
-                  ? {
-                      ...d,
-                      status: 'failed',
-                      error: error instanceof Error ? error.message : 'Could not finish installing',
-                    }
-                  : d,
-              ),
-            );
-          });
-      }
+      finishCompletedDownload(event.payload);
     });
 
     return () => {
       void unlisten.then((off) => off());
     };
-  }, [session]);
+  }, [finishCompletedDownload, session]);
 
   const openGame = useCallback((game: GameSummary) => setOpenGameId(game.id), []);
 

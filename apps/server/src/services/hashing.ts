@@ -397,6 +397,12 @@ export class RateMeter {
     return this.total;
   }
 
+  /** Starts a new measurement window without allocating another meter. */
+  reset(): void {
+    this.samples.length = 0;
+    this.total = 0;
+  }
+
   private trim(now: number): void {
     const cutoff = now - this.windowMs;
     while (this.samples.length > 0 && (this.samples[0]?.at ?? 0) < cutoff) this.samples.shift();

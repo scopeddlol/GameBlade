@@ -163,7 +163,7 @@ export class CatalogIngestService {
       const current = existing.get(item.relPath);
 
       if (current) {
-        if (item.executables) {
+        if (item.executables !== undefined) {
           executableWork.push({ gameId: current.id, executables: item.executables });
         }
         // What the node says it has hashed, against what is stored. Equal is
@@ -212,7 +212,9 @@ export class CatalogIngestService {
         scannedAt: now,
       });
       fileWork.push({ gameId: id, files: item.files });
-      if (item.executables) executableWork.push({ gameId: id, executables: item.executables });
+      if (item.executables !== undefined) {
+        executableWork.push({ gameId: id, executables: item.executables });
+      }
       result.added += 1;
     }
 
@@ -251,6 +253,7 @@ export class CatalogIngestService {
 
       this.replaceFiles(tx, fileWork);
       this.replaceArchiveExecutables(tx, executableWork);
+      this.markArchivesInspected(tx, executableWork, now);
       this.markMissing(tx, library.id, vanished, now);
 
       tx.update(meshNodes)
@@ -350,6 +353,16 @@ export class CatalogIngestService {
       })),
     );
     for (const batch of batched(rows)) tx.insert(gameArchiveExecutables).values(batch).run();
+  }
+
+  /** Empty and non-empty ZIP indexes both prove that inspection completed. */
+  private markArchivesInspected(tx: Tx, work: ExecutableWork[], at: string): void {
+    for (const batch of batched(
+      work.map((entry) => entry.gameId),
+      400,
+    )) {
+      tx.update(games).set({ archiveInspectedAt: at }).where(inArray(games.id, batch)).run();
+    }
   }
 
   /**
