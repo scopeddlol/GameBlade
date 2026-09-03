@@ -516,14 +516,39 @@ export class ScannerService {
     force: boolean,
   ): void {
     if (current) {
-      const unchanged =
+      const contentUnchanged =
         !force &&
         current.sizeBytes === item.sizeBytes &&
         current.fileCount === item.files.length &&
-        current.contentMtime === item.contentMtime &&
-        current.missingAt === null;
+        current.contentMtime === item.contentMtime;
 
-      if (unchanged) return;
+      if (contentUnchanged) {
+        /*
+         * A temporarily empty mount must not erase work that took hours.
+         *
+         * CIFS shares commonly come up after the container that reads them. If
+         * the mount point itself is present while the share is not, one scan
+         * sees an empty library and marks every game missing. When the share
+         * returns, the same package used to fall through to `replaceFiles`
+         * solely because `missingAt` was set. Deleting the old file row also
+         * cascaded through every stored chunk hash, so the Node reread the
+         * entire archive after every such restart.
+         *
+         * Size, file count and content mtime are the scanner's ordinary
+         * unchanged fingerprint. If they still match, only revive the game
+         * row and retain its file ids, whole-file hash and chunk grid.
+         */
+        if (current.missingAt !== null) {
+          const now = new Date().toISOString();
+          this.db
+            .update(games)
+            .set({ scannedAt: now, updatedAt: now, missingAt: null })
+            .where(eq(games.id, current.id))
+            .run();
+          this.advance({ updated: this.progress.updated + 1 });
+        }
+        return;
+      }
 
       this.db
         .update(games)

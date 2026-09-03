@@ -1,4 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { MESH_CHUNK_BYTES } from '@gameblade/shared';
+import { eq } from 'drizzle-orm';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDb, type DbHandle } from '../db/index.js';
+import { gameFileChunks, gameFiles, games, libraries } from '../db/schema.js';
 import { ScannerService } from './scanner.js';
 import type { Db } from '../db/index.js';
 import type { Game } from '../db/schema.js';
@@ -270,5 +277,130 @@ describe('progress counters', () => {
     const progress = scanner.getProgress();
     expect(progress.total).toBe(2);
     expect(progress.processed).toBe(2);
+  });
+});
+
+/**
+ * A network mount may briefly exist as an empty directory during boot.
+ *
+ * The first scan marks its games missing; the next sees the share again. The
+ * package fingerprint decides whether that is the same game coming back or new
+ * bytes under the old name. Only the latter may discard persisted hashes.
+ */
+describe('a library returning after a temporary empty mount', () => {
+  let base: string;
+  let libraryPath: string;
+  let handle: DbHandle;
+  let scanner: ScannerService;
+
+  beforeEach(async () => {
+    base = await mkdtemp(path.join(tmpdir(), 'gameblade-scanner-mount-test-'));
+    libraryPath = path.join(base, 'library');
+    await mkdir(libraryPath);
+    handle = createDb(path.join(base, 'test.db'));
+    handle.db.insert(libraries).values({ id: 'lib_nas', name: 'NAS', path: libraryPath }).run();
+    scanner = new ScannerService(handle.db, stubMetadata(), silentLogger);
+  });
+
+  afterEach(async () => {
+    handle.sqlite.close();
+    await rm(base, { recursive: true, force: true });
+  });
+
+  async function scanAndMarkHashed(bytes: Buffer) {
+    const archive = path.join(libraryPath, 'Network Game.zip');
+    await writeFile(archive, bytes);
+    await scanner.scan({ fetchMetadata: false });
+
+    const game = handle.db.select().from(games).get()!;
+    const file = handle.db.select().from(gameFiles).where(eq(gameFiles.gameId, game.id)).get()!;
+    handle.db
+      .update(gameFiles)
+      .set({
+        sha256: 'whole-file-hash',
+        chunkedAt: new Date().toISOString(),
+        chunkBytes: MESH_CHUNK_BYTES,
+      })
+      .where(eq(gameFiles.id, file.id))
+      .run();
+    handle.db
+      .insert(gameFileChunks)
+      .values({
+        fileId: file.id,
+        chunkIndex: 0,
+        sizeBytes: bytes.length,
+        sha256: 'chunk-hash',
+      })
+      .run();
+
+    return { archive, fileId: file.id, gameId: game.id };
+  }
+
+  it('keeps completed hashes through a database reopen and startup scan', async () => {
+    const seeded = await scanAndMarkHashed(Buffer.from('a stable package'));
+
+    handle.sqlite.close();
+    handle = createDb(path.join(base, 'test.db'));
+    scanner = new ScannerService(handle.db, stubMetadata(), silentLogger);
+    await scanner.scan({ fetchMetadata: false });
+
+    const file = handle.db
+      .select()
+      .from(gameFiles)
+      .where(eq(gameFiles.gameId, seeded.gameId))
+      .get()!;
+    expect(file.id).toBe(seeded.fileId);
+    expect(file.sha256).toBe('whole-file-hash');
+    expect(file.chunkBytes).toBe(MESH_CHUNK_BYTES);
+    expect(handle.db.select().from(gameFileChunks).all()).toHaveLength(1);
+  });
+
+  it('revives an unchanged ZIP without deleting its persisted hashes', async () => {
+    const seeded = await scanAndMarkHashed(Buffer.from('a stable package'));
+    const parked = path.join(base, 'Network Game.zip');
+
+    // The directory remains readable, as a CIFS mount point does before the
+    // remote share is ready, but the package briefly disappears from it.
+    await rename(seeded.archive, parked);
+    await scanner.scan({ fetchMetadata: false });
+    expect(
+      handle.db.select().from(games).where(eq(games.id, seeded.gameId)).get()!.missingAt,
+    ).not.toBeNull();
+
+    await rename(parked, seeded.archive);
+    await scanner.scan({ fetchMetadata: false });
+
+    const revived = handle.db
+      .select()
+      .from(gameFiles)
+      .where(eq(gameFiles.gameId, seeded.gameId))
+      .get()!;
+    expect(revived.id).toBe(seeded.fileId);
+    expect(revived.sha256).toBe('whole-file-hash');
+    expect(revived.chunkBytes).toBe(MESH_CHUNK_BYTES);
+    expect(handle.db.select().from(gameFileChunks).all()).toHaveLength(1);
+    expect(
+      handle.db.select().from(games).where(eq(games.id, seeded.gameId)).get()!.missingAt,
+    ).toBeNull();
+  });
+
+  it('invalidates hashes when different package bytes return', async () => {
+    const seeded = await scanAndMarkHashed(Buffer.from('old package'));
+    const parked = path.join(base, 'old-package.zip');
+
+    await rename(seeded.archive, parked);
+    await scanner.scan({ fetchMetadata: false });
+    await writeFile(seeded.archive, Buffer.from('different and larger package'));
+    await scanner.scan({ fetchMetadata: false });
+
+    const replaced = handle.db
+      .select()
+      .from(gameFiles)
+      .where(eq(gameFiles.gameId, seeded.gameId))
+      .get()!;
+    expect(replaced.id).not.toBe(seeded.fileId);
+    expect(replaced.sha256).toBeNull();
+    expect(replaced.chunkBytes).toBeNull();
+    expect(handle.db.select().from(gameFileChunks).all()).toHaveLength(0);
   });
 });
