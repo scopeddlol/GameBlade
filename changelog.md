@@ -1,6 +1,6 @@
 # GameBlade Changelog
 
-## Unreleased
+## Version 0.9.0 - September 14, 2026
 
 ### One game, several machines
 
