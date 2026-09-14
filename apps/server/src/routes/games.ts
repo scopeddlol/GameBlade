@@ -4,6 +4,7 @@ import {
   artworkSearchSchema,
   editGameSchema,
   gameQuerySchema,
+  sourceReportSchema,
   launchRuleSchema,
   matchGameSchema,
   matchLocalSchema,
@@ -18,7 +19,7 @@ import {
   type SaveRule,
   MESH_CHUNK_BYTES,
 } from '@gameblade/shared';
-import { eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { requireAdmin, requireUser } from '../auth/middleware.js';
 import {
@@ -91,7 +92,14 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     const [summary] = catalog.decorate([row.game], context.user.id);
     if (!summary) throw ApiError.notFound('Game not found');
 
-    return toGameDetail(row.game, summary, { basePath, libraryName: row.libraryName });
+    return toGameDetail(row.game, summary, {
+      basePath,
+      libraryName: row.libraryName,
+      // Which machines hold this one. Shown rather than hidden: "where is this
+      // coming from" is the first question anybody asks about a slow download,
+      // and on a merged entry the answer is no longer a single library.
+      copies: mesh.copiesFor(row.game.id),
+    });
   });
 
   app.get('/games/:id/files', async (request) => {
@@ -138,7 +146,19 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
       throw ApiError.conflict(availability.note ?? 'This game cannot be installed yet');
     }
 
-    const files = db.select().from(gameFiles).where(eq(gameFiles.gameId, id)).all();
+    /*
+     * Which copy of this entry the download is described by.
+     *
+     * An entry can be held on several machines, and although they are almost
+     * always the same bytes they need not be — so one package is chosen, and
+     * every hash, size and file id below comes from that one. Mixing chunks
+     * from two packages would produce a file that fails its hashes after
+     * everything had already been transferred.
+     */
+    const plan = mesh.deliveryPlan(id, { excludeOwnerId: context.user.id });
+    const packageGameId = plan?.gameId ?? id;
+
+    const files = db.select().from(gameFiles).where(eq(gameFiles.gameId, packageGameId)).all();
     if (files.length !== 1 || !files[0]?.relPath.toLowerCase().endsWith('.zip')) {
       throw ApiError.conflict('This game does not have one valid ZIP package to install');
     }
@@ -151,10 +171,14 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     // current grid. A partly chunked game would leave the downloader deciding
     // per file whether a piece can be verified, and the answer to "can I trust
     // bytes from a stranger" should not vary within one download.
-    const chunked = chunks.isGameChunked(id);
-    const chunksByFile = chunked ? chunks.chunksForGame(id) : new Map();
+    const chunked = chunks.isGameChunked(packageGameId);
+    const chunksByFile = chunked ? chunks.chunksForGame(packageGameId) : new Map();
 
     const body: DownloadManifest = {
+      // Always the entry's id, never the copy's. This is what the client
+      // stores against an installed game, what its saves and achievements hang
+      // off, and what it asks for next time — and which machine happened to be
+      // fastest today must not change any of that.
       gameId: game.id,
       title: game.title,
       kind: 'archive',
@@ -170,19 +194,54 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
       token: issued.token,
       expiresAt: issued.expiresAt,
       ...(chunked ? { chunkBytes: MESH_CHUNK_BYTES } : {}),
-      // The Coordinator download route is always the Desktop's HTTPS origin.
-      // In split deployments it obtains each requested chunk from a Node
-      // before streaming it onward; that transport detail is deliberately
-      // invisible to the client.
+      // The Coordinator download route is always available to the Desktop. In
+      // split deployments it obtains each requested chunk from a Node before
+      // streaming it onward, and a Node that advertises an address of its own
+      // is offered beside it as a faster way to the same verified bytes.
       originAvailable: true,
       sources: mesh.sourcesFor(id, {
         chunked,
         includeOrigin: config.servesLocalFiles,
         excludeOwnerId: context.user.id,
+        userId: context.user.id,
+        mintGrant: (claims) => downloadTokens.issueDeliveryGrant(claims),
       }),
     };
     return body;
   });
+
+  /**
+   * What a client measured against the sources it was offered, and what it
+   * pulled straight from a node.
+   *
+   * Two things at once because they are two halves of the same report and a
+   * client has them at the same moment. The measurements order the source list
+   * for whoever downloads this next; the byte counts are how a delivery that
+   * never touched this machine is still counted against an allowance and still
+   * shows up as the node's work rather than as nothing at all.
+   */
+  app.post('/games/:id/sources/report', async (request) => {
+    const context = requireUser(request);
+    const { id } = request.params as { id: string };
+    const body = sourceReportSchema.parse(request.body ?? {});
+
+    const game = db.select({ id: games.id }).from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    mesh.recordProbes(context.user.id, body.results);
+
+    for (const delivered of body.delivered ?? []) {
+      mesh.recordDirectDelivery({
+        nodeId: delivered.nodeId,
+        userId: context.user.id,
+        gameId: id,
+        bytes: delivered.bytes,
+      });
+    }
+
+    return { ok: true };
+  });
+
 
   app.get('/games/:id/achievements', async (request) => {
     const context = requireUser(request);
@@ -297,7 +356,7 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     const catalogRows = db
       .select({ id: games.id, title: games.title, searchTitle: games.searchTitle })
       .from(games)
-      .where(isNull(games.missingAt))
+      .where(and(isNull(games.missingAt), isNull(games.mergedIntoId)))
       .all();
 
     // Save rules for the whole catalog, in one pass for the same reason the

@@ -37,6 +37,20 @@ import type { MeshService } from './mesh.js';
 import type { PlaytimeService } from './playtime.js';
 import type { ProfileService } from './profiles.js';
 
+/**
+ * The rows a listing may show: present on disk somewhere, and an entry in its
+ * own right.
+ *
+ * The second half is what holding one game on several machines costs every
+ * query in this file. A copy is a real catalog row with a real library and real
+ * files — that is how its machine serves it — but it is not a second game, and
+ * a shelf, a facet count or an archive size that included it would say the
+ * library doubled the day a second host came online.
+ */
+function listable(): SQL {
+  return and(isNull(games.missingAt), isNull(games.mergedIntoId)) as SQL;
+}
+
 /** How much of a description a list row can show before it is clamped anyway. */
 const BLURB_CHARS = 280;
 
@@ -115,7 +129,7 @@ export class CatalogService {
     private readonly presence: PresenceService,
     private readonly activity: ActivityService,
     private readonly gameRequests: GameRequestService,
-    private readonly mesh: Pick<MeshService, 'offeredGameIds'>,
+    private readonly mesh: Pick<MeshService, 'offeredGameIds' | 'hostCounts'>,
   ) {}
 
   /** Turns rows into summaries with everything the client renders. */
@@ -150,6 +164,9 @@ export class CatalogService {
     const stats = this.playtime.statsFor(userId, ids);
     const achievementCounts = this.achievements.countsFor(userId, ids);
     const availability = this.availabilityFor(rows);
+    // How many machines are holding each entry right now. One query for the
+    // page, and the number a card turns into "on 2 hosts".
+    const hosts = this.mesh.hostCounts(ids);
 
     // Two more set lookups over the page, in the same spirit as the ones
     // above: the admin catalog shows at a glance which entries a player could
@@ -207,6 +224,7 @@ export class CatalogService {
         hasSaveRule: withSaveRule.has(game.id),
         availability: availability.get(game.id)?.state ?? 'ready',
         availabilityNote: availability.get(game.id)?.note ?? null,
+        hostCount: hosts.get(game.id) ?? 0,
       };
     });
   }
@@ -250,19 +268,35 @@ export class CatalogService {
     const fileStats = new Map<string, { files: number; unhashed: number }>();
     for (let offset = 0; offset < ids.length; offset += 400) {
       const batch = ids.slice(offset, offset + 400);
+      /*
+       * Counted per entry, across every copy of it.
+       *
+       * An entry held on two machines has two sets of file rows, and the
+       * question a store card is asking is whether *anything* can serve it
+       * yet. Grouping by the entry and taking the best-prepared copy — the
+       * fewest files still to hash — is that question: a game whose VPS copy
+       * is hashed is installable while the home copy is still being read.
+       */
       const stats = this.db
         .select({
-          gameId: gameFiles.gameId,
+          entryId: sql<string>`coalesce(${games.mergedIntoId}, ${games.id})`,
+          copyId: games.id,
           files: sql<number>`count(*)`,
           unhashed: sql<number>`sum(case when ${gameFiles.sizeBytes} = 0
               or ${gameFiles.chunkBytes} = ${MESH_CHUNK_BYTES} then 0 else 1 end)`,
         })
         .from(gameFiles)
-        .where(inArray(gameFiles.gameId, batch))
-        .groupBy(gameFiles.gameId)
+        .innerJoin(games, eq(games.id, gameFiles.gameId))
+        .where(or(inArray(games.id, batch), inArray(games.mergedIntoId, batch)))
+        .groupBy(games.id)
         .all();
+
       for (const row of stats) {
-        fileStats.set(row.gameId, { files: Number(row.files), unhashed: Number(row.unhashed) });
+        const current = fileStats.get(row.entryId);
+        const candidate = { files: Number(row.files), unhashed: Number(row.unhashed) };
+        if (!current || candidate.unhashed < current.unhashed) {
+          fileStats.set(row.entryId, candidate);
+        }
       }
     }
 
@@ -280,16 +314,26 @@ export class CatalogService {
   search(userId: string, query: GameQuery): Paginated<GameSummary> {
     const conditions: SQL[] = [];
 
+    // Never a copy, whatever else is asked for. A copy is another machine's
+    // half of an entry that is already in these results, and an operator
+    // looking for missing files or an uncovered game means entries.
+    conditions.push(isNull(games.mergedIntoId));
     if (!query.includeMissing) conditions.push(isNull(games.missingAt));
     if (query.missingFilesOnly) conditions.push(sql`${games.missingAt} IS NOT NULL`);
     if (query.nodeCoverage === 'uncovered') {
       // This is the same definition as Admin → Nodes uses for its uncovered
       // count: present catalog rows with no holder that is online right now.
       // Keeping it server-side makes the linked worklist exact across pages.
+      // Copies count for the entry they belong to: an entry whose only online
+      // holder is the second machine's copy is covered, and listing it as
+      // uncovered would send an operator looking for a problem that is a
+      // successful migration.
       conditions.push(sql`(${games.missingAt} IS NULL AND NOT EXISTS (
         SELECT 1 FROM mesh_node_games ng
         INNER JOIN mesh_nodes n ON n.id = ng.node_id
-        WHERE ng.game_id = ${games.id} AND n.status = 'online'
+        INNER JOIN games copy ON copy.id = ng.game_id
+        WHERE (copy.id = ${games.id} OR copy.merged_into_id = ${games.id})
+          AND n.status = 'online'
       ))`);
     }
 
@@ -427,7 +471,7 @@ export class CatalogService {
         developers: games.developers,
       })
       .from(games)
-      .where(isNull(games.missingAt))
+      .where(listable())
       .all();
 
     const tally = (values: Array<string[] | null>) => {
@@ -458,7 +502,7 @@ export class CatalogService {
       .select({ game: games })
       .from(userGameStats)
       .innerJoin(games, eq(games.id, userGameStats.gameId))
-      .where(and(eq(userGameStats.userId, userId), isNull(games.missingAt)))
+      .where(and(eq(userGameStats.userId, userId), listable()))
       .orderBy(desc(userGameStats.lastPlayedAt))
       .limit(12)
       .all();
@@ -466,7 +510,7 @@ export class CatalogService {
     const recentRows = this.db
       .select()
       .from(games)
-      .where(isNull(games.missingAt))
+      .where(listable())
       .orderBy(desc(games.addedAt))
       .limit(12)
       .all();
@@ -482,7 +526,7 @@ export class CatalogService {
       .select({ game: games, seconds: sql<number>`sum(${userGameStats.totalSeconds})` })
       .from(userGameStats)
       .innerJoin(games, eq(games.id, userGameStats.gameId))
-      .where(isNull(games.missingAt))
+      .where(listable())
       .groupBy(userGameStats.gameId)
       .orderBy(desc(sql`sum(${userGameStats.totalSeconds})`))
       .limit(HOME_SHELF_LIMIT)
@@ -498,7 +542,7 @@ export class CatalogService {
     const acclaimedRows = this.db
       .select()
       .from(games)
-      .where(and(isNull(games.missingAt), gte(games.rating, 80)))
+      .where(and(listable(), gte(games.rating, 80)))
       .orderBy(desc(games.rating))
       .limit(HOME_SHELF_LIMIT)
       .all();
@@ -513,7 +557,7 @@ export class CatalogService {
     const surpriseRows = this.db
       .select()
       .from(games)
-      .where(isNull(games.missingAt))
+      .where(listable())
       .orderBy(sql`random()`)
       .limit(HOME_SHELF_LIMIT)
       .all();
@@ -579,7 +623,7 @@ export class CatalogService {
       ]),
     ) as Record<CatalogGap, SQL<number>>;
 
-    const row = this.db.select(columns).from(games).get();
+    const row = this.db.select(columns).from(games).where(isNull(games.mergedIntoId)).get();
     return Object.fromEntries(
       (Object.keys(GAP_CONDITIONS) as CatalogGap[]).map((gap) => [gap, Number(row?.[gap] ?? 0)]),
     ) as Record<CatalogGap, number>;
@@ -681,7 +725,7 @@ export class CatalogService {
     const gameCount = this.db
       .select({ count: sql<number>`count(*)` })
       .from(games)
-      .where(isNull(games.missingAt))
+      .where(listable())
       .get();
 
     const userCount = this.db
@@ -696,13 +740,13 @@ export class CatalogService {
         bytes: sql<number>`coalesce(sum(${games.sizeBytes}), 0)`,
       })
       .from(games)
-      .where(and(isNull(games.missingAt), sql`${games.addedAt} >= ${isoSecondsAgo(7 * 86_400)}`))
+      .where(and(listable(), sql`${games.addedAt} >= ${isoSecondsAgo(7 * 86_400)}`))
       .get();
 
     const archive = this.db
       .select({ bytes: sql<number>`coalesce(sum(${games.sizeBytes}), 0)` })
       .from(games)
-      .where(isNull(games.missingAt))
+      .where(listable())
       .get();
 
     return {

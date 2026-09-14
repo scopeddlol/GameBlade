@@ -116,6 +116,15 @@ export interface GameSummary {
   availability: GameAvailability;
   /** Why it is not installable, in words a player can read. Null when ready. */
   availabilityNote: string | null;
+  /**
+   * How many machines hold a copy of this game and are online right now.
+   *
+   * One catalog entry can be held by several hosts — the same game on a home
+   * server and on a VPS is one entry with two copies behind it, not two
+   * entries. Zero means nothing is currently serving it, which is exactly when
+   * `availability` says coming soon.
+   */
+  hostCount: number;
 }
 
 export const GAME_AVAILABILITY = ['ready', 'coming-soon'] as const;
@@ -125,6 +134,15 @@ export interface GameDetail extends GameSummary {
   libraryId: string;
   libraryName: string;
   relPath: string;
+  /**
+   * Every copy of this game the catalog knows about, including this entry's own.
+   *
+   * A game that has been moved from one machine to another — or is being
+   * mirrored onto a second — is one entry with more than one copy. The copies
+   * are shown rather than hidden: which disk a byte came from is the first
+   * thing anybody asks when a download is slow.
+   */
+  copies: GameCopy[];
   summary: string | null;
   storyline: string | null;
   developers: string[];
@@ -141,6 +159,70 @@ export interface GameDetail extends GameSummary {
   videos: string[];
   updatedAt: string;
   scannedAt: string | null;
+}
+
+/**
+ * One machine's copy of a game, as the catalog sees it.
+ *
+ * `gameId` is the catalog row the copy lives in: the entry's own id for the
+ * copy that survived a merge, and the folded-in row's id for the others. It is
+ * never shown to a player; it is what an operator needs to unmerge one.
+ */
+export interface GameCopy {
+  gameId: string;
+  libraryId: string;
+  libraryName: string;
+  relPath: string;
+  sizeBytes: number;
+  /** Null until the copy has been hashed; two copies agree when these match. */
+  contentHash: string | null;
+  /** True for the entry that survived the merge and owns the metadata. */
+  primary: boolean;
+  /** Why this copy was folded in with the others. Null on the primary. */
+  mergeReason: GameMergeReason | null;
+  /** Nodes currently online and announcing this copy. */
+  hosts: { nodeId: string; label: string; direct: boolean }[];
+}
+
+/**
+ * Why two catalog rows were judged to be the same game.
+ *
+ * Ordered by how much is actually proven. `content` is the identical bytes of
+ * an identical package and cannot be wrong; `package` is the same file name at
+ * exactly the same size, which in practice is the same download that has been
+ * copied somewhere else; `metadata` is the same identified game, which may be
+ * two different builds of it; `manual` is somebody who looked.
+ */
+export const GAME_MERGE_REASONS = ['content', 'package', 'metadata', 'manual'] as const;
+export type GameMergeReason = (typeof GAME_MERGE_REASONS)[number];
+
+/**
+ * A set of catalog rows that look like the same game, for an operator to judge.
+ *
+ * Produced for rows nothing has merged automatically, because the evidence was
+ * weaker than the automatic rules accept. Merging is offered, never performed,
+ * on this evidence.
+ */
+export interface DuplicateGroup {
+  key: string;
+  reason: GameMergeReason;
+  /** Which row would survive the merge, and why the others would fold into it. */
+  primary: DuplicateCandidate;
+  duplicates: DuplicateCandidate[];
+}
+
+export interface DuplicateCandidate {
+  gameId: string;
+  title: string;
+  libraryId: string;
+  libraryName: string;
+  relPath: string;
+  sizeBytes: number;
+  contentHash: string | null;
+  addedAt: string;
+  matchStatus: MatchStatus;
+  /** Whether anything is online holding this row right now. */
+  online: boolean;
 }
 
 export interface GameFileEntry {

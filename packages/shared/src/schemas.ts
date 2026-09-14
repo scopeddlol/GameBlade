@@ -189,6 +189,29 @@ export const meshEndpointSchema = z.object({
   port: z.number().int().min(1).max(65_535),
 });
 
+/**
+ * A node's own address, as it advertises it.
+ *
+ * Parsed rather than trusted: a value that is not a URL becomes a client
+ * dialling nonsense on every download, and the only way to notice would be a
+ * support conversation about a slow install. Trailing slashes are stripped so
+ * the paths below are joined to it the same way every time.
+ */
+export const nodePublicUrl = z
+  .string()
+  .trim()
+  .max(2048)
+  .refine((value) => {
+    if (value === '') return true;
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' || url.protocol === 'http:';
+    } catch {
+      return false;
+    }
+  }, 'Enter the address clients can reach this node on, e.g. https://vps.example.com:8099')
+  .transform((value) => value.replace(/\/+$/, ''));
+
 export const meshRegisterSchema = z
   .object({
     /** Required for a new node; a known node instead proves it still owns its key. */
@@ -196,6 +219,14 @@ export const meshRegisterSchema = z
     publicKey: z.string().trim().min(32).max(200),
     agentVersion: z.string().trim().max(64).optional(),
     endpoints: z.array(meshEndpointSchema).max(16).default([]),
+    /**
+     * Where clients can reach this node directly, if anywhere.
+     *
+     * An empty string is meaningful and different from omitting the field: it
+     * is a node saying it no longer has a public address, which must retract
+     * the one it advertised before rather than leave clients dialling it.
+     */
+    publicUrl: nodePublicUrl.optional(),
     proof: z
       .object({
         challenge: z.string().trim().min(32).max(200),
@@ -210,6 +241,8 @@ export type MeshRegisterInput = z.infer<typeof meshRegisterSchema>;
 
 export const meshHeartbeatSchema = z.object({
   endpoints: z.array(meshEndpointSchema).max(16).default([]),
+  /** Re-advertised every heartbeat so losing an address takes effect quickly. */
+  publicUrl: nodePublicUrl.optional(),
   /**
    * What this node currently holds. Capped because a heartbeat is a small,
    * frequent message and a node with a large library should send its catalog
@@ -1133,3 +1166,66 @@ export const discordTicketSettingsSchema = z.object({
   panelMessage: z.string().trim().max(1500).optional(),
 });
 export type DiscordTicketSettingsInput = z.infer<typeof discordTicketSettingsSchema>;
+
+
+/**
+ * What a client measured against the sources it was offered.
+ *
+ * Reported so the next person starts with an order somebody has actually
+ * tested. Bounded and clamped: it is a hint for sorting a list of at most four
+ * things, and no client's numbers are allowed to matter more than that.
+ */
+export const sourceProbeReportSchema = z.object({
+  results: z
+    .array(
+      z.object({
+        nodeId: z.string().trim().min(1).max(64).nullable().default(null),
+        transport: z.enum(['proxy', 'direct']),
+        latencyMs: z.number().min(0).max(600_000).nullable().default(null),
+        bytesPerSecond: z.number().min(0).max(10_000_000_000).nullable().default(null),
+        ok: z.boolean(),
+        detail: z.string().trim().max(200).nullable().optional(),
+      }),
+    )
+    .max(16),
+});
+export type SourceProbeReportInput = z.infer<typeof sourceProbeReportSchema>;
+
+/**
+ * An operator folding catalog rows together, or pulling one back out.
+ *
+ * The primary is named explicitly rather than inferred. Which row survives
+ * decides which achievements, saves and playtime the merged entry keeps, and
+ * that is not a decision to make from sort order.
+ */
+export const gameMergeSchema = z.object({
+  primaryId: z.string().trim().min(1).max(64),
+  duplicateIds: z.array(z.string().trim().min(1).max(64)).min(1).max(50),
+});
+export type GameMergeInput = z.infer<typeof gameMergeSchema>;
+
+/**
+ * One client's account of a download it has just finished or measured.
+ *
+ * `results` order the source list for whoever installs this next. `delivered`
+ * is the byte count for anything a node handed over directly: the Coordinator
+ * never saw those bytes, so without this they are invisible — the node looks
+ * idle, the mesh share reads as zero, and a monthly allowance would be a
+ * ceiling anybody with a fast node nearby could walk around.
+ *
+ * Both are reports, not claims to anything. Nothing here authorises a
+ * transfer, and nothing here can make one verify that would not have.
+ */
+export const sourceReportSchema = z.object({
+  results: sourceProbeReportSchema.shape.results.default([]),
+  delivered: z
+    .array(
+      z.object({
+        nodeId: z.string().trim().min(1).max(64),
+        bytes: z.number().int().min(0).max(2 ** 53 - 1),
+      }),
+    )
+    .max(16)
+    .default([]),
+});
+export type SourceReportInput = z.infer<typeof sourceReportSchema>;

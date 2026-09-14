@@ -7,7 +7,7 @@ import {
   type ApiScope,
   type PublicUser,
 } from '@gameblade/shared';
-import { and, eq, like, or, sql, type SQL } from 'drizzle-orm';
+import { and, eq, isNull, like, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { toPublicUser } from '../auth/service.js';
 import { games, invites, users } from '../db/schema.js';
@@ -318,6 +318,8 @@ export async function apiV1Routes(app: FastifyInstance): Promise<void> {
         missing: sql<number>`sum(case when ${games.missingAt} is not null then 1 else 0 end)`,
       })
       .from(games)
+      // Entries, not rows: a game held on two machines is one game.
+      .where(isNull(games.mergedIntoId))
       .get();
 
     const userStats = db

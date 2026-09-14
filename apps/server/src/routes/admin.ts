@@ -677,7 +677,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/launch-rules', async (request) => {
     const query = launchRuleQuerySchema.parse(request.query ?? {});
 
-    const conditions: SQL[] = [isNull(games.missingAt)];
+    const conditions: SQL[] = [isNull(games.missingAt), isNull(games.mergedIntoId)];
     if (query.search) {
       const term = `%${query.search.replace(/[%_]/g, '')}%`;
       const match = or(like(games.title, term), like(games.searchTitle, term));
@@ -929,6 +929,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         missing: sql<number>`sum(case when ${games.missingAt} is not null then 1 else 0 end)`,
       })
       .from(games)
+      // Entries, not rows: a game held on two machines is one game.
+      .where(isNull(games.mergedIntoId))
       .get();
 
     const userCount =
@@ -1755,7 +1757,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const catalog = db
       .select({ id: games.id, title: games.title })
       .from(games)
-      .where(isNull(games.missingAt))
+      .where(and(isNull(games.missingAt), isNull(games.mergedIntoId)))
       .all()
       .map((game) => ({ ...game, hasRule: withRules.has(game.id) }));
 
@@ -2050,7 +2052,7 @@ function countGamesWithoutSaveRule(db: Db, withSaveRule: Set<string>): number {
   return db
     .select({ id: games.id })
     .from(games)
-    .where(isNull(games.missingAt))
+    .where(and(isNull(games.missingAt), isNull(games.mergedIntoId)))
     .all()
     .filter((row) => !withSaveRule.has(row.id)).length;
 }

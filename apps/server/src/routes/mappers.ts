@@ -1,4 +1,4 @@
-import type { GameDetail, GameSummary, LaunchRule, SaveRule } from '@gameblade/shared';
+import type { GameCopy, GameDetail, GameSummary, LaunchRule, SaveRule } from '@gameblade/shared';
 import type { Game, gameLaunchRules, gameSaveRules } from '../db/schema.js';
 import type { AchievementComparator, AchievementFormat, AchievementRule } from '@gameblade/shared';
 
@@ -10,13 +10,14 @@ import type { AchievementComparator, AchievementFormat, AchievementRule } from '
 export function toGameDetail(
   game: Game,
   summary: GameSummary,
-  options: { basePath: string; libraryName: string },
+  options: { basePath: string; libraryName: string; copies?: GameCopy[] },
 ): GameDetail {
   return {
     ...summary,
     libraryId: game.libraryId,
     libraryName: options.libraryName,
     relPath: game.relPath,
+    copies: options.copies ?? [],
     summary: game.summary,
     storyline: game.storyline,
     developers: game.developers ?? [],

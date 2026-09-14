@@ -6,7 +6,7 @@ import {
   type PublicServerInfo,
   type ThemePreset,
 } from '@gameblade/shared';
-import { isNull, sql } from 'drizzle-orm';
+import { and, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { requireUser } from '../auth/middleware.js';
 import { games } from '../db/schema.js';
@@ -55,7 +55,9 @@ export async function homeRoutes(app: FastifyInstance): Promise<void> {
     const gameCount = db
       .select({ count: sql<number>`count(*)` })
       .from(games)
-      .where(isNull(games.missingAt))
+      // Copies of an entry held on a second machine are not extra games, and
+      // the number on the landing page is a number of games.
+      .where(and(isNull(games.missingAt), isNull(games.mergedIntoId)))
       .get();
 
     // An uploaded installer wins over a pasted link: it is the more specific

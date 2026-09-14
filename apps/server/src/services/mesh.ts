@@ -1,8 +1,10 @@
 import { createHash, createPublicKey, verify as verifyBytes } from 'node:crypto';
 import {
   MESH_CHUNK_BYTES,
+  MESH_DIRECT_CHUNK_PATH,
   MESH_HEARTBEAT_TIMEOUT_SECONDS,
   MESH_MAX_SOURCES_PER_GAME,
+  type DeliveryGrantClaims,
   type MeshAnalytics,
   type MeshDailyPoint,
   type MeshEndpoint,
@@ -10,8 +12,10 @@ import {
   type MeshNodeRole,
   type MeshNodeStats,
   type MeshSource,
+  type GameCopy,
+  type SourceProbeReport,
 } from '@gameblade/shared';
-import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import {
   downloadEvents,
@@ -22,6 +26,7 @@ import {
   meshNodeEndpoints,
   meshNodeGames,
   meshNodes,
+  meshSourceProbes,
   meshTransfers,
   users,
 } from '../db/schema.js';
@@ -47,6 +52,45 @@ const NODE_CHUNK_DELIVERY_TIMEOUT_MS = 5 * 60_000;
 /** Enough work to keep several HTTPS uploads full without flooding one node. */
 const NODE_CHUNK_POLL_BATCH = 8;
 
+/**
+ * How long a client's measurement of a source is worth anything.
+ *
+ * A week. Links change, nodes move, and an order built on a measurement from
+ * last spring is worse than no order at all — but re-measuring on every
+ * download would spend a few seconds of everybody's transfer proving what did
+ * not change.
+ */
+const PROBE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * How a download that never touched the Coordinator is labelled in the event
+ * log.
+ *
+ * It is recorded there so monthly allowances still count it, and excluded from
+ * "bytes the Coordinator served" wherever that number is reported — which is
+ * the whole reason the distinction exists.
+ */
+export const DIRECT_CLIENT = 'desktop-direct';
+
+/**
+ * What to write for a node's advertised address, given what it just said.
+ *
+ * Three cases, and the difference between the last two is the point: a node
+ * that says nothing is an older agent and keeps whatever it advertised before;
+ * a node that sends an empty string is saying it no longer has an address, and
+ * leaving the old one there would send every client to a port that stopped
+ * answering.
+ */
+function directAddress(
+  reported: string | undefined,
+  current: string | null,
+): { publicUrl?: string | null } {
+  if (reported === undefined) return {};
+  const clean = reported.trim().replace(/\/+$/, '');
+  if (clean === '') return current === null ? {} : { publicUrl: null };
+  return { publicUrl: clean };
+}
+
 export interface NodeChunkJob {
   requestId: string;
   gameId: string;
@@ -60,6 +104,48 @@ export interface ProxiedChunk {
   bytes: Buffer;
   nodeId: string;
   nodeLabel: string;
+}
+
+/**
+ * One machine that can serve a particular set of bytes, addressed in its own ids.
+ *
+ * `gameId` and `fileId` are the copy *this* node holds. One catalog entry can
+ * be held by several machines as several rows — that is what a merged entry
+ * is — and a node only knows its own. Addressing a request in another node's
+ * ids is how a request for a game a machine is holding comes back "not found".
+ */
+export interface DeliveryHolder {
+  nodeId: string;
+  label: string;
+  role: MeshNodeRole;
+  gameId: string;
+  fileId: string;
+  /** Where a client may fetch straight from this node, when it has an address. */
+  publicUrl: string | null;
+  lastSeenAt: string | null;
+}
+
+/**
+ * How one catalog entry can actually be delivered right now.
+ *
+ * The entry may have copies on several machines. Those copies are usually the
+ * same bytes — a file that was moved — but they need not be, and chunks from
+ * two different packages must never be mixed into one download. So a plan
+ * settles on **one** package: the fingerprint the most online machines agree
+ * on, the copy whose chunk table describes it, and every holder of it.
+ */
+export interface DeliveryPlan {
+  /** The catalog entry the client asked about. */
+  entryGameId: string;
+  /** The copy whose file and chunk hashes this download is described by. */
+  gameId: string;
+  fileId: string;
+  sizeBytes: number;
+  modifiedAt: string;
+  sha256: string | null;
+  /** What every holder in this plan agrees the package is. */
+  contentHash: string | null;
+  holders: DeliveryHolder[];
 }
 
 interface PendingNodeChunk extends NodeChunkJob {
@@ -85,6 +171,8 @@ export interface RegisterInput {
   proof?: { challenge: string; signature: string };
   /** What the coordinator saw the registration arrive from. */
   observedAddress?: string;
+  /** Where clients may reach this node directly; empty string retracts one. */
+  publicUrl?: string;
 }
 
 export interface HeartbeatInput {
@@ -93,6 +181,8 @@ export interface HeartbeatInput {
   observedAddress?: string;
   /** Games this node currently holds a complete, verified copy of. */
   games?: { gameId: string; contentHash: string }[];
+  /** Where clients may reach this node directly; empty string retracts one. */
+  publicUrl?: string;
 }
 
 /**
@@ -296,6 +386,7 @@ export class MeshService {
           tokenHash: hashToken(nodeToken),
           agentVersion: input.agentVersion ?? existing.agentVersion,
           lastSeenAt: new Date().toISOString(),
+          ...directAddress(input.publicUrl, existing.publicUrl),
         })
         .where(eq(meshNodes.id, existing.id))
         .run();
@@ -339,6 +430,7 @@ export class MeshService {
           agentVersion: input.agentVersion ?? null,
           libraryId,
           lastSeenAt: now,
+          ...directAddress(input.publicUrl, null),
         })
         .run();
 
@@ -426,7 +518,11 @@ export class MeshService {
 
     this.db
       .update(meshNodes)
-      .set({ status: 'online', lastSeenAt: new Date().toISOString() })
+      .set({
+        status: 'online',
+        lastSeenAt: new Date().toISOString(),
+        ...directAddress(input.publicUrl, node.publicUrl),
+      })
       .where(eq(meshNodes.id, node.id))
       .run();
 
@@ -515,15 +611,236 @@ export class MeshService {
     for (let offset = 0; offset < gameIds.length; offset += 400) {
       const batch = gameIds.slice(offset, offset + 400);
       const rows = this.db
-        .selectDistinct({ gameId: meshNodeGames.gameId })
+        .selectDistinct({
+          gameId: meshNodeGames.gameId,
+          // A copy standing in for the entry it was merged into: the machine
+          // announces the row it holds, and the store is asking about the
+          // entry. Without this, an entry whose only remaining copy is on
+          // another machine reads as offered by nobody.
+          entryId: sql<string | null>`${games.mergedIntoId}`,
+        })
         .from(meshNodeGames)
         .innerJoin(meshNodes, eq(meshNodes.id, meshNodeGames.nodeId))
-        .where(and(inArray(meshNodeGames.gameId, batch), eq(meshNodes.status, 'online')))
+        .innerJoin(games, eq(games.id, meshNodeGames.gameId))
+        .where(
+          and(
+            eq(meshNodes.status, 'online'),
+            or(inArray(meshNodeGames.gameId, batch), inArray(games.mergedIntoId, batch)),
+          ),
+        )
         .all();
-      for (const row of rows) offered.add(row.gameId);
+      for (const row of rows) offered.add(row.entryId ?? row.gameId);
     }
 
     return offered;
+  }
+
+  /**
+   * How many machines are online and holding each of these entries.
+   *
+   * Counted per entry rather than per row, so an entry held by a home server
+   * and a VPS is two hosts rather than two entries with one host each. One
+   * query for a whole page: this decorates every card in a store listing.
+   */
+  hostCounts(gameIds: string[]): Map<string, number> {
+    const counts = new Map<string, number>();
+    if (gameIds.length === 0) return counts;
+
+    for (let offset = 0; offset < gameIds.length; offset += 400) {
+      const batch = gameIds.slice(offset, offset + 400);
+      const rows = this.db
+        .select({
+          entryId: sql<string>`coalesce(${games.mergedIntoId}, ${games.id})`,
+          hosts: sql<number>`count(distinct ${meshNodeGames.nodeId})`,
+        })
+        .from(meshNodeGames)
+        .innerJoin(meshNodes, eq(meshNodes.id, meshNodeGames.nodeId))
+        .innerJoin(games, eq(games.id, meshNodeGames.gameId))
+        .where(
+          and(
+            eq(meshNodes.status, 'online'),
+            or(inArray(meshNodeGames.gameId, batch), inArray(games.mergedIntoId, batch)),
+          ),
+        )
+        .groupBy(sql`coalesce(${games.mergedIntoId}, ${games.id})`)
+        .all();
+
+      for (const row of rows) counts.set(row.entryId, Number(row.hosts));
+    }
+
+    return counts;
+  }
+
+  /**
+   * Every catalog row behind one entry: the entry itself and its copies.
+   *
+   * A merged entry is one game held by more than one machine, kept as one row
+   * per machine so each can go on serving what is actually on its disk. Every
+   * question about where a game can be fetched from starts here.
+   */
+  copiesOf(gameId: string): string[] {
+    const merged = this.db
+      .select({ id: games.id })
+      .from(games)
+      .where(eq(games.mergedIntoId, gameId))
+      .all()
+      .map((row) => row.id);
+    return [gameId, ...merged];
+  }
+
+  /**
+   * Every copy of one entry, with the machines currently holding each.
+   *
+   * The operator's view of a merged entry, and the player's: one game, on one
+   * disk or three. Cheap enough for a detail page and never asked for in a
+   * listing, which is what `hostCounts` is for.
+   */
+  copiesFor(gameId: string): GameCopy[] {
+    const rows = this.db
+      .select({ game: games, libraryName: libraries.name })
+      .from(games)
+      .innerJoin(libraries, eq(libraries.id, games.libraryId))
+      .where(or(eq(games.id, gameId), eq(games.mergedIntoId, gameId)))
+      .all();
+
+    const holders = new Map<string, { nodeId: string; label: string; direct: boolean }[]>();
+    for (const row of this.db
+      .select({ gameId: meshNodeGames.gameId, node: meshNodes })
+      .from(meshNodeGames)
+      .innerJoin(meshNodes, eq(meshNodes.id, meshNodeGames.nodeId))
+      .where(
+        and(
+          inArray(
+            meshNodeGames.gameId,
+            rows.map((row) => row.game.id),
+          ),
+          eq(meshNodes.status, 'online'),
+        ),
+      )
+      .all()) {
+      const list = holders.get(row.gameId) ?? [];
+      list.push({
+        nodeId: row.node.id,
+        label: row.node.label,
+        direct: Boolean(row.node.publicUrl),
+      });
+      holders.set(row.gameId, list);
+    }
+
+    return rows
+      .map(({ game, libraryName }) => ({
+        gameId: game.id,
+        libraryId: game.libraryId,
+        libraryName,
+        relPath: game.relPath,
+        sizeBytes: game.sizeBytes,
+        contentHash: this.contentHashFor(game.id),
+        primary: game.id === gameId,
+        mergeReason: game.mergeReason ?? null,
+        hosts: holders.get(game.id) ?? [],
+      }))
+      .sort((a, b) => Number(b.primary) - Number(a.primary));
+  }
+
+  /**
+   * How this entry can be delivered right now, and by whom.
+   *
+   * The awkward part is that two copies of a game need not be the same bytes.
+   * Usually they are — a file that was copied to a second machine — and then
+   * every holder is interchangeable chunk for chunk. When they are not, mixing
+   * them would produce a download that is half one package and half another
+   * and fails its hashes at the end, so a plan picks one package and sticks to
+   * it: the fingerprint the most online machines agree on, with the entry's own
+   * copy breaking a tie because it is the one whose metadata everybody sees.
+   */
+  deliveryPlan(gameId: string, options: { excludeOwnerId?: string } = {}): DeliveryPlan | null {
+    const copies = this.copiesOf(gameId);
+
+    const files = new Map(
+      this.db
+        .select()
+        .from(gameFiles)
+        .where(inArray(gameFiles.gameId, copies))
+        .all()
+        .map((file) => [file.gameId, file]),
+    );
+
+    const holderRows = this.db
+      .select({ node: meshNodes, gameId: meshNodeGames.gameId, hash: meshNodeGames.contentHash })
+      .from(meshNodeGames)
+      .innerJoin(meshNodes, eq(meshNodes.id, meshNodeGames.nodeId))
+      .where(and(inArray(meshNodeGames.gameId, copies), eq(meshNodes.status, 'online')))
+      .all()
+      // Nobody should be offered their own machine as a download source: it is
+      // the copy they are trying to obtain.
+      .filter((row) => !options.excludeOwnerId || row.node.ownerId !== options.excludeOwnerId);
+
+    /*
+     * Group by what each machine says it is holding, not by which row it holds.
+     *
+     * The fingerprint is computed from the file hashes, so two copies that are
+     * the same bytes produce the same one even though they are different rows
+     * in different libraries. That is what lets a home server and a VPS be two
+     * sources for one download rather than two separate downloads.
+     */
+    const byHash = new Map<string, DeliveryHolder[]>();
+    for (const row of holderRows) {
+      const expected = this.contentHashFor(row.gameId);
+      // A machine announcing a copy of a game that has since changed is
+      // announcing something that no longer exists.
+      if (!expected || expected !== row.hash) continue;
+      const file = files.get(row.gameId);
+      if (!file) continue;
+
+      const holders = byHash.get(row.hash) ?? [];
+      holders.push({
+        nodeId: row.node.id,
+        label: row.node.label,
+        role: row.node.role,
+        gameId: row.gameId,
+        fileId: file.id,
+        publicUrl: row.node.publicUrl ?? null,
+        lastSeenAt: row.node.lastSeenAt,
+      });
+      byHash.set(row.hash, holders);
+    }
+
+    const ownHash = this.contentHashFor(gameId);
+    const chosen = [...byHash.entries()].sort((a, b) => {
+      const byCount = b[1].length - a[1].length;
+      if (byCount !== 0) return byCount;
+      if (a[0] === ownHash) return -1;
+      if (b[0] === ownHash) return 1;
+      return a[0].localeCompare(b[0]);
+    })[0];
+
+    /*
+     * Nothing is announcing this entry. That is not necessarily a failure — a
+     * standalone server holds its own files and never announces anything — so
+     * the plan describes the entry's own copy with no holders and the caller
+     * decides whether it can read those bytes itself.
+     */
+    const packageGameId = chosen ? (chosen[1][0] as DeliveryHolder).gameId : gameId;
+    const file = files.get(packageGameId) ?? files.get(gameId);
+    if (!file) return null;
+
+    const rank: Record<string, number> = { origin: 0, mirror: 1, peer: 2 };
+    const holders = (chosen?.[1] ?? []).sort((a, b) => {
+      const byRole = (rank[a.role] ?? 9) - (rank[b.role] ?? 9);
+      if (byRole !== 0) return byRole;
+      return (b.lastSeenAt ?? '').localeCompare(a.lastSeenAt ?? '');
+    });
+
+    return {
+      entryGameId: gameId,
+      gameId: file.gameId,
+      fileId: file.id,
+      sizeBytes: file.sizeBytes,
+      modifiedAt: file.modifiedAt,
+      sha256: file.sha256,
+      contentHash: chosen?.[0] ?? ownHash,
+      holders,
+    };
   }
 
   /**
@@ -535,49 +852,47 @@ export class MeshService {
    * and this just decides what it tries before it has measurements.
    */
   nodesForGame(gameId: string, options: { excludeOwnerId?: string } = {}): MeshNodeInfo[] {
-    const contentHash = this.contentHashFor(gameId);
-    if (!contentHash) return [];
+    const plan = this.deliveryPlan(gameId, options);
+    if (!plan) return [];
 
-    const rows = this.db
-      .select({ node: meshNodes })
-      .from(meshNodeGames)
-      .innerJoin(meshNodes, eq(meshNodes.id, meshNodeGames.nodeId))
-      .where(
-        and(
-          eq(meshNodeGames.gameId, gameId),
-          // A mirror announcing a copy of a game that has since changed on the
-          // origin is announcing something that no longer exists.
-          eq(meshNodeGames.contentHash, contentHash),
-          eq(meshNodes.status, 'online'),
-        ),
-      )
-      .all()
-      .map((row) => row.node)
-      // Nobody should be offered their own machine as a download source: it is
-      // the copy they are trying to obtain.
-      .filter((node) => !options.excludeOwnerId || node.ownerId !== options.excludeOwnerId);
+    const byId = new Map(
+      this.db
+        .select()
+        .from(meshNodes)
+        .where(
+          inArray(
+            meshNodes.id,
+            plan.holders.map((holder) => holder.nodeId),
+          ),
+        )
+        .all()
+        .map((node) => [node.id, node]),
+    );
 
-    const rank: Record<string, number> = { origin: 0, mirror: 1, peer: 2 };
-    rows.sort((a, b) => {
-      const byRole = (rank[a.role] ?? 9) - (rank[b.role] ?? 9);
-      if (byRole !== 0) return byRole;
-      return (b.lastSeenAt ?? '').localeCompare(a.lastSeenAt ?? '');
+    return plan.holders.slice(0, MESH_MAX_SOURCES_PER_GAME).flatMap((holder) => {
+      const node = byId.get(holder.nodeId);
+      if (!node) return [];
+      return [
+        {
+          id: node.id,
+          label: node.label,
+          role: node.role,
+          status: node.status,
+          publicKey: node.publicKey,
+          // Network locations were once deliberately never exposed. A node that
+          // advertises a reachable address of its own is the exception it asked
+          // to be: see `publicUrl`, which is handed out with a signed, expiring
+          // grant rather than as a standing invitation.
+          endpoints: [],
+          lastSeenAt: node.lastSeenAt,
+          bytesServed: node.bytesServed,
+          gameCount: 0,
+          observedRttMs: null,
+          publicUrl: node.publicUrl ?? null,
+          directOkAt: node.directOkAt ?? null,
+        },
+      ];
     });
-
-    return rows.slice(0, MESH_MAX_SOURCES_PER_GAME).map((node) => ({
-      id: node.id,
-      label: node.label,
-      role: node.role,
-      status: node.status,
-      publicKey: node.publicKey,
-      // Network locations are deliberately never exposed. Nodes maintain an
-      // outbound authenticated HTTPS connection to this Coordinator.
-      endpoints: [],
-      lastSeenAt: node.lastSeenAt,
-      bytesServed: node.bytesServed,
-      gameCount: 0,
-      observedRttMs: null,
-    }));
   }
 
   /**
@@ -586,10 +901,27 @@ export class MeshService {
    * The origin is included only when this process actually serves files.
    * Advertising a coordinator as an origin sends clients to a download route
    * whose backing path cannot exist.
+   *
+   * Ordered by what somebody has actually measured where anything has been:
+   * the caller's own last measurement of each source first, then the median of
+   * everybody else's. The client re-measures and re-orders for itself, so this
+   * only decides the first few seconds of a download — which is exactly the
+   * part a cold client gets wrong on its own.
    */
   sourcesFor(
     gameId: string,
-    options: { chunked: boolean; includeOrigin: boolean; excludeOwnerId?: string },
+    options: {
+      chunked: boolean;
+      includeOrigin: boolean;
+      excludeOwnerId?: string;
+      /** Whose measurements to prefer, and who a direct grant is minted for. */
+      userId?: string;
+      /** Mints the signed permission a direct fetch presents to a node. */
+      mintGrant?: (claims: Omit<DeliveryGrantClaims, 'v' | 'expiresAt' | 'nonce'>) => {
+        grant: string;
+        expiresAt: string;
+      };
+    },
   ): MeshSource[] {
     const sources: MeshSource[] = options.includeOrigin
       ? [{ kind: 'origin', label: 'Origin', priority: 100 }]
@@ -600,17 +932,221 @@ export class MeshService {
     // offering bytes it has no way to check.
     if (!options.chunked) return sources;
 
-    const nodes = this.nodesForGame(gameId, { excludeOwnerId: options.excludeOwnerId });
-    nodes.forEach((node, position) => {
+    const plan = this.deliveryPlan(gameId, { excludeOwnerId: options.excludeOwnerId });
+    const holders = plan?.holders ?? [];
+    if (holders.length === 0) return sources;
+
+    const speeds = this.measuredSpeeds(
+      holders.map((holder) => holder.nodeId),
+      options.userId,
+    );
+
+    const ordered = [...holders].sort((a, b) => {
+      const bySpeed = (speeds.get(b.nodeId) ?? 0) - (speeds.get(a.nodeId) ?? 0);
+      if (bySpeed !== 0) return bySpeed;
+      // An unmeasured node with an address of its own goes ahead of a measured
+      // proxy hop: the first client to try it is how it ever gets measured.
+      const byDirect = Number(Boolean(b.publicUrl)) - Number(Boolean(a.publicUrl));
+      if (byDirect !== 0) return byDirect;
+      return (b.lastSeenAt ?? '').localeCompare(a.lastSeenAt ?? '');
+    });
+
+    ordered.slice(0, MESH_MAX_SOURCES_PER_GAME).forEach((holder, position) => {
+      const direct =
+        holder.publicUrl && options.mintGrant && options.userId
+          ? options.mintGrant({
+              nodeId: holder.nodeId,
+              gameId: holder.gameId,
+              fileId: holder.fileId,
+              userId: options.userId,
+            })
+          : null;
+
       sources.push({
         kind: 'node',
-        nodeId: node.id,
-        label: node.label,
+        nodeId: holder.nodeId,
+        label: holder.label,
         priority: position,
+        gameId: holder.gameId,
+        fileId: holder.fileId,
+        observedBytesPerSecond: speeds.get(holder.nodeId) ?? null,
+        ...(direct && holder.publicUrl
+          ? {
+              directUrl: `${holder.publicUrl}${MESH_DIRECT_CHUNK_PATH}`,
+              grant: direct.grant,
+              grantExpiresAt: direct.expiresAt,
+            }
+          : {}),
       });
     });
 
     return sources.sort((a, b) => a.priority - b.priority);
+  }
+
+  /* ------------------------------------------------------- measured sources */
+
+  /**
+   * What has been measured against these nodes, bytes per second.
+   *
+   * One caller's own last measurement wins outright where they have one:
+   * nobody else's link predicts theirs. Failing that, the median of recent
+   * measurements from everyone, which at least distinguishes a node on a
+   * gigabit line from one on a phone tether.
+   *
+   * Advisory in the strictest sense — it decides what is tried first and
+   * nothing else. Every arriving chunk is verified against its hash whatever
+   * this says.
+   */
+  private measuredSpeeds(nodeIds: string[], userId?: string): Map<string, number> {
+    const speeds = new Map<string, number>();
+    if (nodeIds.length === 0) return speeds;
+
+    const cutoff = new Date(Date.now() - PROBE_TTL_MS).toISOString();
+    const samples = new Map<string, number[]>();
+
+    for (const row of this.db
+      .select()
+      .from(meshSourceProbes)
+      .where(
+        and(
+          inArray(meshSourceProbes.nodeId, nodeIds),
+          eq(meshSourceProbes.ok, true),
+          gte(meshSourceProbes.measuredAt, cutoff),
+        ),
+      )
+      .all()) {
+      if (!row.nodeId || !row.bytesPerSecond) continue;
+      if (userId && row.userId === userId) {
+        speeds.set(row.nodeId, Math.max(speeds.get(row.nodeId) ?? 0, row.bytesPerSecond));
+        continue;
+      }
+      const list = samples.get(row.nodeId) ?? [];
+      list.push(row.bytesPerSecond);
+      samples.set(row.nodeId, list);
+    }
+
+    for (const [nodeId, list] of samples) {
+      if (speeds.has(nodeId)) continue;
+      const sorted = [...list].sort((a, b) => a - b);
+      speeds.set(nodeId, sorted[Math.floor(sorted.length / 2)] ?? 0);
+    }
+
+    return speeds;
+  }
+
+  /**
+   * Record what a client measured against the sources it was offered.
+   *
+   * Kept as one row per account and source rather than a history: the question
+   * it answers is "what should this person try first", and yesterday's answer
+   * is the only one that has ever been useful.
+   */
+  recordProbes(userId: string, results: SourceProbeReport[]): void {
+    if (results.length === 0) return;
+    const measuredAt = new Date().toISOString();
+
+    this.db.transaction((tx) => {
+      for (const result of results) {
+        const sourceKey = result.nodeId ? `${result.nodeId}:${result.transport}` : 'coordinator';
+        const row = {
+          userId,
+          sourceKey,
+          nodeId: result.nodeId,
+          transport: result.transport,
+          latencyMs: result.latencyMs === null ? null : Math.round(result.latencyMs),
+          bytesPerSecond:
+            result.bytesPerSecond === null ? null : Math.round(result.bytesPerSecond),
+          ok: result.ok,
+          measuredAt,
+        };
+
+        tx.insert(meshSourceProbes)
+          .values(row)
+          .onConflictDoUpdate({
+            target: [meshSourceProbes.userId, meshSourceProbes.sourceKey],
+            set: row,
+          })
+          .run();
+
+        // A direct fetch that worked is worth recording on the node itself:
+        // it is the only evidence the Coordinator ever gets that a node's
+        // advertised address is reachable from the outside world.
+        if (result.ok && result.transport === 'direct' && result.nodeId) {
+          tx.update(meshNodes)
+            .set({ directOkAt: measuredAt })
+            .where(eq(meshNodes.id, result.nodeId))
+            .run();
+        }
+      }
+    });
+  }
+
+  /**
+   * Account for bytes a node delivered straight to a client.
+   *
+   * The Coordinator never saw them, which is the entire point, so they have to
+   * be reported or they are invisible: the node would look idle, the mesh
+   * share would read as zero, and a monthly allowance would be a ceiling
+   * anybody could walk around by having a fast node nearby. Reported by the
+   * client, bounded by the size of the game, and never more authoritative than
+   * that — it is accounting, not authorisation.
+   */
+  recordDirectDelivery(input: {
+    nodeId: string;
+    userId: string;
+    gameId: string;
+    bytes: number;
+  }): void {
+    const bytes = Math.max(0, Math.floor(input.bytes));
+    if (bytes === 0) return;
+
+    const node = this.db.select().from(meshNodes).where(eq(meshNodes.id, input.nodeId)).get();
+    if (!node) return;
+
+    const at = new Date().toISOString();
+    this.db.transaction((tx) => {
+      tx.insert(meshTransfers)
+        .values({
+          nonce: newId('mtx'),
+          nodeId: input.nodeId,
+          userId: input.userId,
+          gameId: input.gameId,
+          bytesServed: bytes,
+          issuedAt: at,
+          reportedAt: at,
+        })
+        .run();
+
+      tx.update(meshNodes)
+        .set({
+          bytesServed: sql`${meshNodes.bytesServed} + ${bytes}`,
+          directBytesServed: sql`${meshNodes.directBytesServed} + ${bytes}`,
+          directOkAt: at,
+        })
+        .where(eq(meshNodes.id, input.nodeId))
+        .run();
+
+      /*
+       * Counted against the account as well, as a download that happened —
+       * because it did. The monthly allowance is measured from this table, and
+       * a transfer that skipped the Coordinator is still a transfer the
+       * operator is paying for somewhere.
+       */
+      tx.insert(downloadEvents)
+        .values({
+          id: newId('dle'),
+          userId: input.userId,
+          gameId: input.gameId,
+          fileId: null,
+          sessionId: null,
+          client: DIRECT_CLIENT,
+          bytesSent: bytes,
+          startedAt: at,
+          finishedAt: at,
+          completed: true,
+        })
+        .run();
+    });
   }
 
   /* ------------------------------------------------------ HTTPS chunk proxy */
@@ -633,7 +1169,16 @@ export class MeshService {
     expectedBytes: number;
     sha256: string;
   }): Promise<ProxiedChunk> {
-    const holders = this.nodesForGame(input.gameId).filter((node) => node.role !== 'peer');
+    /*
+     * Every machine holding these exact bytes, addressed in its own ids.
+     *
+     * The plan is recomputed per chunk rather than held for the download: a
+     * node going offline halfway through a 60 GB transfer should cost the
+     * chunk in flight and nothing else, and a node coming online should be
+     * usable immediately rather than after the next install.
+     */
+    const plan = this.deliveryPlan(input.gameId);
+    const holders = (plan?.holders ?? []).filter((holder) => holder.role !== 'peer');
     if (holders.length === 0) {
       throw ApiError.gone('No active Node currently holds this game');
     }
@@ -644,13 +1189,19 @@ export class MeshService {
     const ordered = [...holders.slice(start), ...holders.slice(0, start)];
     let lastError: Error | null = null;
 
-    for (const node of ordered) {
+    for (const holder of ordered) {
       try {
-        return await this.queueNodeChunk(node.id, node.label, input);
+        return await this.queueNodeChunk(holder.nodeId, holder.label, {
+          ...input,
+          // In the holder's ids, not the catalog entry's: a node knows only
+          // the copy on its own disk.
+          gameId: holder.gameId,
+          fileId: holder.fileId,
+        });
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         this.logger.warn(
-          { err: lastError, nodeId: node.id, gameId: input.gameId, fileId: input.fileId },
+          { err: lastError, nodeId: holder.nodeId, gameId: holder.gameId, fileId: holder.fileId },
           'node did not deliver a requested HTTPS chunk',
         );
       }
@@ -869,12 +1420,21 @@ export class MeshService {
           .get()?.bytes ?? 0,
       );
 
+    /*
+     * Bytes this machine sent itself.
+     *
+     * Deliveries a node made straight to a client are recorded in the same
+     * table — the monthly allowance is measured from it — but they never
+     * touched this machine, and counting them here would make the one number
+     * this page exists for, the share the mesh carries, understate itself by
+     * exactly the amount the mesh is doing best at.
+     */
     const originBytes = (from: string) =>
       Number(
         this.db
           .select({ bytes: sql<number>`coalesce(sum(${downloadEvents.bytesSent}), 0)` })
           .from(downloadEvents)
-          .where(gte(downloadEvents.startedAt, from))
+          .where(and(gte(downloadEvents.startedAt, from), ne(downloadEvents.client, DIRECT_CLIENT)))
           .get()?.bytes ?? 0,
       );
 
@@ -1122,6 +1682,8 @@ export class MeshService {
         .map((row) => [row.id, row.username]),
     );
 
+    const probes = this.probeSummary();
+
     const activeByNode = new Map<string, number>();
     for (const pending of this.pendingNodeChunks.values()) {
       activeByNode.set(pending.nodeId, (activeByNode.get(pending.nodeId) ?? 0) + 1);
@@ -1153,8 +1715,45 @@ export class MeshService {
         secondsSinceSeen: node.lastSeenAt
           ? Math.max(0, Math.round((Date.now() - Date.parse(node.lastSeenAt)) / 1000))
           : null,
+        directBytesServed: Number(row?.directBytesServed ?? 0),
+        probeBytesPerSecond: probes.get(node.id)?.median ?? null,
+        probeSamples: probes.get(node.id)?.samples ?? 0,
       };
     });
+  }
+
+  /**
+   * What clients have measured against each node lately.
+   *
+   * Shown on the Nodes page because it is the one number that answers "is
+   * direct delivery actually helping": a node with a public address whose
+   * measurements are no better than the proxy's is a port forward that is not
+   * doing anything.
+   */
+  private probeSummary(): Map<string, { median: number; samples: number }> {
+    const cutoff = new Date(Date.now() - PROBE_TTL_MS).toISOString();
+    const byNode = new Map<string, number[]>();
+
+    for (const row of this.db
+      .select()
+      .from(meshSourceProbes)
+      .where(and(eq(meshSourceProbes.ok, true), gte(meshSourceProbes.measuredAt, cutoff)))
+      .all()) {
+      if (!row.nodeId || !row.bytesPerSecond) continue;
+      const list = byNode.get(row.nodeId) ?? [];
+      list.push(row.bytesPerSecond);
+      byNode.set(row.nodeId, list);
+    }
+
+    const summary = new Map<string, { median: number; samples: number }>();
+    for (const [nodeId, list] of byNode) {
+      const sorted = [...list].sort((a, b) => a - b);
+      summary.set(nodeId, {
+        median: sorted[Math.floor(sorted.length / 2)] ?? 0,
+        samples: sorted.length,
+      });
+    }
+    return summary;
   }
 
   listNodes(): MeshNodeInfo[] {
@@ -1177,6 +1776,8 @@ export class MeshService {
       endpoints: [],
       lastSeenAt: node.lastSeenAt,
       bytesServed: node.bytesServed,
+      publicUrl: node.publicUrl ?? null,
+      directOkAt: node.directOkAt ?? null,
       gameCount: counts.get(node.id) ?? 0,
       observedRttMs: null,
       libraryId: node.libraryId,
