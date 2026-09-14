@@ -211,9 +211,13 @@ describe('DuplicateService', () => {
 
     // Same name, different bytes and different sizes: two builds, or one of
     // them is wrong. Either way it is not a decision to make automatically.
-    expect(db.select().from(games).all().filter((row) => row.mergedIntoId === null)).toHaveLength(
-      2,
-    );
+    expect(
+      db
+        .select()
+        .from(games)
+        .all()
+        .filter((row) => row.mergedIntoId === null),
+    ).toHaveLength(2);
 
     const offered = duplicates.suggestions();
     expect(offered).toHaveLength(1);
@@ -230,9 +234,13 @@ describe('DuplicateService', () => {
       { ...reported('Braid backup.zip', sha('e')), relPath: 'Braid backup.zip' },
     ]);
 
-    expect(db.select().from(games).all().filter((row) => row.mergedIntoId === null)).toHaveLength(
-      2,
-    );
+    expect(
+      db
+        .select()
+        .from(games)
+        .all()
+        .filter((row) => row.mergedIntoId === null),
+    ).toHaveLength(2);
   });
 
   it('moves what a player owns onto the entry that survives', () => {
@@ -250,7 +258,11 @@ describe('DuplicateService', () => {
       .run();
 
     ingest.ingest(vps, [reported('Hades.zip', sha('f'))]);
-    const copy = db.select().from(games).all().find((row) => row.mergedIntoId !== null)!;
+    const copy = db
+      .select()
+      .from(games)
+      .all()
+      .find((row) => row.mergedIntoId !== null)!;
 
     // Playtime against the copy, as it would be if somebody played it in the
     // window before the merge happened.
@@ -259,11 +271,7 @@ describe('DuplicateService', () => {
       .run();
     duplicates.merge(entry.id, [copy.id], 'manual');
 
-    const stats = db
-      .select()
-      .from(userGameStats)
-      .where(eq(userGameStats.gameId, entry.id))
-      .all();
+    const stats = db.select().from(userGameStats).where(eq(userGameStats.gameId, entry.id)).all();
     expect(stats).toHaveLength(1);
     // Added, not replaced: two rows for one player are two halves of the same
     // history and picking one would delete hours somebody actually played.
@@ -272,9 +280,9 @@ describe('DuplicateService', () => {
     expect(db.select().from(userGameStats).where(eq(userGameStats.gameId, copy.id)).all()).toEqual(
       [],
     );
-    expect(db.select().from(userLibrary).where(eq(userLibrary.gameId, entry.id)).all()).toHaveLength(
-      1,
-    );
+    expect(
+      db.select().from(userLibrary).where(eq(userLibrary.gameId, entry.id)).all(),
+    ).toHaveLength(1);
   });
 
   it('keeps the entry in the catalog when the original copy is deleted', () => {
@@ -313,9 +321,13 @@ describe('DuplicateService', () => {
 
     const restored = db.select().from(games).where(eq(games.id, entry.id)).get();
     expect(restored?.missingAt).toBeNull();
-    expect(db.select().from(games).all().filter((row) => row.mergedIntoId === null)).toHaveLength(
-      1,
-    );
+    expect(
+      db
+        .select()
+        .from(games)
+        .all()
+        .filter((row) => row.mergedIntoId === null),
+    ).toHaveLength(1);
   });
 
   it('offers every machine holding the entry as a download source', () => {
@@ -325,7 +337,11 @@ describe('DuplicateService', () => {
     ingest.ingest(home, [reported('Outer Wilds.zip', sha('3'))]);
     const entry = db.select().from(games).all()[0]!;
     ingest.ingest(vps, [reported('Outer Wilds.zip', sha('3'))]);
-    const copy = db.select().from(games).all().find((row) => row.mergedIntoId !== null)!;
+    const copy = db
+      .select()
+      .from(games)
+      .all()
+      .find((row) => row.mergedIntoId !== null)!;
 
     announce(home, entry.id);
     announce(vps, copy.id);
@@ -347,7 +363,11 @@ describe('DuplicateService', () => {
     ingest.ingest(home, [reported('Stray.zip', sha('4'))]);
     const entry = db.select().from(games).all()[0]!;
     ingest.ingest(vps, [reported('Stray.zip', sha('4'))]);
-    const copy = db.select().from(games).all().find((row) => row.mergedIntoId !== null)!;
+    const copy = db
+      .select()
+      .from(games)
+      .all()
+      .find((row) => row.mergedIntoId !== null)!;
 
     announce(home, entry.id);
     announce(vps, copy.id);
@@ -366,7 +386,11 @@ describe('DuplicateService', () => {
     ingest.ingest(home, [reported('Inside.zip', sha('5'))]);
     const entry = db.select().from(games).all()[0]!;
     ingest.ingest(vps, [reported('Inside.zip', sha('5'))]);
-    const copy = db.select().from(games).all().find((row) => row.mergedIntoId !== null)!;
+    const copy = db
+      .select()
+      .from(games)
+      .all()
+      .find((row) => row.mergedIntoId !== null)!;
 
     duplicates.unmerge(copy.id);
 
@@ -382,7 +406,11 @@ describe('DuplicateService', () => {
     ingest.ingest(home, [reported('Limbo.zip', sha('6'))]);
     const entry = db.select().from(games).all()[0]!;
     ingest.ingest(vps, [reported('Limbo.zip', sha('6'))]);
-    const copy = db.select().from(games).all().find((row) => row.mergedIntoId !== null)!;
+    const copy = db
+      .select()
+      .from(games)
+      .all()
+      .find((row) => row.mergedIntoId !== null)!;
 
     // Chains would mean every reader had to walk one, so they are refused at
     // the point where one would be created.
@@ -399,7 +427,11 @@ describe('DuplicateService', () => {
     // The report did add a row — the copy — and the catalog did not grow.
     expect(result.added).toBe(1);
     expect(
-      db.select().from(games).all().filter((row) => row.mergedIntoId === null),
+      db
+        .select()
+        .from(games)
+        .all()
+        .filter((row) => row.mergedIntoId === null),
     ).toHaveLength(1);
   });
 
@@ -410,7 +442,11 @@ describe('DuplicateService', () => {
     ingest.ingest(home, [reported('Tetris.zip', sha('8'))]);
     const entry = db.select().from(games).all()[0]!;
     ingest.ingest(vps, [reported('Tetris.zip', sha('8'))]);
-    const copy = db.select().from(games).all().find((row) => row.mergedIntoId !== null)!;
+    const copy = db
+      .select()
+      .from(games)
+      .all()
+      .find((row) => row.mergedIntoId !== null)!;
 
     announce(vps, copy.id);
     db.update(meshNodes).set({ status: 'stale' }).where(eq(meshNodes.id, home)).run();

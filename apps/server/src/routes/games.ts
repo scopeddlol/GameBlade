@@ -242,7 +242,6 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
-
   app.get('/games/:id/achievements', async (request) => {
     const context = requireUser(request);
     const { id } = request.params as { id: string };

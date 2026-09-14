@@ -529,6 +529,13 @@ async fn update_settings(state: State<'_, AppState>, patch: Settings) -> AppResu
 
 /* ---------------------------------------------------------------- downloads */
 
+/// How much each source is asked for when measuring it.
+///
+/// Two megabytes. Long enough to leave TCP slow start behind, so the number
+/// means something on a fast link, and short enough that testing four sources
+/// is a few seconds rather than a download of its own.
+const PROBE_SAMPLE_BYTES: u64 = 2 * 1024 * 1024;
+
 #[tauri::command]
 async fn start_download(
     state: State<'_, AppState>,
@@ -597,6 +604,64 @@ async fn clear_download(
 #[tauri::command]
 async fn list_downloads(state: State<'_, AppState>) -> AppResult<Vec<DownloadState>> {
     Ok(state.downloads.snapshot().await)
+}
+
+/**
+ * Measure every place this game can be fetched from, and say which is quickest.
+ *
+ * A game can sit on several machines — a home server and a VPS, say — and one
+ * of them is usually much faster from where the player happens to be. The
+ * server orders the list from what other people have measured, which is a
+ * reasonable guess and no more than that: the only way to know what *this*
+ * connection does to *that* machine is to move some bytes over it.
+ *
+ * So this does exactly that. A couple of megabytes from each source in turn,
+ * over the same routes a download uses, timed. The results are shown to the
+ * player and sent back to the server, where they order the list for whoever
+ * installs this next.
+ *
+ * Running a download reorders itself continuously from the chunks it is already
+ * fetching, so this is not required for a fast install — it is for the question
+ * "why is this slow", asked before or after one.
+ */
+#[tauri::command]
+async fn test_download_sources(
+    state: State<'_, AppState>,
+    game_id: String,
+) -> AppResult<Vec<download::sources::SourceProbe>> {
+    let client = state.client().await?;
+    let manifest = client.manifest(&game_id).await?;
+
+    let Some(file) = manifest.files.first() else {
+        return Ok(Vec::new());
+    };
+
+    let results = download::sources::measure_sources(
+        &client,
+        &game_id,
+        &file.id,
+        manifest.sources.as_deref().unwrap_or_default(),
+        PROBE_SAMPLE_BYTES,
+    )
+    .await;
+
+    // Reported so the next person's client starts with an order somebody has
+    // actually tested. Best effort: a measurement that cannot be filed is still
+    // a measurement worth showing.
+    let measurements: Vec<api::SourceMeasurement> = results
+        .iter()
+        .map(|probe| api::SourceMeasurement {
+            node_id: probe.node_id.clone(),
+            transport: if probe.direct { "direct" } else { "proxy" }.to_string(),
+            latency_ms: probe.latency_ms,
+            bytes_per_second: probe.bytes_per_second,
+            ok: probe.ok,
+            detail: probe.detail.clone(),
+        })
+        .collect();
+    let _ = client.report_sources(&game_id, &measurements, &[]).await;
+
+    Ok(results)
 }
 
 #[derive(Serialize)]
@@ -1498,6 +1563,7 @@ pub fn run() {
             pause_download,
             clear_download,
             list_downloads,
+            test_download_sources,
             disk_usage,
             list_storage_locations,
             list_installed,

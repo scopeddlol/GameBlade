@@ -1167,7 +1167,6 @@ export const discordTicketSettingsSchema = z.object({
 });
 export type DiscordTicketSettingsInput = z.infer<typeof discordTicketSettingsSchema>;
 
-
 /**
  * What a client measured against the sources it was offered.
  *
@@ -1222,7 +1221,11 @@ export const sourceReportSchema = z.object({
     .array(
       z.object({
         nodeId: z.string().trim().min(1).max(64),
-        bytes: z.number().int().min(0).max(2 ** 53 - 1),
+        bytes: z
+          .number()
+          .int()
+          .min(0)
+          .max(2 ** 53 - 1),
       }),
     )
     .max(16)

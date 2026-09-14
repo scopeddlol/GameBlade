@@ -1054,8 +1054,7 @@ export class MeshService {
           nodeId: result.nodeId,
           transport: result.transport,
           latencyMs: result.latencyMs === null ? null : Math.round(result.latencyMs),
-          bytesPerSecond:
-            result.bytesPerSecond === null ? null : Math.round(result.bytesPerSecond),
+          bytesPerSecond: result.bytesPerSecond === null ? null : Math.round(result.bytesPerSecond),
           ok: result.ok,
           measuredAt,
         };

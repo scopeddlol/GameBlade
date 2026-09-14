@@ -58,6 +58,28 @@ pub struct ManifestSource {
     pub label: String,
     #[serde(default)]
     pub priority: i64,
+    /// Where this node can be reached without the server in the middle.
+    ///
+    /// Present only for a node that advertises a routable address. Its absence
+    /// is the ordinary case for a machine behind a home router, and means this
+    /// source is fetched the way every source always was: through the server.
+    #[serde(rename = "directUrl", default)]
+    pub direct_url: Option<String>,
+    /// The signed permission a direct fetch presents. Useless without the URL.
+    #[serde(default)]
+    pub grant: Option<String>,
+    /// The game and file *this* node holds.
+    ///
+    /// One catalog entry can live on several machines, each knowing its copy by
+    /// its own ids. A direct request has to be addressed in the ids of the
+    /// machine it is going to.
+    #[serde(rename = "gameId", default)]
+    pub game_id: Option<String>,
+    #[serde(rename = "fileId", default)]
+    pub file_id: Option<String>,
+    /// What somebody else measured, bytes per second. A starting order only.
+    #[serde(rename = "observedBytesPerSecond", default)]
+    pub observed_bytes_per_second: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +113,33 @@ pub struct DownloadManifest {
 
 fn default_origin_available() -> bool {
     true
+}
+
+/// One source, as this machine found it.
+///
+/// `transport` distinguishes the two ways the same node can be reached, because
+/// they are two different answers: a node whose direct port is firewalled off
+/// here may still be the fastest thing available through the server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceMeasurement {
+    #[serde(rename = "nodeId")]
+    pub node_id: Option<String>,
+    pub transport: String,
+    #[serde(rename = "latencyMs")]
+    pub latency_ms: Option<f64>,
+    #[serde(rename = "bytesPerSecond")]
+    pub bytes_per_second: Option<f64>,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Bytes one node handed over without the server seeing them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveredBytes {
+    #[serde(rename = "nodeId")]
+    pub node_id: String,
+    pub bytes: u64,
 }
 
 /// What `POST /download/:gameId/token` hands back.
@@ -371,6 +420,36 @@ impl ApiClient {
         )?;
         let response = check_status(request.send().await?).await?;
         Ok(response.json().await?)
+    }
+
+    /// Tell the server what this machine measured, and what a node delivered.
+    ///
+    /// Two things at once because they are known at the same moment and neither
+    /// is worth a request of its own. The measurements decide what the *next*
+    /// person's client tries first; the byte counts are how a transfer that
+    /// never touched the server is still counted against an allowance and still
+    /// shows up as the node's work.
+    ///
+    /// Best effort by design. Every caller ignores the result: a download that
+    /// worked must not be reported as failed because a bookkeeping request did.
+    pub async fn report_sources(
+        &self,
+        game_id: &str,
+        results: &[SourceMeasurement],
+        delivered: &[DeliveredBytes],
+    ) -> AppResult<()> {
+        let request = self.authorised(
+            self.http
+                .post(self.endpoint(&format!("/games/{game_id}/sources/report"))),
+        )?;
+        check_status(
+            request
+                .json(&serde_json::json!({ "results": results, "delivered": delivered }))
+                .send()
+                .await?,
+        )
+        .await?;
+        Ok(())
     }
 
     /// Reads a non-2xx response into its structured parts without turning it

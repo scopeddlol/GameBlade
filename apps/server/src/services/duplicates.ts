@@ -102,41 +102,43 @@ export class DuplicateService {
    * real archive is thousands of rows.
    */
   private rows(): Row[] {
-    return this.db
-      .select({
-        id: games.id,
-        title: games.title,
-        searchTitle: games.searchTitle,
-        relPath: games.relPath,
-        libraryId: games.libraryId,
-        libraryName: libraries.name,
-        sizeBytes: games.sizeBytes,
-        igdbId: games.igdbId,
-        matchStatus: games.matchStatus,
-        addedAt: games.addedAt,
-        // A game is one ZIP, so `min` is that ZIP's hash. Written as an
-        // aggregate rather than a join so a row whose file is still being
-        // hashed comes back with a null instead of disappearing.
-        sha256: sql<string | null>`min(${gameFiles.sha256})`,
-        files: sql<number>`count(${gameFiles.id})`,
-      })
-      .from(games)
-      .innerJoin(libraries, eq(libraries.id, games.libraryId))
-      .leftJoin(gameFiles, eq(gameFiles.gameId, games.id))
-      /*
-       * Copies whose files have gone are candidates too, deliberately.
-       *
-       * The sequence that makes this matter: a game is deleted from the
-       * machine that had it, is flagged missing, and turns up on a second
-       * machine a day later. If a missing row could not be merged into, the
-       * arriving copy would become a separate entry and the original — with
-       * every achievement and every hour of playtime on it — would stay
-       * missing for ever beside it.
-       */
-      .where(isNull(games.mergedIntoId))
-      .groupBy(games.id)
-      .all()
-      .map((row) => ({ ...row, files: Number(row.files) }));
+    return (
+      this.db
+        .select({
+          id: games.id,
+          title: games.title,
+          searchTitle: games.searchTitle,
+          relPath: games.relPath,
+          libraryId: games.libraryId,
+          libraryName: libraries.name,
+          sizeBytes: games.sizeBytes,
+          igdbId: games.igdbId,
+          matchStatus: games.matchStatus,
+          addedAt: games.addedAt,
+          // A game is one ZIP, so `min` is that ZIP's hash. Written as an
+          // aggregate rather than a join so a row whose file is still being
+          // hashed comes back with a null instead of disappearing.
+          sha256: sql<string | null>`min(${gameFiles.sha256})`,
+          files: sql<number>`count(${gameFiles.id})`,
+        })
+        .from(games)
+        .innerJoin(libraries, eq(libraries.id, games.libraryId))
+        .leftJoin(gameFiles, eq(gameFiles.gameId, games.id))
+        /*
+         * Copies whose files have gone are candidates too, deliberately.
+         *
+         * The sequence that makes this matter: a game is deleted from the
+         * machine that had it, is flagged missing, and turns up on a second
+         * machine a day later. If a missing row could not be merged into, the
+         * arriving copy would become a separate entry and the original — with
+         * every achievement and every hour of playtime on it — would stay
+         * missing for ever beside it.
+         */
+        .where(isNull(games.mergedIntoId))
+        .groupBy(games.id)
+        .all()
+        .map((row) => ({ ...row, files: Number(row.files) }))
+    );
   }
 
   /**

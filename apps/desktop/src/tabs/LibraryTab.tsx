@@ -169,6 +169,9 @@ export function LibraryTab({
           // launched, and every entry in it is already on this disk.
           availability: 'ready',
           availabilityNote: null,
+          // How many machines are holding it is a question only the server can
+          // answer, and this list exists precisely because it cannot be asked.
+          hostCount: 0,
         }))
       : [];
 

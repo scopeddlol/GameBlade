@@ -37,6 +37,23 @@ export type DownloadStatus =
   | 'canceled'
   | 'paused';
 
+/**
+ * One host, measured from this machine.
+ *
+ * `direct` distinguishes bytes that came straight from the host holding the
+ * game from bytes relayed by the server. Both are verified identically; the
+ * difference is speed, and on a self-hosted archive it is usually a large one.
+ */
+export interface SourceProbe {
+  node_id: string | null;
+  label: string;
+  direct: boolean;
+  ok: boolean;
+  latency_ms: number | null;
+  bytes_per_second: number | null;
+  detail: string | null;
+}
+
 export interface DownloadSourceState {
   node_id: string | null;
   label: string;
@@ -240,6 +257,16 @@ export const ipc = {
   clearDownload: (gameId: string, deleteFiles = false) =>
     invoke<void>('clear_download', { gameId, deleteFiles }),
   listDownloads: () => invoke<DownloadState[]>('list_downloads'),
+  /**
+   * Measure every host this game can be fetched from.
+   *
+   * Moves a couple of megabytes from each, over the same routes a download
+   * uses, and times them. Slow enough to be worth a spinner — a few seconds per
+   * host — and the only way to answer "which of these is quickest from here",
+   * which nobody else can answer on this machine's behalf.
+   */
+  testDownloadSources: (gameId: string) =>
+    invoke<SourceProbe[]>('test_download_sources', { gameId }),
   diskUsage: () => invoke<DiskUsage>('disk_usage'),
   listStorageLocations: () => invoke<StorageLocation[]>('list_storage_locations'),
 

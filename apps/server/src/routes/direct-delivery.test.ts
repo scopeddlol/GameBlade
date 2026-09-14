@@ -275,7 +275,13 @@ describe('direct Node downloads', () => {
       headers: auth(player),
       payload: {
         results: [
-          { nodeId: node.nodeId, transport: 'direct', latencyMs: 12, bytesPerSecond: 40e6, ok: true },
+          {
+            nodeId: node.nodeId,
+            transport: 'direct',
+            latencyMs: 12,
+            bytesPerSecond: 40e6,
+            ok: true,
+          },
           { nodeId: null, transport: 'proxy', latencyMs: 90, bytesPerSecond: 6e6, ok: true },
         ],
         delivered: [{ nodeId: node.nodeId, bytes: BYTES }],
@@ -314,8 +320,20 @@ describe('direct Node downloads', () => {
       headers: auth(player),
       payload: {
         results: [
-          { nodeId: slow.nodeId, transport: 'direct', latencyMs: 200, bytesPerSecond: 2e6, ok: true },
-          { nodeId: fast.nodeId, transport: 'direct', latencyMs: 20, bytesPerSecond: 90e6, ok: true },
+          {
+            nodeId: slow.nodeId,
+            transport: 'direct',
+            latencyMs: 200,
+            bytesPerSecond: 2e6,
+            ok: true,
+          },
+          {
+            nodeId: fast.nodeId,
+            transport: 'direct',
+            latencyMs: 20,
+            bytesPerSecond: 90e6,
+            ok: true,
+          },
         ],
       },
     });

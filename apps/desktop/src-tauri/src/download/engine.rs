@@ -16,6 +16,7 @@
 //!   resuming after the server-side file changed produces an honest restart
 //!   rather than a corrupt hybrid stitched from two versions.
 
+use super::sources::{SourcePool, Target};
 use super::{
     part_path_for, sanitise_relative_path, urlencode, DownloadSourceState, DownloadState,
     DownloadStatus,
@@ -40,6 +41,14 @@ use tokio::sync::{Mutex, Semaphore};
 const CHUNK_BYTES: u64 = 10 * 1024 * 1024;
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(400);
+
+/// How long one chunk fetched straight from a node may take.
+///
+/// Generous — a 10 MiB chunk over a modest uplink is minutes, not seconds — and
+/// bounded all the same, because a node that has stopped answering mid-body
+/// must cost this chunk rather than the whole download. The server's own route
+/// has no such limit: it is the path that has to work.
+const DIRECT_CHUNK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Refresh the signed token this long before it actually expires, so it never
 /// lapses underneath an in-flight request.
@@ -383,9 +392,21 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
     let downloaded = Arc::new(AtomicU64::new(0));
     let semaphore = Arc::new(Semaphore::new(job.connections));
 
-    // The Desktop has exactly one transport: authenticated HTTPS to the
-    // Coordinator. Friendly Node names remain useful diagnostics, but their
-    // addresses and the Coordinator-to-Node hop never leave the server.
+    /*
+     * Where this download may pull from.
+     *
+     * The server is always in the pool and is the path that has to work. A node
+     * that advertises an address of its own is added beside it, and the
+     * scheduler moves work toward whichever turns out to be quicker from here —
+     * measured from the chunks themselves, not from what anybody promised.
+     */
+    let package = manifest.files.first().map(|file| file.id.clone()).unwrap_or_default();
+    let pool = Arc::new(SourcePool::new(
+        &manifest.game_id,
+        &package,
+        manifest.sources.as_deref().unwrap_or_default(),
+    ));
+
     let mut sources: Vec<DownloadSourceState> = manifest
         .sources
         .as_deref()
@@ -396,7 +417,11 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
             node_id: source.node_id.clone(),
             label: source.label.clone(),
             status: "available".to_string(),
-            detail: Some("Connected securely through GameBlade".to_string()),
+            detail: Some(if source.direct_url.is_some() {
+                "Connected directly to this host".to_string()
+            } else {
+                "Connected securely through GameBlade".to_string()
+            }),
         })
         .collect();
     if sources.is_empty() {
@@ -418,6 +443,7 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
         let app = job.app.clone();
         let state = job.state.clone();
         let downloaded = downloaded.clone();
+        let pool = Arc::clone(&pool);
         tauri::async_runtime::spawn(async move {
             let mut last_bytes = 0u64;
             let mut last_at = Instant::now();
@@ -434,8 +460,26 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
                 last_bytes = current;
                 last_at = Instant::now();
 
+                // What each source is doing right now, not what it promised at
+                // the start. A download that quietly fell back to the relay
+                // because a node stopped answering should say so while it is
+                // happening — that is the whole difference between "this is
+                // slow" and "this is slow *because*".
+                let live: Vec<DownloadSourceState> = pool
+                    .snapshot()
+                    .await
+                    .into_iter()
+                    .map(|probe| DownloadSourceState {
+                        node_id: probe.node_id,
+                        label: probe.label,
+                        status: if probe.ok { "available" } else { "failed" }.to_string(),
+                        detail: describe_measured(probe.direct, probe.bytes_per_second, probe.ok),
+                    })
+                    .collect();
+
                 let snapshot = {
                     let mut guard = state.lock().await;
+                    guard.sources = live;
                     // Ends the loop once the finalizer records an ending.
                     if !matches!(
                         guard.status,
@@ -472,7 +516,7 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
     let start_file = |file: ManifestFile| {
         let client = job.client.clone();
         let tokens = Arc::clone(&tokens);
-        let game_id = job.game_id.clone();
+        let pool = Arc::clone(&pool);
         let root = job.root.clone();
         let cancel = Arc::clone(&job.cancel_flag);
         let downloaded = Arc::clone(&downloaded);
@@ -486,7 +530,7 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
             let result = download_file(
                 &client,
                 &tokens,
-                &game_id,
+                &pool,
                 &file,
                 &root,
                 &cancel,
@@ -552,10 +596,74 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
         let mut guard = job.state.lock().await;
         guard.downloaded_bytes = downloaded.load(Ordering::Relaxed);
         guard.current_file = None;
+        // The panel ends showing what each source actually did, rather than
+        // what it was expected to do when the download started.
+        guard.sources = pool
+            .snapshot()
+            .await
+            .into_iter()
+            .map(|probe| DownloadSourceState {
+                node_id: probe.node_id,
+                label: probe.label,
+                status: if probe.ok { "available" } else { "failed" }.to_string(),
+                detail: describe_measured(probe.direct, probe.bytes_per_second, probe.ok),
+            })
+            .collect();
     }
     reporter.abort();
 
+    /*
+     * Tell the server what happened, and carry on regardless.
+     *
+     * Two things it cannot know otherwise: which source was actually fastest
+     * from here — which decides what the next person's client tries first — and
+     * how many bytes a node handed over without the server in the middle, which
+     * is what keeps a monthly allowance meaningful and a node's contribution
+     * visible. Neither is worth failing a finished download over, so the result
+     * is deliberately ignored.
+     */
+    let measurements = pool.measurements().await;
+    let delivered = pool.delivered().await;
+    if !measurements.is_empty() || !delivered.is_empty() {
+        let _ = job
+            .client
+            .report_sources(&job.game_id, &measurements, &delivered)
+            .await;
+    }
+
     outcome
+}
+
+/// One line about a source, in bytes a player recognises.
+fn describe_measured(direct: bool, rate: Option<f64>, ok: bool) -> Option<String> {
+    if !ok {
+        return Some("Stopped answering; the rest came through GameBlade".to_string());
+    }
+
+    let path = if direct {
+        "Direct from this host"
+    } else {
+        "Through GameBlade"
+    };
+
+    match rate {
+        Some(rate) if rate > 0.0 => Some(format!("{path} · {}", human_rate(rate))),
+        _ => Some(path.to_string()),
+    }
+}
+
+/// A transfer rate as a person reads one. Megabytes, because that is what the
+/// rest of the client shows and mixing the two units is how people misread a
+/// download as eight times faster than it is.
+fn human_rate(bytes_per_second: f64) -> String {
+    let mb = bytes_per_second / 1_000_000.0;
+    if mb >= 10.0 {
+        format!("{mb:.0} MB/s")
+    } else if mb >= 1.0 {
+        format!("{mb:.1} MB/s")
+    } else {
+        format!("{:.0} kB/s", bytes_per_second / 1_000.0)
+    }
 }
 
 /// A refusal that waiting longer cannot fix, at the moment the manifest is
@@ -603,7 +711,7 @@ impl From<Stop> for FileOutcome {
 async fn download_file(
     client: &ApiClient,
     tokens: &Arc<Mutex<Tokens>>,
-    game_id: &str,
+    pool: &Arc<SourcePool>,
     file: &ManifestFile,
     root: &Path,
     cancel: &Arc<AtomicBool>,
@@ -687,7 +795,7 @@ async fn download_file(
         let result = fetch_all_chunks(
             client,
             tokens,
-            game_id,
+            pool,
             file,
             &dest,
             journal,
@@ -773,7 +881,7 @@ async fn download_file(
 async fn fetch_all_chunks(
     client: &ApiClient,
     tokens: &Arc<Mutex<Tokens>>,
-    game_id: &str,
+    pool: &Arc<SourcePool>,
     file: &ManifestFile,
     dest: &Path,
     journal: ChunkJournal,
@@ -788,7 +896,6 @@ async fn fetch_all_chunks(
         return Ok(());
     }
 
-    let url_base = format!("/download/{game_id}/files/{}", file.id);
     let journal_shared = Arc::new(Mutex::new(journal));
     let wave_size = connections.max(1).saturating_mul(2);
 
@@ -849,7 +956,7 @@ async fn fetch_all_chunks(
                 tasks.push(tauri::async_runtime::spawn(download_chunk(
                     client.clone(),
                     tokens.clone(),
-                    url_base.clone(),
+                    Arc::clone(pool),
                     dest.to_path_buf(),
                     journal_shared.clone(),
                     journal_path.to_path_buf(),
@@ -913,7 +1020,7 @@ async fn fetch_all_chunks(
 async fn download_chunk(
     client: ApiClient,
     tokens: Arc<Mutex<Tokens>>,
-    url_base: String,
+    pool: Arc<SourcePool>,
     dest: PathBuf,
     journal: Arc<Mutex<ChunkJournal>>,
     journal_path: PathBuf,
@@ -955,27 +1062,51 @@ async fn download_chunk(
         }
         received = 0;
 
-        // Fresh token, refreshed proactively near expiry so it never lapses
-        // underneath an in-flight request.
-        let url = {
-            let mut guard = tokens.lock().await;
-            guard.ensure_fresh(&client).await;
-            format!(
-                "{}?token={}",
-                client.endpoint(&url_base),
-                urlencode(&guard.token)
-            )
+        /*
+         * Who serves this chunk, decided per chunk rather than per download.
+         *
+         * A node that is fast now may be saturated in ten minutes, and one that
+         * was offline when this started may be back. Asking each time means the
+         * schedule follows what is actually happening, and costs a lock and a
+         * comparison against at most a handful of sources.
+         */
+        let target = pool.pick(index).await;
+
+        let (url, direct) = match &target {
+            Target::Direct { url, .. } => (url.clone(), true),
+            Target::Proxy => {
+                // Fresh token, refreshed proactively near expiry so it never
+                // lapses underneath an in-flight request.
+                let mut guard = tokens.lock().await;
+                guard.ensure_fresh(&client).await;
+                (
+                    format!(
+                        "{}?token={}",
+                        client.endpoint(&pool.proxy_path()),
+                        urlencode(&guard.token)
+                    ),
+                    false,
+                )
+            }
         };
 
         let range = format!("bytes={start}-{end}");
         let etag = journal.lock().await.etag.clone();
+        let attempt_started = Instant::now();
 
-        let mut request = client
-            .http()
-            .get(&url)
-            .header(reqwest::header::RANGE, &range);
-        if let Some(etag) = &etag {
-            request = request.header(reqwest::header::IF_RANGE, etag);
+        let mut request = client.http().get(&url);
+        if direct {
+            // A node serves whole chunks, addressed by index, and its answer is
+            // the chunk — so a range header would be asking for a range of a
+            // range. The grid is the same on both sides, which is what makes a
+            // chunk fetched directly line up byte for byte with one fetched
+            // through the server.
+            request = request.timeout(DIRECT_CHUNK_TIMEOUT);
+        } else {
+            request = request.header(reqwest::header::RANGE, &range);
+            if let Some(etag) = &etag {
+                request = request.header(reqwest::header::IF_RANGE, etag);
+            }
         }
 
         enum Attempt {
@@ -996,6 +1127,21 @@ async fn download_chunk(
 
             let status = response.status();
             if !status.is_success() {
+                /*
+                 * A node refusing is never fatal.
+                 *
+                 * It is one of three ordinary things: the grant has expired
+                 * (a download outliving one is normal), this copy has gone
+                 * from that machine, or the node is being restarted. None of
+                 * them says anything about whether the game can be
+                 * downloaded — the server can always serve it — so the chunk
+                 * is retried, this source is marked down, and after two of
+                 * these it sits out the rest of the download.
+                 */
+                if direct {
+                    return Ok(Attempt::Transient);
+                }
+
                 let failure = ApiClient::classify_failure(response).await;
                 return match (failure.status, failure.code.as_deref()) {
                     // The signed link lapsed mid-download. Refresh and keep
@@ -1039,7 +1185,11 @@ async fn download_chunk(
             // task in the first wave would happily write a full copy of the
             // file at its own offset and mark it done. Checking the status
             // rather than the ETag catches both.
-            if !range_was_honoured(status, whole_file) {
+            //
+            // Only for the server's route. A node answers a chunk request with
+            // that chunk and a 200, which is the correct answer to what was
+            // asked and not a range being ignored.
+            if !direct && !range_was_honoured(status, whole_file) {
                 return Ok(Attempt::Changed);
             }
 
@@ -1128,6 +1278,32 @@ async fn download_chunk(
             Ok(Attempt::Delivered)
         }
         .await;
+
+        // What this attempt says about its source. A chunk that arrived is the
+        // only measurement worth having — it is the actual transfer, at the
+        // actual size, over the actual link.
+        match &result {
+            Ok(Attempt::Delivered) => {
+                pool.succeeded(&target, received, attempt_started.elapsed())
+                    .await;
+            }
+            Ok(Attempt::Transient) | Ok(Attempt::Corrupt) if target.is_direct() => {
+                let reason = if matches!(result, Ok(Attempt::Corrupt)) {
+                    "it served bytes that did not verify"
+                } else {
+                    "it did not answer"
+                };
+                let retired = pool.failed(&target, reason).await;
+                // The usual cause of a direct refusal on a long download is a
+                // grant that has aged out. Asking for fresh ones puts the node
+                // back in play rather than spending the next forty gigabytes
+                // on the relay.
+                if !retired {
+                    pool.refresh_grants(&client).await;
+                }
+            }
+            _ => {}
+        }
 
         match result {
             Ok(Attempt::Delivered) => {

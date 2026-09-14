@@ -5129,3 +5129,111 @@ textarea::placeholder {
     justify-content: center;
   }
 }
+
+/* ------------------------------------------------------------ download hosts */
+
+/*
+ * The machines holding one game, and what each of them can do from here.
+ *
+ * Two lists with the same rhythm on purpose: the first is what exists, the
+ * second is what was measured, and reading one after the other should feel like
+ * the same list gaining numbers rather than two unrelated tables.
+ */
+.host-list,
+.probe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.host-row,
+.probe-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  overflow: hidden;
+  background: var(--ink-900);
+  border: 1px solid var(--ink-700);
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.host-icon,
+.probe-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.probe-row .probe-icon {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+}
+
+.probe-row.failed .probe-icon {
+  background: rgba(248, 113, 113, 0.12);
+  color: var(--danger);
+}
+
+.host-copy,
+.probe-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.host-copy strong,
+.probe-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.host-meta,
+.probe-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  white-space: nowrap;
+}
+
+.probe-meta strong {
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The comparison itself: a quiet bar behind each row, as wide as that source's
+ * share of the fastest one. A column of numbers makes "three times faster" an
+ * arithmetic problem; this makes it something you see without reading.
+ */
+.probe-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--success),
+    color-mix(in srgb, var(--success) 40%, transparent)
+  );
+  transition: width 400ms ease;
+}
+
+.host-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
