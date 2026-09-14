@@ -18,6 +18,7 @@ import {
 } from '../db/schema.js';
 import { newId } from '../lib/ids.js';
 import { CatalogIngestService } from './catalogIngest.js';
+import { DuplicateService } from './duplicates.js';
 
 const silent = {
   info: () => {},
@@ -52,7 +53,7 @@ describe('CatalogIngestService', () => {
       LOG_LEVEL: 'silent',
     } as NodeJS.ProcessEnv);
     ({ db, sqlite } = createDb(config.databasePath));
-    ingest = new CatalogIngestService(db, silent);
+    ingest = new CatalogIngestService(db, silent, new DuplicateService(db, silent));
 
     libraryId = newId('lib');
     db.insert(libraries).values({ id: libraryId, name: 'Archive', path: '/library' }).run();

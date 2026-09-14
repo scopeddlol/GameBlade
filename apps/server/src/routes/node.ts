@@ -34,6 +34,31 @@ const setupSchema = z.object({
   enrolmentToken: z.string().trim().min(1).max(512),
 });
 
+/**
+ * The one field the direct-download form has.
+ *
+ * Parsed rather than trusted for the same reason the coordinator address is: a
+ * value that is not a URL becomes an address every client dials and nothing
+ * answers, and the only symptom is downloads that feel slow to start. An empty
+ * string is explicitly allowed — it is how the feature is turned off.
+ */
+const directSchema = z.object({
+  publicUrl: z
+    .string()
+    .trim()
+    .max(2048)
+    .refine((value) => {
+      if (value === '') return true;
+      try {
+        const url = new URL(value);
+        return url.protocol === 'https:' || url.protocol === 'http:';
+      } catch {
+        return false;
+      }
+    }, 'Enter the address players can reach this machine on, e.g. https://vps.example.com:8099')
+    .transform((value) => value.replace(/\/+$/, '')),
+});
+
 const entryDecisionSchema = z.object({
   relPath: z
     .string()
@@ -406,6 +431,46 @@ export async function nodeRoutes(app: FastifyInstance): Promise<void> {
     );
 
     return reply.code(202).send({ accepted: true, coordinatorUrl: state.coordinatorUrl });
+  });
+
+  /**
+   * Set — or clear — the address players' clients may fetch from directly.
+   *
+   * Writable while the node is running and already enrolled, unlike setup:
+   * forwarding a port or moving to a machine with a routable address is a thing
+   * that happens to a working node, and it should not mean editing a compose
+   * file and restarting a container. The agent beside this process re-reads the
+   * state file on every heartbeat and opens or closes its listener to match.
+   *
+   * An empty value is meaningful and is how this is turned off: the node then
+   * advertises no address, the Coordinator forgets the one it had, and every
+   * download goes back through the relay that always works.
+   */
+  app.post(`${config.basePath}/api/node/direct`, async (request, reply) => {
+    const input = directSchema.parse(request.body);
+
+    let state: Record<string, unknown> = {};
+    try {
+      state = JSON.parse(await readFile(config.nodeStatePath, 'utf8')) as Record<string, unknown>;
+    } catch {
+      // No file yet: the agent has not started. Writing one is still correct —
+      // it merges its own key in when it does.
+    }
+
+    if (input.publicUrl) state.publicUrl = input.publicUrl;
+    else delete state.publicUrl;
+
+    await mkdir(path.dirname(config.nodeStatePath), { recursive: true });
+    await writeFile(config.nodeStatePath, JSON.stringify(state, null, 2), 'utf8');
+
+    app.log.info(
+      { publicUrl: state.publicUrl ?? null },
+      input.publicUrl
+        ? 'this node will offer direct downloads at its public address'
+        : 'direct downloads were turned off on this node',
+    );
+
+    return reply.code(202).send({ accepted: true, publicUrl: state.publicUrl ?? null });
   });
 
   app.get(config.basePath === '' ? '/' : config.basePath, async (_request, reply) => send(reply));

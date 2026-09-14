@@ -20,6 +20,7 @@ import {
   deriveSaveTemplates,
   featuredArtworkSchema,
   featuredSchema,
+  gameMergeSchema,
   MAX_INSTALLER_BYTES,
   importAchievementsSchema,
   autoImportAchievementsSchema,
@@ -157,6 +158,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     backups,
     health,
     checksums,
+    duplicates,
     bugs,
     discord,
     discordBot,
@@ -574,6 +576,56 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true, title: game.title };
   });
 
+  /* -------------------------------------------------------- one game, many hosts */
+
+  /**
+   * Catalog rows that look like the same game on two machines.
+   *
+   * What is listed here is deliberately only what was *not* acted on: identical
+   * bytes, and the same package at the same size, are folded together as the
+   * reports arrive. What reaches this page is the judgement calls — the same
+   * identified game at two different sizes, which is either two builds or a bad
+   * copy, and no rule can tell which.
+   */
+  app.get('/admin/duplicates', async (request) => {
+    requireAdmin(request);
+    return {
+      groups: duplicates.suggestions(),
+      mergedGroups: duplicates.mergedGroups(),
+      merged: duplicates.mergedCount(),
+    };
+  });
+
+  /**
+   * Fold rows together by hand.
+   *
+   * The surviving entry is named rather than inferred: it keeps every
+   * achievement, save, collection entry and hour of playtime attached to it,
+   * and which of two rows that should be is not a decision to make from sort
+   * order.
+   */
+  app.post('/admin/duplicates/merge', async (request) => {
+    requireAdmin(request);
+    const body = gameMergeSchema.parse(request.body);
+    return duplicates.merge(body.primaryId, body.duplicateIds, 'manual');
+  });
+
+  /**
+   * Pull one copy back out into an entry of its own.
+   *
+   * For the case the rules got wrong: two different games that happen to be the
+   * same size with the same name. What moved to the surviving entry stays
+   * there — the playtime belongs to the game somebody played — so this is a
+   * statement that these are two games, not an undo.
+   */
+  app.post('/admin/duplicates/unmerge', async (request) => {
+    requireAdmin(request);
+    const { gameId } = (request.body ?? {}) as { gameId?: string };
+    if (!gameId) throw ApiError.badRequest('Name the copy to separate');
+    duplicates.unmerge(gameId);
+    return { ok: true };
+  });
+
   /** Clear out everything a scan has flagged as gone from disk. */
   app.post('/admin/games/purge-missing', async (request) => {
     const { olderThanDays } = purgeMissingSchema.parse(request.body ?? {});
@@ -677,7 +729,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/launch-rules', async (request) => {
     const query = launchRuleQuerySchema.parse(request.query ?? {});
 
-    const conditions: SQL[] = [isNull(games.missingAt)];
+    const conditions: SQL[] = [isNull(games.missingAt), isNull(games.mergedIntoId)];
     if (query.search) {
       const term = `%${query.search.replace(/[%_]/g, '')}%`;
       const match = or(like(games.title, term), like(games.searchTitle, term));
@@ -929,6 +981,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         missing: sql<number>`sum(case when ${games.missingAt} is not null then 1 else 0 end)`,
       })
       .from(games)
+      // Entries, not rows: a game held on two machines is one game.
+      .where(isNull(games.mergedIntoId))
       .get();
 
     const userCount =
@@ -1755,7 +1809,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const catalog = db
       .select({ id: games.id, title: games.title })
       .from(games)
-      .where(isNull(games.missingAt))
+      .where(and(isNull(games.missingAt), isNull(games.mergedIntoId)))
       .all()
       .map((game) => ({ ...game, hasRule: withRules.has(game.id) }));
 
@@ -2050,7 +2104,7 @@ function countGamesWithoutSaveRule(db: Db, withSaveRule: Set<string>): number {
   return db
     .select({ id: games.id })
     .from(games)
-    .where(isNull(games.missingAt))
+    .where(and(isNull(games.missingAt), isNull(games.mergedIntoId)))
     .all()
     .filter((row) => !withSaveRule.has(row.id)).length;
 }

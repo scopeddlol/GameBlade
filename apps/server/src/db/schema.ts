@@ -211,8 +211,46 @@ export const games = sqliteTable(
     addedAt: text('added_at').notNull().default(now),
     updatedAt: text('updated_at').notNull().default(now),
     scannedAt: text('scanned_at'),
-    /** Set when the files vanish; kept so metadata survives a temporary unmount. */
+    /**
+     * Set when the entry has no files anywhere; kept so metadata survives a
+     * temporary unmount.
+     *
+     * "Anywhere" is the part that changed when a game could be held on several
+     * machines. This is the flag every listing reads, so it has to mean what a
+     * player would mean by it: nothing can serve this. A row whose own copy has
+     * been deleted while another machine still holds one is not missing — the
+     * game moved.
+     */
     missingAt: text('missing_at'),
+    /**
+     * Set when *this row's own* files vanish, whatever anybody else holds.
+     *
+     * The honest per-row fact, kept beside the entry-level one above because
+     * without it the two cannot both be true at once. The sequence that needs
+     * it: a library is moved to a second machine and deleted from the first,
+     * so the entry is still available and this is set; months later the second
+     * machine's copy goes too, and only this column can say that the entry has
+     * now genuinely gone rather than that it was never marked.
+     */
+    ownMissingAt: text('own_missing_at'),
+
+    /**
+     * The catalog entry this row was folded into, if it is a second copy.
+     *
+     * Set when the same game is found on more than one machine: the first row
+     * stays the catalog entry everybody sees and this one becomes a copy behind
+     * it. Nothing is deleted, which is the whole point — the row keeps its own
+     * library, path, files and chunk hashes, so its machine can still serve it,
+     * and pulling the merge apart later is one column back to null.
+     *
+     * Null for every row a player is shown. Every listing filters on it.
+     */
+    mergedIntoId: text('merged_into_id'),
+    mergedAt: text('merged_at'),
+    /** What the merge was decided on: content, package, metadata or manual. */
+    mergeReason: text('merge_reason', {
+      enum: ['content', 'package', 'metadata', 'manual'],
+    }),
     /**
      * Set the moment a provider writes metadata onto this game.
      *
@@ -241,6 +279,10 @@ export const games = sqliteTable(
     index('games_pending_meta_idx').on(t.missingAt, t.metadataLockedAt, t.matchStatus),
     index('games_igdb_idx').on(t.igdbId),
     index('games_steam_app_idx').on(t.steamAppId),
+    // Every player-facing query adds "and this row is not a copy of another",
+    // and the merge itself looks up a primary's copies constantly.
+    index('games_merged_into_idx').on(t.mergedIntoId),
+    index('games_live_merged_sort_idx').on(t.mergedIntoId, t.missingAt, t.sortTitle),
   ],
 );
 
@@ -412,6 +454,20 @@ export const meshNodes = sqliteTable(
     libraryId: text('library_id').references(() => libraries.id, { onDelete: 'set null' }),
     catalogReportedAt: text('catalog_reported_at'),
     catalogStatus: text('catalog_status'),
+    /**
+     * Where a client may fetch from this node without the Coordinator in the
+     * middle, when the node has such an address.
+     *
+     * Advertised by the node itself on every heartbeat rather than configured
+     * here: the machine knows whether its port is reachable and this database
+     * cannot. Null — the ordinary case for a home machine behind a router —
+     * simply means every transfer takes the proxy path it always did.
+     */
+    publicUrl: text('public_url'),
+    /** When a client last reported a direct fetch from this node working. */
+    directOkAt: text('direct_ok_at'),
+    /** Bytes clients reported pulling straight from this node, lifetime. */
+    directBytesServed: integer('direct_bytes_served').notNull().default(0),
     createdAt: text('created_at').notNull().default(now),
   },
   (t) => [
@@ -459,6 +515,47 @@ export const meshNodeGames = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.nodeId, t.gameId] }),
     index('mesh_node_games_game_idx').on(t.gameId),
+  ],
+);
+
+/**
+ * What clients measured against a source, most recent kept per client and node.
+ *
+ * Held so a player who has never downloaded anything starts with the order
+ * somebody else's client actually measured, rather than the Coordinator's
+ * guess. One row per user and node: a history of every probe would be a table
+ * that grows with downloads and answers no question the latest row does not.
+ *
+ * Advisory in the strictest sense. Nothing here decides what may be served or
+ * what may be trusted — only what is tried first.
+ */
+export const meshSourceProbes = sqliteTable(
+  'mesh_source_probes',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /**
+     * What was measured, as one string: a node id and its transport, or the
+     * Coordinator itself.
+     *
+     * A key rather than the node id and transport as two primary-key columns,
+     * because SQLite permits NULLs in a primary key and the Coordinator's own
+     * row has no node — which would have made "the latest measurement of the
+     * proxy" a growing list rather than one row.
+     */
+    sourceKey: text('source_key').notNull(),
+    /** Null for the Coordinator's own path, which belongs to no node. */
+    nodeId: text('node_id').references(() => meshNodes.id, { onDelete: 'cascade' }),
+    transport: text('transport', { enum: ['proxy', 'direct'] }).notNull(),
+    latencyMs: integer('latency_ms'),
+    bytesPerSecond: integer('bytes_per_second'),
+    ok: integer('ok', { mode: 'boolean' }).notNull().default(true),
+    measuredAt: text('measured_at').notNull().default(now),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.sourceKey] }),
+    index('mesh_source_probes_node_idx').on(t.nodeId, t.measuredAt),
   ],
 );
 

@@ -76,6 +76,45 @@ export interface MeshSource {
    * only decides what it tries before it has measurements of its own.
    */
   priority: number;
+  /**
+   * The Node's own address, when it has one a client can reach.
+   *
+   * Present only for a Node that advertises a public URL and is currently
+   * online. Its absence is not a failure — it is the ordinary case for a
+   * machine behind a home router — and the client falls back to the
+   * Coordinator, which is the transport every source has.
+   */
+  directUrl?: string;
+  /**
+   * Where the same node answers a speed measurement.
+   *
+   * Sent rather than derived from `directUrl`, because a client deriving it
+   * would be editing a URL the server gave it — and the day the path changes,
+   * every older client would be measuring a 404 and reporting the node as
+   * unreachable.
+   */
+  probeUrl?: string;
+  /** The signed permission a direct fetch presents. Absent without `directUrl`. */
+  grant?: string;
+  grantExpiresAt?: string;
+  /**
+   * The game and file *this* source holds.
+   *
+   * Two machines can hold the same game as two catalog entries that were
+   * merged into one. They agree byte for byte — the chunk hashes prove it —
+   * but each knows its copy by its own id, so a request has to be addressed in
+   * the ids the Node it is going to actually has.
+   */
+  gameId?: string;
+  fileId?: string;
+  /**
+   * What the last client to measure this source saw, bytes per second.
+   *
+   * A starting order, not a promise: a source that is fast from Frankfurt says
+   * little about Melbourne. The client measures for itself and prefers its own
+   * numbers as soon as it has them.
+   */
+  observedBytesPerSecond?: number | null;
 }
 
 /* -------------------------------------------------------------------- nodes */
@@ -130,6 +169,17 @@ export interface MeshNodeInfo {
   gameCount: number;
   /** What the client measured last time, if anything. Coordinator-visible only. */
   observedRttMs: number | null;
+  /**
+   * Where clients may fetch from this node directly, if anywhere.
+   *
+   * A node with a routable address — a VPS, or a forwarded port — carries its
+   * own downloads and the Coordinator's uplink stops being the ceiling on
+   * everybody's transfers. Null is the ordinary case and costs only the proxy
+   * hop that has always been there.
+   */
+  publicUrl?: string | null;
+  /** When a client last reported a successful direct fetch from this node. */
+  directOkAt?: string | null;
 }
 
 /** Seconds without a heartbeat after which a node is considered stale. */
@@ -183,6 +233,12 @@ export interface MeshNodeStats extends MeshNodeInfo {
   ownerUsername: string | null;
   /** Seconds since this node was last heard from; null if never. */
   secondsSinceSeen: number | null;
+  /** Bytes clients reported pulling straight from this node, lifetime. */
+  directBytesServed: number;
+  /** What clients have measured against this node lately, bytes per second. */
+  probeBytesPerSecond: number | null;
+  /** How many measurements that median is drawn from. */
+  probeSamples: number;
 }
 
 /** One day of the fleet's history. */
@@ -234,4 +290,82 @@ export interface MeshAnalytics {
   topNodes: { nodeId: string; label: string; bytes: number }[];
   /** Which games moved the most over the mesh this week, most first. */
   topGames: { gameId: string; title: string; bytes: number }[];
+}
+
+/* ------------------------------------------------------- direct delivery */
+
+/**
+ * How a client may reach the bytes of one source.
+ *
+ * `proxy` is the original path and the one that always works: the Desktop asks
+ * the Coordinator, which pulls verified chunks over the Node's outbound
+ * connection. `direct` is a Node that is reachable on its own address — a VPS,
+ * or a home machine with a port forwarded — where the Coordinator's uplink is
+ * the slowest part of a transfer it contributes nothing else to.
+ *
+ * Both are safe for the same reason: a chunk is named by its SHA-256 and the
+ * Desktop checks every one. A direct Node cannot hand over different bytes than
+ * the proxy would, only faster or slower ones.
+ */
+export const MESH_TRANSPORTS = ['proxy', 'direct'] as const;
+export type MeshTransport = (typeof MESH_TRANSPORTS)[number];
+
+/**
+ * The path a direct Node answers chunk requests on, below its public URL.
+ *
+ * Versioned because a Node is upgraded on somebody else's schedule: a client
+ * that knows only this path must never be answered by a Node that means
+ * something else by it.
+ */
+export const MESH_DIRECT_CHUNK_PATH = '/gb/v1/chunk';
+
+/** Where a direct Node answers "are you there, and how fast is this link". */
+export const MESH_DIRECT_PROBE_PATH = '/gb/v1/probe';
+
+/**
+ * A short-lived, signed permission for one client to pull from one Node.
+ *
+ * Minted by the Coordinator, verified by the Node against the Coordinator's
+ * published Ed25519 key. This is what lets a Node serve somebody it has never
+ * heard of without the Coordinator being in the data path: the grant names the
+ * account, the game and the file, expires in minutes, and proves who issued it.
+ */
+export interface DeliveryGrantClaims {
+  /** Grant format; bumped if the meaning of any field below ever changes. */
+  v: 1;
+  /** The Node this grant is addressed to. Presenting it to another is refused. */
+  nodeId: string;
+  /** The game *as that Node knows it* — its replica, not the merged entry. */
+  gameId: string;
+  fileId: string;
+  userId: string;
+  /** Seconds since the epoch, after which the Node refuses it. */
+  expiresAt: number;
+  /** Makes two grants for the same triple distinguishable in Node logs. */
+  nonce: string;
+}
+
+/**
+ * How long a delivery grant stays good for.
+ *
+ * Long enough to cover a slow chunk and a retry or two, short enough that a
+ * grant captured off a wire is worthless by the time anyone reads it. The
+ * Desktop refreshes its manifest rather than reusing one for a whole download.
+ */
+export const MESH_GRANT_TTL_SECONDS = 30 * 60;
+
+/**
+ * What a client measured against one source, reported back so the Coordinator
+ * can order sources for the next person before they have measured anything.
+ */
+export interface SourceProbeReport {
+  nodeId: string | null;
+  transport: MeshTransport;
+  /** Time to first byte, milliseconds. */
+  latencyMs: number | null;
+  /** Sustained throughput over the sample, bytes per second. Null on failure. */
+  bytesPerSecond: number | null;
+  ok: boolean;
+  /** Short, human-readable failure reason. Never shown to other users. */
+  detail?: string | null;
 }

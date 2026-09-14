@@ -12,6 +12,12 @@ import { assertRealPathWithin, contentDisposition, resolveWithin } from '../lib/
 import { ifRangeMatches, makeETag, parseRange } from '../lib/range.js';
 import { createThrottle } from '../lib/throttle.js';
 
+/** Whether a path is a readable file right now. */
+async function exists(absolutePath: string): Promise<boolean> {
+  const info = await stat(absolutePath).catch(() => null);
+  return Boolean(info?.isFile());
+}
+
 export async function downloadRoutes(app: FastifyInstance): Promise<void> {
   const { db, downloadTokens, bandwidth, chunks, config, mesh } = app.gameblade;
 
@@ -65,6 +71,36 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
     if (!row) throw ApiError.notFound('Game not found');
     if (row.game.missingAt) throw ApiError.gone('This game is no longer present on disk');
     return row;
+  }
+
+  /**
+   * The file a request is for, allowing for the entry being held in copies.
+   *
+   * A merged entry is one game whose bytes may sit on several machines as
+   * several rows. A manifest describes whichever copy was chosen to supply the
+   * package, so the file id a client comes back with belongs to that copy
+   * rather than to the entry — and refusing it because `file.gameId` is not the
+   * id in the URL would fail every download of a game held anywhere but its
+   * original home.
+   *
+   * Still strict about what it accepts: the file has to belong to this entry or
+   * to one of its copies, so a file id from another game is refused exactly as
+   * it always was.
+   */
+  function fileWithinEntry(gameId: string, fileId: string) {
+    const file = db.select().from(gameFiles).where(eq(gameFiles.id, fileId)).get();
+    if (!file) throw ApiError.notFound('File not found');
+
+    if (file.gameId !== gameId) {
+      const owner = db
+        .select({ mergedIntoId: games.mergedIntoId })
+        .from(games)
+        .where(eq(games.id, file.gameId))
+        .get();
+      if (owner?.mergedIntoId !== gameId) throw ApiError.notFound('File not found');
+    }
+
+    return file;
   }
 
   /**
@@ -256,7 +292,10 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       userId: string;
     },
   ): Promise<FastifyReply> {
-    const refs = chunks.chunksForGame(options.gameId).get(options.fileId) ?? [];
+    // Keyed by the file rather than the entry: the file may belong to a copy on
+    // another machine, and the chunk hashes that describe it belong to that
+    // copy too.
+    const refs = chunks.chunksFor(options.fileId);
     const expectedChunks = Math.ceil(options.sizeBytes / MESH_CHUNK_BYTES);
     if (refs.length !== expectedChunks) {
       throw ApiError.gone('This game is still being prepared by its Node');
@@ -397,22 +436,50 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
         );
       }
 
+      /*
+       * Which copy of this entry is going to supply the bytes.
+       *
+       * On a coordinator the answer is always a node; on a standalone server it
+       * is usually this disk. The interesting case is the one in between — a
+       * server whose own copy has been moved to another machine — where the
+       * file is not here any more but the entry is perfectly downloadable from
+       * the machine that now holds it.
+       */
+      const plan = mesh.deliveryPlan(gameId);
+
       if (!config.servesLocalFiles) {
-        const file = db.select().from(gameFiles).where(eq(gameFiles.gameId, gameId)).get();
-        if (!file) throw ApiError.gone('This game has no downloadable file');
+        if (!plan) throw ApiError.gone('This game has no downloadable file');
         return streamNodeFile(request, reply, {
           gameId,
-          fileId: file.id,
-          filePath: file.relPath,
-          sizeBytes: file.sizeBytes,
-          modifiedAt: file.modifiedAt,
+          fileId: plan.fileId,
+          filePath: game.relPath,
+          sizeBytes: plan.sizeBytes,
+          modifiedAt: plan.modifiedAt,
           userId,
         });
       }
 
       const gameRoot = resolveWithin(libraryPath, game.relPath);
+      const absolute = await assertRealPathWithin(libraryPath, gameRoot).catch(() => null);
 
-      const absolute = await assertRealPathWithin(libraryPath, gameRoot);
+      // The entry's own copy is gone from this disk but another machine still
+      // holds it. Falling through to the node path is the whole point of
+      // holding one entry across several hosts: the download simply comes from
+      // wherever the game now lives.
+      if (!absolute || !(await exists(absolute))) {
+        if (plan && plan.holders.length > 0) {
+          return streamNodeFile(request, reply, {
+            gameId,
+            fileId: plan.fileId,
+            filePath: game.relPath,
+            sizeBytes: plan.sizeBytes,
+            modifiedAt: plan.modifiedAt,
+            userId,
+          });
+        }
+        throw ApiError.gone('That file is no longer available');
+      }
+
       return streamFile(request, reply, {
         absolutePath: absolute,
         downloadName: path.basename(game.relPath),
@@ -433,10 +500,7 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       const userId = resolveDownloadUser(request, gameId, fileId);
       const { game, libraryPath } = loadGame(gameId);
 
-      const file = db.select().from(gameFiles).where(eq(gameFiles.id, fileId)).get();
-      if (!file || file.gameId !== gameId) {
-        throw ApiError.notFound('File not found');
-      }
+      const file = fileWithinEntry(gameId, fileId);
 
       if (!config.servesLocalFiles) {
         return streamNodeFile(request, reply, {
@@ -449,12 +513,32 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      const gameRoot = resolveWithin(libraryPath, game.relPath);
       if (game.kind !== 'archive' || !game.relPath.toLowerCase().endsWith('.zip')) {
         throw ApiError.conflict('Only ZIP packages can be downloaded');
       }
-      const candidate = gameRoot;
-      const absolute = await assertRealPathWithin(libraryPath, candidate);
+
+      /*
+       * This server holds files, but not necessarily *this* file: the client
+       * may be asking for the copy on another machine, either because the
+       * entry's own bytes have moved or because that copy is the one the
+       * manifest described. Only a file belonging to this entry's own row can
+       * be read from this disk; anything else is fetched from whoever holds it.
+       */
+      const local = file.gameId === gameId ? resolveWithin(libraryPath, game.relPath) : null;
+      const absolute = local
+        ? await assertRealPathWithin(libraryPath, local).catch(() => null)
+        : null;
+
+      if (!absolute || !(await exists(absolute))) {
+        return streamNodeFile(request, reply, {
+          gameId,
+          fileId: file.id,
+          filePath: file.relPath,
+          sizeBytes: file.sizeBytes,
+          modifiedAt: file.modifiedAt,
+          userId,
+        });
+      }
 
       return streamFile(request, reply, {
         absolutePath: absolute,

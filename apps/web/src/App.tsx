@@ -26,6 +26,7 @@ import { AdminClientPage } from './pages/admin/AdminClientPage.js';
 import { AdminFeaturedPage } from './pages/admin/AdminFeaturedPage.js';
 import { AdminInvitesPage } from './pages/admin/AdminInvitesPage.js';
 import { AdminLibrariesPage } from './pages/admin/AdminLibrariesPage.js';
+import { AdminDuplicatesPage } from './pages/admin/AdminDuplicatesPage.js';
 import { AdminNodesPage } from './pages/admin/AdminNodesPage.js';
 import { AdminNodeAnalyticsPage } from './pages/admin/AdminNodeAnalyticsPage.js';
 import { AdminNodeEnrolmentPage } from './pages/admin/AdminNodeEnrolmentPage.js';
@@ -131,6 +132,7 @@ export function App() {
           <Route path="catalog">
             <Route index element={<AdminCatalogPage />} />
             <Route path="matches" element={<AdminMetadataMatchesPage />} />
+            <Route path="duplicates" element={<AdminDuplicatesPage />} />
             <Route path="achievements" element={<AdminAchievementsPage />} />
             <Route path="featured" element={<AdminFeaturedPage />} />
             <Route path="save-paths" element={<AdminSavePathsPage />} />

@@ -252,8 +252,20 @@ export class HealthService {
   }
 
   private countGames(where?: SQL): number {
-    const query = this.db.select({ n: count() }).from(games);
-    const row = where ? query.where(where).get() : query.get();
+    /*
+     * Entries, never copies.
+     *
+     * A game held on a second machine is a second row and the same game. Left
+     * in, every count on this page — unmatched, missing, without a launch
+     * rule — would double the day a library was mirrored, and an operator
+     * would go looking for work that does not exist.
+     */
+    const entries = isNull(games.mergedIntoId);
+    const row = this.db
+      .select({ n: count() })
+      .from(games)
+      .where(where ? and(entries, where) : entries)
+      .get();
     return Number(row?.n ?? 0);
   }
 
@@ -263,7 +275,7 @@ export class HealthService {
       .select({ n: count() })
       .from(games)
       .leftJoin(gameLaunchRules, eq(gameLaunchRules.gameId, games.id))
-      .where(and(isNull(games.missingAt), isNull(gameLaunchRules.id)))
+      .where(and(isNull(games.missingAt), isNull(games.mergedIntoId), isNull(gameLaunchRules.id)))
       .get();
     return Number(row?.n ?? 0);
   }
@@ -274,7 +286,7 @@ export class HealthService {
       .select({ n: count() })
       .from(games)
       .leftJoin(gameSaveRules, eq(gameSaveRules.gameId, games.id))
-      .where(and(isNull(games.missingAt), isNull(gameSaveRules.id)))
+      .where(and(isNull(games.missingAt), isNull(games.mergedIntoId), isNull(gameSaveRules.id)))
       .get();
     return Number(row?.n ?? 0);
   }
@@ -294,6 +306,7 @@ export class HealthService {
         .where(
           and(
             isNull(games.missingAt),
+            isNull(games.mergedIntoId),
             sql`EXISTS (SELECT 1 FROM game_achievement_rules r WHERE r.game_id = ${games.id})`,
             sql`NOT EXISTS (SELECT 1 FROM game_save_rules s WHERE s.game_id = ${games.id})`,
           ),

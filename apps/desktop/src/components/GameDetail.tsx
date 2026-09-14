@@ -31,6 +31,7 @@ import {
   type SaveRulePayload,
 } from '../lib/ipc.js';
 import { useAddToLibrary } from '../hooks/useLibrary.js';
+import { DownloadHosts } from './DownloadHosts.js';
 import {
   Artwork,
   Badge,
@@ -386,6 +387,8 @@ export function GameDetailPanel({
                   </p>
                 </section>
               ) : null}
+
+              <DownloadHosts gameId={gameId} copies={game.copies ?? []} />
 
               <AchievementSection
                 achievements={achievementsQuery.data ?? []}

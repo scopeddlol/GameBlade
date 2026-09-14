@@ -481,14 +481,36 @@ export class ScannerService {
     const vanished = [...existing.keys()].filter((relPath) => !seen.has(relPath));
     if (vanished.length > 0) {
       for (const batch of chunk(vanished, 400)) {
+        const at = new Date().toISOString();
+        // The per-row fact first, then the entry-level one — which is withheld
+        // while another machine still holds a copy of the same entry.
         this.db
           .update(games)
-          .set({ missingAt: new Date().toISOString() })
+          .set({ ownMissingAt: at })
+          .where(
+            and(
+              eq(games.libraryId, library.id),
+              inArray(games.relPath, batch),
+              isNull(games.ownMissingAt),
+            ),
+          )
+          .run();
+
+        this.db
+          .update(games)
+          .set({ missingAt: at })
           .where(
             and(
               eq(games.libraryId, library.id),
               inArray(games.relPath, batch),
               isNull(games.missingAt),
+              // Not missing if another machine still holds a copy of the same
+              // entry: the files moved rather than vanished, and the catalog
+              // should follow them rather than flag the whole migration.
+              sql`NOT EXISTS (
+                SELECT 1 FROM games copy
+                 WHERE copy.merged_into_id = ${games.id} AND copy.missing_at IS NULL
+              )`,
             ),
           )
           .run();
@@ -542,7 +564,7 @@ export class ScannerService {
           const now = new Date().toISOString();
           this.db
             .update(games)
-            .set({ scannedAt: now, updatedAt: now, missingAt: null })
+            .set({ scannedAt: now, updatedAt: now, missingAt: null, ownMissingAt: null })
             .where(eq(games.id, current.id))
             .run();
           this.advance({ updated: this.progress.updated + 1 });
@@ -559,6 +581,7 @@ export class ScannerService {
           scannedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           missingAt: null,
+          ownMissingAt: null,
         })
         .where(eq(games.id, current.id))
         .run();

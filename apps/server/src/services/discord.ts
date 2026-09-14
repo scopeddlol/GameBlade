@@ -738,6 +738,9 @@ export class DiscordService {
         and(
           gt(games.addedAt, s.discordLastAnnouncedAt),
           isNull(games.missingAt),
+          // A second machine's copy of a game the archive already had is not
+          // an arrival worth announcing.
+          isNull(games.mergedIntoId),
           ne(games.matchStatus, 'unmatched'),
         ),
       )

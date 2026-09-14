@@ -13,6 +13,7 @@ import { ClientButtonService } from './services/clientButtons.js';
 import { CollectionService } from './services/collections.js';
 import { ChecksumService } from './services/checksums.js';
 import { CatalogIngestService } from './services/catalogIngest.js';
+import { DuplicateService } from './services/duplicates.js';
 import { NodeStatusService } from './services/nodeStatus.js';
 import { NodeBackupService } from './services/nodeBackups.js';
 import { ChunkService } from './services/chunks.js';
@@ -64,6 +65,8 @@ export interface GamebladeContext {
   mesh: MeshService;
   /** Folds a catalog a node scanned into this database, preserving game ids. */
   catalogIngest: CatalogIngestService;
+  /** One game on several machines: finds the copies and keeps them one entry. */
+  duplicates: DuplicateService;
   /** What this machine can say about itself when it is a node. */
   nodeStatus: NodeStatusService;
   /** Complete Coordinator archives retained on a Node's own data volume. */
@@ -148,7 +151,12 @@ export function createContext(
   const checksums = new ChecksumService(db, logger, hashConcurrency);
   const chunks = new ChunkService(db, logger, hashConcurrency);
   const mesh = new MeshService(db, logger);
-  const catalogIngest = new CatalogIngestService(db, logger);
+  const duplicates = new DuplicateService(db, logger);
+  // The ingest folds copies together as it goes: a second machine's first
+  // report is a whole library of them, and a store that shows every game twice
+  // for the minutes before somebody presses a button is a store that looks
+  // broken.
+  const catalogIngest = new CatalogIngestService(db, logger, duplicates);
   const nodeStatus = new NodeStatusService(db, config, scanner, chunks, nodeBackups);
   const auth = new AuthService(db);
   const downloadTokens = new DownloadTokenService(db, config.sessionSecret);
@@ -209,6 +217,7 @@ export function createContext(
     chunks,
     mesh,
     catalogIngest,
+    duplicates,
     nodeStatus,
     nodeBackups,
     downloadTokens,

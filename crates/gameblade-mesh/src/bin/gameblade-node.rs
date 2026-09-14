@@ -30,9 +30,10 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use gameblade_mesh::agent::{
     AgentState, CatalogGame, ChunkStore, LibraryChunks, LibraryIndex, RETRY_DELAY,
 };
+use gameblade_mesh::direct::{serve as serve_direct, DirectServer, DirectStats};
 use gameblade_mesh::{
-    library_roots, MeshError, MeshResult, NodeIdentity, DEFAULT_STATE_PATH, MULTI_LIBRARY_ROOT,
-    UNCONFIGURED_POLL,
+    library_roots, MeshError, MeshResult, NodeIdentity, DEFAULT_DIRECT_PORT, DEFAULT_STATE_PATH,
+    MULTI_LIBRARY_ROOT, UNCONFIGURED_POLL,
 };
 use serde::Deserialize;
 use sha2::Digest;
@@ -46,6 +47,19 @@ struct Registration {
     node_token: String,
     #[serde(rename = "heartbeatSeconds", default = "default_heartbeat")]
     heartbeat_seconds: u64,
+    /// The key this node checks delivery grants against, when it serves
+    /// clients directly. Absent from an older Coordinator, which simply means
+    /// direct delivery stays off until one that sends it answers a heartbeat.
+    #[serde(rename = "coordinatorPublicKey", default)]
+    coordinator_public_key: Option<String>,
+}
+
+/// What a heartbeat answers with. Only the key matters to this process; the
+/// rest is for the Coordinator's own bookkeeping.
+#[derive(Debug, Deserialize)]
+struct HeartbeatReply {
+    #[serde(rename = "coordinatorPublicKey", default)]
+    coordinator_public_key: Option<String>,
 }
 
 struct Runtime {
@@ -55,6 +69,10 @@ struct Runtime {
     index: Arc<RwLock<LibraryIndex>>,
     chunks: Arc<LibraryChunks>,
     heartbeat: Duration,
+    /// Serving clients straight from this machine, when it has an address.
+    direct: Option<Arc<DirectServer>>,
+    /// What this node advertises to the Coordinator; empty retracts an address.
+    public_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,6 +246,7 @@ async fn start(server_url: &str, state_path: &std::path::Path) -> MeshResult<Run
             node_id,
             node_token,
             Duration::from_secs(30),
+            state_path,
         ));
     }
 
@@ -307,7 +326,7 @@ async fn start(server_url: &str, state_path: &std::path::Path) -> MeshResult<Run
     state.coordinator_url = Some(server_url.to_string());
     state.save(state_path)?;
 
-    Ok(assemble(
+    let agent = assemble(
         identity,
         registration.node_id,
         registration.node_token,
@@ -315,7 +334,17 @@ async fn start(server_url: &str, state_path: &std::path::Path) -> MeshResult<Run
         // every node into a hot loop, and one asking for an hour would leave
         // them all listed long after they died.
         Duration::from_secs(registration.heartbeat_seconds.clamp(10, 120)),
-    ))
+        state_path,
+    );
+
+    // Registration is the first place the Coordinator's key can arrive, and a
+    // node that has it before its listener opens can serve the very first
+    // client rather than refusing until the first heartbeat comes round.
+    if let (Some(direct), Some(key)) = (&agent.direct, &registration.coordinator_public_key) {
+        direct.set_coordinator_key(key).await;
+    }
+
+    Ok(agent)
 }
 
 /// Build the agent around credentials, however they were obtained.
@@ -324,9 +353,28 @@ fn assemble(
     node_id: String,
     node_token: String,
     heartbeat: Duration,
+    state_path: &std::path::Path,
 ) -> Runtime {
     let index = Arc::new(RwLock::new(LibraryIndex::new()));
     let chunks = Arc::new(LibraryChunks::new(Arc::clone(&index)));
+
+    /*
+     * Direct delivery is opt-in by having an address, not by a switch.
+     *
+     * A node that nobody can reach gains nothing from a listener and an
+     * operator who has not forwarded a port has not agreed to run one. So the
+     * question asked here is the one that actually decides it: is there an
+     * address to give clients? A VPS has one; a machine behind a home router
+     * has not, and keeps the proxy path that has always worked.
+     */
+    let public_url = direct_public_url(state_path);
+    let direct = public_url.as_ref().map(|_| {
+        Arc::new(DirectServer::new(
+            node_id.clone(),
+            Arc::clone(&chunks) as Arc<dyn ChunkStore>,
+            Arc::new(DirectStats::default()),
+        ))
+    });
 
     Runtime {
         identity,
@@ -335,7 +383,29 @@ fn assemble(
         index,
         chunks,
         heartbeat,
+        direct,
+        public_url,
     }
+}
+
+/// The address this node tells clients to come to, if it has been given one.
+///
+/// The environment first, then whatever the node's own setup page wrote — the
+/// same order as every other setting here, so an operator who prefers to
+/// declare things in a compose file keeps declaring them.
+fn direct_public_url(state_path: &std::path::Path) -> Option<String> {
+    optional("GAMEBLADE_PUBLIC_URL")
+        .or_else(|| AgentState::load(state_path).public_url)
+        .map(|url| url.trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
+}
+
+/// Which port the direct listener binds. Only consulted when there is an
+/// address to advertise, so the default is never a port opened by surprise.
+fn direct_port() -> u16 {
+    optional("GAMEBLADE_PUBLIC_PORT")
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_DIRECT_PORT)
 }
 
 /// Whether the coordinator has just told us this credential is no longer good.
@@ -353,6 +423,7 @@ fn credential_rejected(status: reqwest::StatusCode) -> bool {
 ///
 /// A liveness-only heartbeat deliberately omits `games`: the coordinator then
 /// preserves the last accepted catalog while a large library is being checked.
+#[allow(clippy::too_many_arguments)]
 async fn send_heartbeat(
     http: &reqwest::Client,
     server_url: &str,
@@ -361,11 +432,24 @@ async fn send_heartbeat(
     node_token: &Arc<RwLock<String>>,
     state_path: &std::path::Path,
     games: Option<Vec<serde_json::Value>>,
+    direct: Option<&Arc<DirectServer>>,
+    public_url: Option<&str>,
 ) {
     let mut body = serde_json::json!({ "endpoints": [] });
     if let Some(games) = games {
         body["games"] = serde_json::Value::Array(games);
     }
+
+    /*
+     * Re-advertised every time, including as an empty string.
+     *
+     * A node that has lost its address — a forward that was removed, a VPS
+     * that moved — has to be able to say so, and silence cannot mean that:
+     * silence is what an older agent sends. So the field is always present
+     * once this process knows its own answer, and an empty value retracts
+     * whatever the Coordinator had.
+     */
+    body["publicUrl"] = serde_json::Value::String(public_url.unwrap_or_default().to_string());
 
     let token = node_token.read().await.clone();
     let sent = http
@@ -377,7 +461,18 @@ async fn send_heartbeat(
         .await;
 
     match sent {
-        Ok(response) if response.status().is_success() => {}
+        Ok(response) if response.status().is_success() => {
+            // The key clients' grants are signed with. Taken on every
+            // heartbeat rather than once, so a Coordinator that rotates its
+            // key does not need a fleet of nodes restarted behind it.
+            if let Some(direct) = direct {
+                if let Ok(reply) = response.json::<HeartbeatReply>().await {
+                    if let Some(key) = reply.coordinator_public_key {
+                        direct.set_coordinator_key(&key).await;
+                    }
+                }
+            }
+        }
         Ok(response) if credential_rejected(response.status()) => {
             eprintln!(
                 "the coordinator rejected this node's credential ({}); registering again",
@@ -412,7 +507,73 @@ async fn run(agent: Runtime, server_url: String, library_roots: Vec<PathBuf>, st
         index,
         chunks,
         heartbeat,
+        direct,
+        public_url,
     } = agent;
+
+    /*
+     * Direct delivery, which can be switched on and off while this runs.
+     *
+     * The address comes from the node's own page as often as from the
+     * environment, and somebody who has just forwarded a port should not have
+     * to restart a container to use it. So the state file is re-read on every
+     * heartbeat and the listener follows: opened when an address appears,
+     * closed when one is taken away.
+     *
+     * The order matters in both directions. The listener is opened *before*
+     * the address is advertised — handing clients an address that answers
+     * nothing teaches every one of them to avoid this node — and the address
+     * is retracted before the listener is closed.
+     */
+    let mut listening: Option<tokio::task::JoinHandle<()>> = None;
+    let mut wanted = public_url.clone();
+
+    let open_direct = |wanted: Option<String>,
+                       listening: &mut Option<tokio::task::JoinHandle<()>>|
+     -> Option<String> {
+        match (&direct, wanted) {
+            (Some(server), Some(url)) => {
+                if listening.is_some() {
+                    return Some(url);
+                }
+                let port = direct_port();
+                match std::net::TcpListener::bind(("0.0.0.0", port)).and_then(|socket| {
+                    socket.set_nonblocking(true)?;
+                    tokio::net::TcpListener::from_std(socket)
+                }) {
+                    Ok(listener) => {
+                        println!("  direct:  {url} (listening on :{port})");
+                        let serving = Arc::clone(server);
+                        *listening = Some(tokio::spawn(async move {
+                            serve_direct(listener, serving).await
+                        }));
+                        Some(url)
+                    }
+                    Err(error) => {
+                        // Not fatal. This is still a perfectly good node over
+                        // its outbound connection, and a port conflict should
+                        // be one clear line rather than a restart loop.
+                        eprintln!(
+                            "could not open the direct delivery port {port}: {error}.                              Downloads still work through the coordinator."
+                        );
+                        None
+                    }
+                }
+            }
+            (_, _) => {
+                if let Some(handle) = listening.take() {
+                    handle.abort();
+                    println!("  direct:  off (the public address was removed)");
+                }
+                None
+            }
+        }
+    };
+
+    let mut advertised = open_direct(wanted.clone(), &mut listening);
+    if direct.is_none() {
+        println!("  direct:  off (no public address set)");
+    }
 
     // The credential rotates; the identity does not.
     //
@@ -491,6 +652,14 @@ async fn run(agent: Runtime, server_url: String, library_roots: Vec<PathBuf>, st
     loop {
         interval.tick().await;
 
+        // Somebody may have set — or cleared — this node's address on its page
+        // since the last tick.
+        let current = direct_public_url(&state_path);
+        if current != wanted {
+            wanted = current;
+            advertised = open_direct(wanted.clone(), &mut listening);
+        }
+
         // The first tick is immediate, so an already-enrolled node becomes
         // Active as soon as its process starts. Do this before the catalog
         // refresh: validating a large archive can take minutes and liveness
@@ -503,6 +672,10 @@ async fn run(agent: Runtime, server_url: String, library_roots: Vec<PathBuf>, st
             &node_token,
             &state_path,
             None,
+            direct.as_ref(),
+            // Always sent, even as an empty string: that is how an address
+            // that has gone away is retracted rather than left dialling.
+            Some(advertised.as_deref().unwrap_or_default()),
         )
         .await;
 
@@ -537,6 +710,10 @@ async fn run(agent: Runtime, server_url: String, library_roots: Vec<PathBuf>, st
             &node_token,
             &state_path,
             Some(games),
+            direct.as_ref(),
+            // Always sent, even as an empty string: that is how an address
+            // that has gone away is retracted rather than left dialling.
+            Some(advertised.as_deref().unwrap_or_default()),
         )
         .await;
     }

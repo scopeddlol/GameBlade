@@ -1271,4 +1271,65 @@ export const migrations: Migration[] = [
       ALTER TABLE games ADD COLUMN archive_inspected_at TEXT;
     `,
   },
+  {
+    id: '0032_multi_host_games',
+    sql: /* sql */ `
+      -- One game, more than one machine.
+      --
+      -- Moving a library onto a second host used to produce a second catalog
+      -- entry for every game: the node reports into its own library, the
+      -- coordinator matches by relative path within a library, and two
+      -- libraries never match each other. Both entries were real — each is a
+      -- copy on a real disk — but only one of them should be in a store.
+      --
+      -- So the second row is kept and pointed at the first. It keeps its own
+      -- library, path, files and chunk hashes, which is what lets its machine
+      -- go on serving it; it simply stops being an entry of its own. Nothing
+      -- is deleted and nothing is rewritten, so an operator who disagrees sets
+      -- this back to NULL and has two entries again.
+      ALTER TABLE games ADD COLUMN merged_into_id TEXT;
+      -- Whether this row's own files are there, as distinct from whether the
+      -- entry can be served at all. Both facts are needed at once the moment a
+      -- game exists on two machines: the local copy can be deleted (this is
+      -- set) while the entry stays perfectly downloadable (missing_at stays
+      -- NULL), and when the other machine's copy goes too, this is what lets
+      -- the entry be marked gone rather than left silently available.
+      ALTER TABLE games ADD COLUMN own_missing_at TEXT;
+      ALTER TABLE games ADD COLUMN merged_at TEXT;
+      ALTER TABLE games ADD COLUMN merge_reason TEXT
+        CHECK (merge_reason IN ('content', 'package', 'metadata', 'manual'));
+      UPDATE games SET own_missing_at = missing_at WHERE missing_at IS NOT NULL;
+      CREATE INDEX games_merged_into_idx ON games(merged_into_id);
+      CREATE INDEX games_live_merged_sort_idx ON games(merged_into_id, missing_at, sort_title);
+
+      -- Where a node can be reached without the coordinator in the data path.
+      --
+      -- Advertised by the node on every heartbeat rather than configured here:
+      -- only the machine knows whether its port is actually reachable, and a
+      -- stale address is a connection every client waits out before falling
+      -- back. NULL is the ordinary case and costs nothing that was not already
+      -- being paid.
+      ALTER TABLE mesh_nodes ADD COLUMN public_url TEXT;
+      ALTER TABLE mesh_nodes ADD COLUMN direct_ok_at TEXT;
+      ALTER TABLE mesh_nodes ADD COLUMN direct_bytes_served INTEGER NOT NULL DEFAULT 0;
+
+      -- What clients measured, so the next person starts with a tested order.
+      --
+      -- One row per account and source. Advisory only: it decides what is
+      -- tried first and nothing else, and every arriving chunk is verified
+      -- against its hash regardless of who supplied it.
+      CREATE TABLE mesh_source_probes (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source_key TEXT NOT NULL,
+        node_id TEXT REFERENCES mesh_nodes(id) ON DELETE CASCADE,
+        transport TEXT NOT NULL CHECK (transport IN ('proxy', 'direct')),
+        latency_ms INTEGER,
+        bytes_per_second INTEGER,
+        ok INTEGER NOT NULL DEFAULT 1,
+        measured_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        PRIMARY KEY (user_id, source_key)
+      );
+      CREATE INDEX mesh_source_probes_node_idx ON mesh_source_probes(node_id, measured_at);
+    `,
+  },
 ];

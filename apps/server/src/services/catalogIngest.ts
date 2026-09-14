@@ -12,6 +12,7 @@ import {
 import { ApiError } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { parseTitle, toSearchTitle, toSortTitle } from '../lib/titles.js';
+import type { DuplicateService } from './duplicates.js';
 import type { Logger } from './metadata/service.js';
 
 export interface IngestResult {
@@ -70,6 +71,7 @@ export class CatalogIngestService {
   constructor(
     private readonly db: Db,
     private readonly logger: Logger,
+    private readonly duplicates: DuplicateService,
   ) {}
 
   /**
@@ -246,6 +248,7 @@ export class CatalogIngestService {
             scannedAt: now,
             updatedAt: now,
             missingAt: null,
+            ownMissingAt: null,
           })
           .where(eq(games.id, id))
           .run();
@@ -266,6 +269,34 @@ export class CatalogIngestService {
         .where(eq(meshNodes.id, nodeId))
         .run();
     });
+
+    /*
+     * Fold copies of the same game together, now rather than on a timer.
+     *
+     * This is the moment duplicates are created. A second machine holding a
+     * library that already exists here reports it into a library of its own —
+     * it has to, because relative paths are only meaningful within one — and
+     * every game in it arrives as a new entry beside the one already in the
+     * catalog. Left alone until somebody noticed, the store would show the
+     * whole archive twice.
+     *
+     * Only run when something actually changed. The steady state is a node
+     * reporting the same catalog every few minutes and every entry coming back
+     * unchanged, which cannot have created a duplicate and should not cost a
+     * pass over the catalog.
+     */
+    if (result.added > 0 || result.updated > 0 || result.missing > 0) {
+      try {
+        this.duplicates.autoMerge();
+        // A copy that has come back brings its entry back with it, whether the
+        // entry went missing before this report or years ago.
+        this.duplicates.refreshEntryPresence();
+      } catch (error) {
+        // A failed merge leaves two entries, which is untidy. A failed ingest
+        // loses a catalog, so this never becomes that.
+        this.logger.warn({ err: error, nodeId }, 'could not fold duplicate entries after ingest');
+      }
+    }
 
     this.logger.info({ nodeId, library: library.name, ...result }, 'node catalog ingested');
     return result;
@@ -371,9 +402,26 @@ export class CatalogIngestService {
    * A node that is mid-sync, or whose drive did not mount, reports a short
    * catalog. Deleting the difference would destroy hand-made metadata over a
    * temporary condition, so this marks and the operator decides.
+   *
+   * An entry with a live copy on another machine is never marked: the bytes
+   * are still served, from somewhere else, which is the whole point of holding
+   * one entry across several hosts.
    */
   private markMissing(tx: Tx, libraryId: string, vanished: string[], at: string): void {
     for (const batch of batched(vanished, 400)) {
+      // The per-row fact, recorded whatever else holds this entry. It is what
+      // lets the entry be marked gone later, when the last other copy goes.
+      tx.update(games)
+        .set({ ownMissingAt: at })
+        .where(
+          and(
+            eq(games.libraryId, libraryId),
+            inArray(games.relPath, batch),
+            isNull(games.ownMissingAt),
+          ),
+        )
+        .run();
+
       tx.update(games)
         .set({ missingAt: at })
         .where(
@@ -381,6 +429,14 @@ export class CatalogIngestService {
             eq(games.libraryId, libraryId),
             inArray(games.relPath, batch),
             isNull(games.missingAt),
+            // An entry another machine still holds is not missing; it has
+            // moved. This is precisely what happens when a library is copied
+            // to a second host and then deleted from the first, and flagging
+            // it would empty the catalog over a successful migration.
+            sql`NOT EXISTS (
+              SELECT 1 FROM games copy
+               WHERE copy.merged_into_id = ${games.id} AND copy.missing_at IS NULL
+            )`,
           ),
         )
         .run();

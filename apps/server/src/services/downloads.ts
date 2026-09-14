@@ -8,7 +8,11 @@ import {
   verify as verifyBytes,
   type KeyObject,
 } from 'node:crypto';
-import { DOWNLOAD_TOKEN_TTL_SECONDS } from '@gameblade/shared';
+import {
+  DOWNLOAD_TOKEN_TTL_SECONDS,
+  MESH_GRANT_TTL_SECONDS,
+  type DeliveryGrantClaims,
+} from '@gameblade/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
@@ -135,6 +139,57 @@ export class DownloadTokenService {
       token: this.encode(payload),
       expiresAt: new Date(expiresAt * 1000).toISOString(),
     };
+  }
+
+  /**
+   * A signed permission for one client to pull one file straight from one node.
+   *
+   * This is what makes direct delivery possible without the node keeping an
+   * account database: it verifies the Coordinator's signature over these
+   * claims, checks that it is the node named, checks the clock, and serves.
+   * Nothing else about the client is known to it, and nothing else needs to be.
+   *
+   * Signed with the same Ed25519 key as download tokens, and deliberately so —
+   * a node already receives that public key when it registers, and a second
+   * key would be a second thing to rotate, distribute and get wrong. The `v`
+   * and the node id in the payload keep the two kinds of token from ever being
+   * mistaken for one another.
+   */
+  issueDeliveryGrant(
+    claims: Omit<DeliveryGrantClaims, 'v' | 'expiresAt' | 'nonce'>,
+    ttlSeconds = MESH_GRANT_TTL_SECONDS,
+  ): { grant: string; expiresAt: string } {
+    const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const payload: DeliveryGrantClaims = {
+      v: 1,
+      ...claims,
+      expiresAt,
+      nonce: randomBytes(9).toString('base64url'),
+    };
+
+    return {
+      grant: this.encode(payload),
+      expiresAt: new Date(expiresAt * 1000).toISOString(),
+    };
+  }
+
+  /**
+   * Read back a grant this Coordinator issued.
+   *
+   * Only the Coordinator's own fallback path needs this — a node verifies
+   * grants itself, which is the point of signing them — but a proxied retry
+   * after a direct fetch failed arrives carrying one, and refusing to look at
+   * it would mean the client had to hold two credentials for one download.
+   */
+  verifyDeliveryGrant(grant: string): DeliveryGrantClaims {
+    const claims = this.decode<DeliveryGrantClaims>(grant);
+    if (claims.v !== 1 || !claims.nodeId) {
+      throw ApiError.forbidden('That is not a delivery grant');
+    }
+    if (claims.expiresAt * 1000 <= Date.now()) {
+      throw new ApiError(403, 'token_expired', 'This delivery grant has expired.');
+    }
+    return claims;
   }
 
   verify(token: string): DownloadClaims {

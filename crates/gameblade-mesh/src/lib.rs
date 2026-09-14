@@ -6,6 +6,7 @@
 //! the Desktop over the same public HTTPS service used by the rest of GameBlade.
 
 pub mod agent;
+pub mod direct;
 pub mod error;
 pub mod identity;
 pub use error::{MeshError, MeshResult, SourceHealth};
@@ -88,3 +89,10 @@ pub fn discover_library_roots(single: &str, many: &str) -> Vec<std::path::PathBu
 /// Short, because somebody is standing at the setup page waiting for this to
 /// notice, and the check is one small file read.
 pub const UNCONFIGURED_POLL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The port a node listens on for direct delivery unless it is told otherwise.
+///
+/// Off by default all the same: a node serves directly only when it has been
+/// given an address to advertise, because a listener nobody can reach is a
+/// port open for no reason.
+pub const DEFAULT_DIRECT_PORT: u16 = 8099;

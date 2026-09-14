@@ -237,6 +237,11 @@ Accepts the catalog's usual filters — `search`, `genre`, `platform`,
 per-user flags the clients see (owned, favourited, played) mean nothing for a
 key and are omitted.
 
+One entry per game, not one per copy. A game held on several machines — a home
+server and a VPS, say — is a single row here, and `hostCount` says how many of
+those machines are online and holding it right now. `/v1/stats` counts the same
+way, so a mirrored archive does not appear to have doubled in size.
+
 ---
 
 ### `GET /v1/stats`

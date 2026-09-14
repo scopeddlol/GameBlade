@@ -1,5 +1,29 @@
 # GameBlade Changelog
 
+## Unreleased
+
+### One game, several machines
+
+- Moving a library onto a second host no longer doubles the catalog. A copy of a game that is already in the archive is folded into the entry that exists, so the Store shows one card and it keeps every achievement, save rule, collection entry and hour of playtime attached to it.
+- Nothing is deleted. The folded-in row keeps its own library, path, files and chunk hashes, which is what lets its machine go on serving them; it simply stops being an entry of its own, and one column back to `NULL` undoes it.
+- Only proof merges automatically: identical package bytes, or the same package name at exactly the same size. The same identified game at two different sizes is either two builds or a bad copy, so it is offered in **Admin → Catalog → Duplicates** with the evidence rather than decided by a rule.
+- Downloads follow the game rather than the machine. The Coordinator settles on the package the most online hosts agree on and addresses each host in the ids that host knows its own copy by, so a chunk can come from whichever one is up.
+- Deleting the local copy after a move leaves the entry available from wherever it now lives, instead of flagging the whole migration as missing files. When the last copy goes, the entry is marked gone honestly.
+
+### Downloads straight from a Node
+
+- A Node that can be reached on its own address now hands bytes to players directly, instead of every one of them being relayed by the Coordinator — which spends its uplink twice per byte and, on a small VPS, is the ceiling on everybody's downloads.
+- Set the address on the Node's own page under **Direct downloads**, or with `GAMEBLADE_PUBLIC_URL`. The listener opens on port 8099 (`GAMEBLADE_PUBLIC_PORT` to change it), takes effect within a heartbeat, and closes again when the address is cleared.
+- Access is a short-lived grant the Coordinator signs, naming one Node, one file and an expiry. The Node verifies it against the Coordinator's public key — received at registration and on every heartbeat — and can never mint one. Chunk hashes are checked exactly as before, so a direct source cannot serve different bytes than the relay would.
+- The relay is unchanged and remains the fallback for every client, every Node without an address, and every moment a direct fetch fails. Bytes delivered directly are reported back, so monthly allowances and Node statistics stay correct.
+
+### The client picks the fastest host, and can show you why
+
+- The Desktop now spreads a download's chunks across every available host in proportion to what each is actually delivering, re-decided per chunk. A host that saturates loses its share within seconds; one that stops answering twice sits out the rest of the download and everything falls back to the server.
+- A game's page lists the machines holding it — which are online, which serve directly — and **Test download speeds** measures each of them by moving real bytes over the real route, with a bar so "three times faster" is visible rather than arithmetic.
+- Measurements are reported back, so the next person's client starts with an order somebody has actually tested rather than a guess.
+- **Admin → Nodes** shows which Nodes serve directly, how much they have delivered that way, and what players have measured against them — the one number that says whether a port forward is doing anything.
+
 ## Version 0.8.2 - September 1, 2026
 
 ### A real Node control center

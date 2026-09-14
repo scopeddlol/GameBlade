@@ -32,6 +32,11 @@ file, no build step, and everything below is covered there in depth.
   need no inbound port and set themselves up from a local page. Every game is
   distributed as one ZIP64 package, split into verified 10 MiB chunks so all
   Desktop connections start immediately and stay busy.
+- **One game, several hosts.** The same game on a home server and a VPS is one
+  catalog entry with two copies behind it, not two entries. Downloads use
+  whichever host is up and quickest, and a node that can be reached on its own
+  address serves players directly instead of the Coordinator relaying every
+  byte — with the relay always there as the fallback.
 
 | Piece                        | Who uses it   | What it does                                                            |
 | ---------------------------- | ------------- | ----------------------------------------------------------------------- |
