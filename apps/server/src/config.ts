@@ -102,6 +102,16 @@ const envSchema = z.object({
 
   /** Where a node reports its catalog. Required when ROLE is `node`. */
   COORDINATOR_URL: z.string().url().optional(),
+  /**
+   * Where players' clients can reach this node directly, when it has an
+   * address of its own.
+   *
+   * Read by both halves of a node — this process shows it on the node's page,
+   * the agent beside it advertises it and opens the listener — so declaring it
+   * once here configures both. Unset is the ordinary case, and every transfer
+   * then takes the outbound path through the coordinator that always worked.
+   */
+  GAMEBLADE_PUBLIC_URL: z.string().url().optional(),
 
   /** One-time code from Admin → Nodes. Only needed once. */
   ENROLMENT_TOKEN: z.string().optional(),
@@ -246,6 +256,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     reportsCatalogUpstream: e.ROLE === 'node',
     /** Where a node sends its catalog. Only meaningful in the `node` role. */
     coordinatorUrl: e.COORDINATOR_URL?.replace(/\/+$/, '') ?? null,
+    /** A node's own address, when clients can reach it without the coordinator. */
+    nodePublicUrl: e.GAMEBLADE_PUBLIC_URL?.replace(/\/+$/, '') ?? null,
     /** Spent on first enrolment; absent afterwards is normal. */
     enrolmentToken: e.ENROLMENT_TOKEN ?? null,
     nodeStatePath: path.join(dataDir, 'node-state.json'),

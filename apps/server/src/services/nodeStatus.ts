@@ -23,6 +23,8 @@ interface NodeStateFile {
   coordinatorUrl?: string;
   enrolmentToken?: string;
   registrationError?: string;
+  /** Where clients may reach this machine directly, if it has an address. */
+  publicUrl?: string;
 }
 
 export interface ReportAttempt {
@@ -53,6 +55,15 @@ export interface NodeStatusSnapshot {
   nodeId: string | null;
   /** Whether the mesh agent has generated this node's key yet. */
   keyPresent: boolean;
+  /**
+   * Where players' clients can reach this machine without the Coordinator in
+   * the middle, when somebody has given it an address.
+   *
+   * Null is the ordinary case and costs only the hop that has always been
+   * there. Set on a machine with a routable address — a VPS, or a forwarded
+   * port — and downloads stop being limited by the Coordinator's uplink.
+   */
+  publicUrl: string | null;
   libraries: NodeLibrary[];
   configuredPaths: string[];
   /** Whether the roots above were read off the mounts rather than declared. */
@@ -196,6 +207,9 @@ export class NodeStatusService {
       enrolmentError: state.registrationError ?? null,
       nodeId: state.nodeId ?? null,
       keyPresent: Boolean(state.secretKey),
+      // The environment when an operator declared one, else whatever the page
+      // wrote — the same order the agent beside this process resolves it in.
+      publicUrl: this.config.nodePublicUrl ?? state.publicUrl ?? null,
       libraries: rows.map((library, index) => ({
         id: library.id,
         name: library.name,

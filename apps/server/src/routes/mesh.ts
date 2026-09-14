@@ -55,7 +55,7 @@ interface CatalogBatchSession {
 }
 
 export async function meshRoutes(app: FastifyInstance): Promise<void> {
-  const { db, mesh, settings, chunks, catalogIngest, backups } = app.gameblade;
+  const { db, mesh, settings, chunks, catalogIngest, backups, downloadTokens } = app.gameblade;
 
   // In memory on purpose. A coordinator restart between pieces makes the next
   // piece fail safely and the node retries the whole report; persisting partial
@@ -114,6 +114,16 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
       // it re-registers with its key rather than recovering it.
       nodeToken,
       heartbeatSeconds: MESH_HEARTBEAT_INTERVAL_SECONDS,
+      /*
+       * The public half of the key this Coordinator signs with.
+       *
+       * A node serving a client directly has to check that the client's grant
+       * came from here, and this is everything it needs to do that and nothing
+       * it needs to mint one. Sent to every node whether or not it serves
+       * directly: it is public by definition, and a node that gains an address
+       * later should not have to re-register to become useful.
+       */
+      coordinatorPublicKey: downloadTokens.publicKeyBase64(),
     };
   });
 
@@ -131,9 +141,16 @@ export async function meshRoutes(app: FastifyInstance): Promise<void> {
       nodeId,
       endpoints: [],
       games: body.games,
+      publicUrl: body.publicUrl,
     });
 
-    return { ...result, heartbeatSeconds: MESH_HEARTBEAT_INTERVAL_SECONDS };
+    return {
+      ...result,
+      heartbeatSeconds: MESH_HEARTBEAT_INTERVAL_SECONDS,
+      // Repeated on every heartbeat rather than only at registration, so
+      // rotating this key does not mean restarting a fleet of nodes.
+      coordinatorPublicKey: downloadTokens.publicKeyBase64(),
+    };
   });
 
   /**

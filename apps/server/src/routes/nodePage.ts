@@ -325,6 +325,16 @@ export function renderNodePage(status: NodeStatusSnapshot, basePath = ''): strin
           </section>
 
           <section class="wide">
+            <div class="panel-head">
+              <div>
+                <h2>Direct downloads</h2>
+                <p>Let players fetch from this machine instead of through the Coordinator.</p>
+              </div>
+            </div>
+            ${directPanel(status)}
+          </section>
+
+          <section class="wide">
             <div class="panel-head"><div><h2>Libraries</h2><p>Every mounted root managed by this Node.</p></div></div>
             <div id="live-libraries">${librariesDetail(status)}</div>
           </section>
@@ -631,6 +641,38 @@ export const NODE_PAGE_SCRIPT = `(function () {
 
   scheduleLive(refreshIn);
 
+  /* ------------------------------------------------------ direct downloads */
+
+  var direct = document.getElementById('direct');
+  if (direct) {
+    var directMsg = document.getElementById('direct-msg');
+    var directButton = direct.querySelector('button');
+
+    direct.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var url = direct.elements.publicUrl.value.trim();
+      directButton.disabled = true;
+      directMsg.className = 'msg';
+      directMsg.textContent = 'Saving…';
+
+      request('/api/node/direct', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ publicUrl: url })
+      }).then(function () {
+        directMsg.className = 'msg ok';
+        directMsg.textContent = url
+          ? 'Saved. This node starts offering that address within a heartbeat.'
+          : 'Saved. Direct downloads are off; everything goes through the Coordinator.';
+        directButton.disabled = false;
+      }).catch(function (error) {
+        directMsg.className = 'msg bad';
+        directMsg.textContent = error.message;
+        directButton.disabled = false;
+      });
+    });
+  }
+
   /* --------------------------------------------------------------- setup */
 
   if (!form) return;
@@ -734,6 +776,47 @@ function coordinatorDetails(status: NodeStatusSnapshot): string {
   return `<dt>Reports to</dt><dd>${link}</dd>
           <dt>Enrolment</dt><dd>${enrolment(status)}</dd>
           <dt>Last report</dt><dd>${lastReport(status)}</dd>`;
+}
+
+/**
+ * Where this machine can be reached, and what that changes.
+ *
+ * On its own page rather than in Admin → Nodes because only somebody standing
+ * at this machine knows the answer: whether a port is forwarded, what the
+ * hostname resolves to from outside, whether there is a reverse proxy in front
+ * of it. The Coordinator cannot discover any of that and should not guess.
+ *
+ * Empty is a perfectly good answer and the default one. It means every
+ * download takes the outbound path it always has, which works from behind any
+ * router and costs the Coordinator's uplink twice per byte.
+ */
+function directPanel(status: NodeStatusSnapshot): string {
+  const state = status.publicUrl
+    ? `<p class="msg ok"><span class="dot">●</span>Players are offered
+       <code>${escapeHtml(status.publicUrl)}</code> and fall back to the Coordinator
+       whenever it does not answer.</p>`
+    : `<p class="msg"><span class="dot">●</span>Off. Every download is relayed by the
+       Coordinator, which always works and uses its bandwidth twice over.</p>`;
+
+  return `
+      <form id="direct" autocomplete="off" class="inline-form">
+        <label>
+          <span>Public address</span>
+          <input name="publicUrl" type="url" spellcheck="false"
+                 placeholder="https://vps.example.com:8099"
+                 value="${status.publicUrl ? escapeHtml(status.publicUrl) : ''}" />
+          <small>
+            Where a player's client can reach this machine. Leave empty to turn direct
+            downloads off. The listener opens on port 8099 unless GAMEBLADE_PUBLIC_PORT
+            says otherwise, and only ever serves a file a signed, expiring grant from the
+            Coordinator names.
+          </small>
+        </label>
+        <button type="submit">Save address</button>
+        <p class="msg" id="direct-msg"></p>
+      </form>
+      ${state}
+`;
 }
 
 function servingDetails(status: NodeStatusSnapshot): string {

@@ -62,6 +62,18 @@ pub struct AgentState {
     /// Last reason registration failed, for the node's local status page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registration_error: Option<String>,
+
+    /**
+     * Where clients can reach this machine, if anywhere.
+     *
+     * Written by the node's own setup page, like the coordinator address
+     * beside it, because whether a port is actually reachable from outside is
+     * something the operator knows and neither process can discover. Absent —
+     * the ordinary case for a machine behind a home router — means every
+     * transfer takes the outbound path it always did.
+     */
+    #[serde(default, alias = "public_url", skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
 }
 
 /// One file of one game, as the coordinator describes it.
