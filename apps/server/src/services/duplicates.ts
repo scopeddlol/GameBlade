@@ -1,5 +1,5 @@
 import type { DuplicateCandidate, DuplicateGroup, GameMergeReason } from '@gameblade/shared';
-import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { gameFiles, games, libraries, meshNodeGames, meshNodes } from '../db/schema.js';
 import { ApiError } from '../lib/errors.js';
@@ -521,6 +521,90 @@ export class DuplicateService {
       .where(eq(games.id, gameId))
       .run();
     this.logger.info({ gameId, wasMergedInto: row.mergedIntoId }, 'unmerged a catalog entry');
+  }
+
+  /**
+   * Entries that are currently held as more than one copy.
+   *
+   * The other half of the duplicates page, and the half that makes an
+   * automatic merge safe to do at all: whatever the rules folded together can
+   * be seen, and pulled apart again, by somebody who disagrees.
+   *
+   * Bounded, because on a fully mirrored archive this is every game in it and
+   * an operator checking a merge does not need four thousand rows to find it.
+   */
+  mergedGroups(limit = 100): DuplicateGroup[] {
+    const copies = this.db
+      .select({ game: games, libraryName: libraries.name })
+      .from(games)
+      .innerJoin(libraries, eq(libraries.id, games.libraryId))
+      .where(isNotNull(games.mergedIntoId))
+      .orderBy(desc(games.mergedAt))
+      .limit(limit)
+      .all();
+
+    if (copies.length === 0) return [];
+
+    const primaryIds = [...new Set(copies.map((row) => row.game.mergedIntoId as string))];
+    const primaries = new Map(
+      this.db
+        .select({ game: games, libraryName: libraries.name })
+        .from(games)
+        .innerJoin(libraries, eq(libraries.id, games.libraryId))
+        .where(inArray(games.id, primaryIds))
+        .all()
+        .map((row) => [row.game.id, row]),
+    );
+
+    const hashes = new Map(
+      this.db
+        .select({
+          gameId: gameFiles.gameId,
+          sha256: sql<string | null>`min(${gameFiles.sha256})`,
+        })
+        .from(gameFiles)
+        .where(inArray(gameFiles.gameId, [...primaryIds, ...copies.map((row) => row.game.id)]))
+        .groupBy(gameFiles.gameId)
+        .all()
+        .map((row) => [row.gameId, row.sha256]),
+    );
+
+    const online = this.onlineGameIds([...primaryIds, ...copies.map((row) => row.game.id)]);
+
+    const describe = (row: { game: typeof games.$inferSelect; libraryName: string }) => ({
+      gameId: row.game.id,
+      title: row.game.title,
+      libraryId: row.game.libraryId,
+      libraryName: row.libraryName,
+      relPath: row.game.relPath,
+      sizeBytes: row.game.sizeBytes,
+      contentHash: hashes.get(row.game.id) ?? null,
+      addedAt: row.game.addedAt,
+      matchStatus: row.game.matchStatus,
+      online: online.has(row.game.id),
+    });
+
+    const grouped = new Map<string, DuplicateGroup>();
+    for (const copy of copies) {
+      const primaryId = copy.game.mergedIntoId as string;
+      const primary = primaries.get(primaryId);
+      if (!primary) continue;
+
+      const existing = grouped.get(primaryId);
+      if (existing) {
+        existing.duplicates.push(describe(copy));
+        continue;
+      }
+
+      grouped.set(primaryId, {
+        key: primaryId,
+        reason: copy.game.mergeReason ?? 'manual',
+        primary: describe(primary),
+        duplicates: [describe(copy)],
+      });
+    }
+
+    return [...grouped.values()];
   }
 
   /* ---------------------------------------------------------- presence */

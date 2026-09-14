@@ -299,6 +299,10 @@ export async function apiV1Routes(app: FastifyInstance): Promise<void> {
         matchStatus: game.matchStatus,
         isMissing: game.isMissing,
         addedAt: game.addedAt,
+        // How many machines are online and holding this entry. One row per
+        // game whether it is on one disk or three, so an integration counting
+        // these is counting games rather than copies.
+        hostCount: game.hostCount,
       })),
       total: page.total,
       offset: page.offset,

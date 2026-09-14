@@ -1,6 +1,6 @@
 import type { MeshNodeStats } from '@gameblade/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Check, Pencil, Radio, ShieldOff, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, Pencil, Radio, ShieldOff, Trash2, X, Zap } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { StatTile } from '../../components/charts.js';
@@ -240,6 +240,18 @@ function NodeCard({
               {node.activeTransfers} live
             </span>
           ) : null}
+          {node.publicUrl ? (
+            // The one thing about a node that changes where bytes actually
+            // flow: with an address, players fetch from it and this server's
+            // uplink stops being the ceiling on their downloads.
+            <span
+              className="flex items-center gap-1 text-xs text-emerald-400"
+              title={`Players download straight from ${node.publicUrl}`}
+            >
+              <Zap className="h-3.5 w-3.5" aria-hidden />
+              direct
+            </span>
+          ) : null}
           {node.ownerUsername ? (
             <span className="text-ink-500 text-xs">{node.ownerUsername}&rsquo;s client</span>
           ) : null}
@@ -270,7 +282,28 @@ function NodeCard({
         <Stat label="Transfers, 24h">{node.transfers24h.toLocaleString('en')}</Stat>
         <Stat label="Last seen">{node.lastSeenAt ? formatRelative(node.lastSeenAt) : 'never'}</Stat>
         <Stat label="Agent">{node.agentVersion ?? 'unknown'}</Stat>
+        {node.publicUrl ? (
+          <Stat label="Served direct">{formatBytes(node.directBytesServed)}</Stat>
+        ) : null}
+        {node.probeSamples > 0 ? (
+          // What players have actually measured, which is the only honest
+          // answer to "is that port forward doing anything".
+          <Stat label="Measured by players">
+            {formatRate(node.probeBytesPerSecond)}
+            <span className="text-ink-500"> from {node.probeSamples.toLocaleString('en')}</span>
+          </Stat>
+        ) : null}
       </dl>
+
+      {node.publicUrl ? (
+        <p className="text-ink-500 mt-2 text-[11px]">
+          Players fetch from <code className="text-ink-300">{node.publicUrl}</code> and fall back to
+          this server whenever it does not answer.
+          {node.directOkAt
+            ? ` Last confirmed working ${formatRelative(node.directOkAt)}.`
+            : ' No player has reported a successful direct fetch yet.'}
+        </p>
+      ) : null}
 
       {node.libraryGames > 0 ? (
         <div className="mt-3">
@@ -320,6 +353,13 @@ function NodeCard({
       </div>
     </div>
   );
+}
+
+/** Bytes per second as a person reads it, or a dash when nobody has measured. */
+function formatRate(bytesPerSecond: number | null): string {
+  if (!bytesPerSecond || bytesPerSecond <= 0) return '—';
+  const mb = bytesPerSecond / 1_000_000;
+  return mb >= 10 ? `${Math.round(mb)} MB/s` : `${mb.toFixed(1)} MB/s`;
 }
 
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {

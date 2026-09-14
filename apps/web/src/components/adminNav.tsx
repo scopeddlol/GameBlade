@@ -93,6 +93,11 @@ export const ADMIN_SECTIONS: AdminSection[] = [
         label: 'Metadata matches',
       },
       {
+        to: '/admin/catalog/duplicates',
+        label: 'Duplicates',
+        prefetch: [{ key: ['admin', 'duplicates'], path: '/admin/duplicates' }],
+      },
+      {
         to: '/admin/catalog/achievements',
         label: 'Achievements',
         prefetch: [{ key: ['admin', 'stats'], path: '/admin/stats' }],

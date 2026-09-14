@@ -217,6 +217,63 @@ volumes:
         Coordinator addresses, hostnames, domains, or ports.
       </p>
 
+      <h2 id="multi-host">One game, several machines</h2>
+      <p>
+        A game can be held on more than one machine. Moving a library onto a VPS used to create a
+        second catalog entry for every game in it — a Node reports into a library of its own,
+        because relative paths only mean anything within one — so the Store showed the archive
+        twice and the new copies carried none of the achievements, saves or playtime of the
+        originals.
+      </p>
+      <p>
+        Copies are now folded into the entry that already exists. Nothing is deleted: the folded-in
+        row keeps its library, path, files and chunk hashes, so its machine goes on serving them,
+        and it simply stops being an entry of its own. Downloads then follow the game rather than
+        the machine — the Coordinator picks the package the most online hosts agree on, addresses
+        each host in the ids that host knows its own copy by, and a chunk comes from whichever is
+        up.
+      </p>
+      <p>
+        Only proof merges on its own: identical package bytes, or the same package name at exactly
+        the same size. Weaker evidence — the same identified game at two different sizes, which is
+        either two builds or a bad copy — is listed in
+        <strong>Admin → Catalog → Duplicates</strong> with the sizes, paths and hosts shown, and
+        merged only when somebody says so. The same page lists what has already been folded
+        together and can separate any of it again.
+      </p>
+      <p>
+        Deleting the local copy after a move does not flag the entry as missing while another
+        machine still holds one. When the last copy goes, it is marked honestly.
+      </p>
+
+      <h2 id="direct-downloads">Direct downloads from a Node</h2>
+      <p>
+        Every transfer used to be relayed: the Desktop asked the Coordinator, the Coordinator
+        pulled the chunk over the Node's outbound connection and streamed it onward. That is the
+        only thing that works for a machine behind a home router, and it spends the Coordinator's
+        uplink twice for every byte — which on a small VPS is the ceiling on everyone's downloads.
+      </p>
+      <p>
+        A Node that can be reached on its own address now serves clients itself. Set the address on
+        the Node's own page under <strong>Direct downloads</strong>, or with
+        <code>GAMEBLADE_PUBLIC_URL</code>; the listener opens on port 8099 unless
+        <code>GAMEBLADE_PUBLIC_PORT</code> says otherwise, and clearing the address closes it
+        again. Changes take effect within a heartbeat, without a restart.
+      </p>
+      <p>
+        The Coordinator hands a client the address together with a signed grant naming one Node,
+        one file and an expiry. The Node checks that grant against the Coordinator's public key,
+        which it receives at registration and on every heartbeat, and can never mint one itself.
+        Chunks are named by their SHA-256 and verified on arrival exactly as before, so a direct
+        source cannot serve different bytes than the relay would — only faster ones. Bytes
+        delivered this way are reported back, so allowances and Node statistics stay correct.
+      </p>
+      <p>
+        The relay remains the fallback for every client, every Node without an address, and every
+        moment a direct fetch fails. A source that fails twice in a row sits out the rest of that
+        download.
+      </p>
+
       <h2 id="downloads">Download behavior</h2>
       <ul>
         <li>
@@ -234,6 +291,16 @@ volumes:
         </li>
         <li>
           If one Node fails, Coordinator tries another current holder before returning unavailable.
+        </li>
+        <li>
+          Where a game is held on several machines, the Desktop spreads chunks across them in
+          proportion to what each is measuring — re-decided per chunk, so a host that saturates
+          loses its share within seconds.
+        </li>
+        <li>
+          <strong>Test download speeds</strong> on a game's page measures every host by moving a
+          couple of megabytes over the real route. Results are shown to the player and reported
+          back, so the next person starts with an order somebody has actually tested.
         </li>
       </ul>
 
@@ -271,8 +338,25 @@ volumes:
           <tr>
             <th>Download is slow</th>
             <td>
-              Check Node disk, Node uplink, Coordinator egress, configured limits, and Desktop
-              concurrency.
+              Press <strong>Test download speeds</strong> on the game's page in the client: it
+              measures each host separately and says which is the bottleneck. Then check Node disk,
+              Node uplink, Coordinator egress, configured limits, and Desktop concurrency.
+            </td>
+          </tr>
+          <tr>
+            <th>A game is listed twice</th>
+            <td>
+              Two machines hold copies that do not agree byte for byte. Open
+              <strong>Admin → Catalog → Duplicates</strong>, compare the sizes and paths, and merge
+              them into whichever entry should keep its achievements and playtime.
+            </td>
+          </tr>
+          <tr>
+            <th>Direct downloads are not being used</th>
+            <td>
+              Check the Node's page shows a public address, that the port is reachable from outside
+              (try <code>/gb/v1/health</code> on it), and that <strong>Admin → Nodes</strong> marks
+              the Node <em>direct</em>. Downloads keep working through the Coordinator either way.
             </td>
           </tr>
         </tbody>

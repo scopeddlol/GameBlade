@@ -66,6 +66,20 @@ services:
       # decide, which is what the volumes below are written for.
       # LIBRARY_PATHS: /library,/mnt/extra
 
+      # Where players can reach THIS machine, if they can reach it at all.
+      #
+      # Set it and the node serves downloads itself, instead of every byte
+      # being relayed by the coordinator — which spends the coordinator's
+      # uplink twice and is the ceiling on everybody's downloads when it is a
+      # small VPS. Leave it out (the ordinary case, for a machine behind a home
+      # router) and nothing changes: transfers take the outbound path that
+      # always worked.
+      #
+      # It can also be set from this node's own page, with no restart. The
+      # listener below only opens once there is an address to advertise.
+      # GAMEBLADE_PUBLIC_URL: https://vps.example.com:8099
+      # GAMEBLADE_PUBLIC_PORT: '8099'
+
     volumes:
       # The node's identity, local index, scan decisions, and the complete
       # Coordinator backups it retains. Leave enough room here for seven copies
@@ -93,6 +107,12 @@ services:
       # off every other interface this machine has. This local status page is
       # not needed for downloads; the worker itself only makes outbound HTTPS.
       - '127.0.0.1:8080:8080'
+      # Direct downloads, when GAMEBLADE_PUBLIC_URL above is set. Publish this
+      # one on every interface — it is the port players fetch from — and point
+      # the address above at whatever reaches it: this machine, or a reverse
+      # proxy in front of it. Nothing is served from here without a signed,
+      # expiring grant from the coordinator naming one file.
+      # - '8099:8099'
 
     security_opt:
       - 'no-new-privileges:true'
