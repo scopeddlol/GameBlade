@@ -400,7 +400,11 @@ pub(crate) async fn run(job: GameJob) -> Outcome {
      * scheduler moves work toward whichever turns out to be quicker from here —
      * measured from the chunks themselves, not from what anybody promised.
      */
-    let package = manifest.files.first().map(|file| file.id.clone()).unwrap_or_default();
+    let package = manifest
+        .files
+        .first()
+        .map(|file| file.id.clone())
+        .unwrap_or_default();
     let pool = Arc::new(SourcePool::new(
         &manifest.game_id,
         &package,

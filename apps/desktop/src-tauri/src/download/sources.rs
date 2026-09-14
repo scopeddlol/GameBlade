@@ -524,10 +524,10 @@ async fn measure_proxy(
         urlencode(&token)
     );
 
-    let request = client
-        .http()
-        .get(&url)
-        .header(reqwest::header::RANGE, format!("bytes=0-{}", sample_bytes - 1));
+    let request = client.http().get(&url).header(
+        reqwest::header::RANGE,
+        format!("bytes=0-{}", sample_bytes - 1),
+    );
 
     time_request(request, probe).await
 }
@@ -769,6 +769,6 @@ mod tests {
         // Base64url needs no escaping, which is the point — but the encoder has
         // to know that, or a signature check fails on bytes nobody changed.
         assert_eq!(urlencode("v2.abc-_DEF.xyz"), "v2.abc-_DEF.xyz");
-        assert_eq!(urlencode("a+b/c=" ), "a%2Bb%2Fc%3D");
+        assert_eq!(urlencode("a+b/c="), "a%2Bb%2Fc%3D");
     }
 }

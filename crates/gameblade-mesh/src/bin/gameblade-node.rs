@@ -529,7 +529,7 @@ async fn run(agent: Runtime, server_url: String, library_roots: Vec<PathBuf>, st
     let mut wanted = public_url.clone();
 
     let open_direct = |wanted: Option<String>,
-                           listening: &mut Option<tokio::task::JoinHandle<()>>|
+                       listening: &mut Option<tokio::task::JoinHandle<()>>|
      -> Option<String> {
         match (&direct, wanted) {
             (Some(server), Some(url)) => {
@@ -537,18 +537,16 @@ async fn run(agent: Runtime, server_url: String, library_roots: Vec<PathBuf>, st
                     return Some(url);
                 }
                 let port = direct_port();
-                match std::net::TcpListener::bind(("0.0.0.0", port))
-                    .and_then(|socket| {
-                        socket.set_nonblocking(true)?;
-                        tokio::net::TcpListener::from_std(socket)
-                    }) {
+                match std::net::TcpListener::bind(("0.0.0.0", port)).and_then(|socket| {
+                    socket.set_nonblocking(true)?;
+                    tokio::net::TcpListener::from_std(socket)
+                }) {
                     Ok(listener) => {
                         println!("  direct:  {url} (listening on :{port})");
                         let serving = Arc::clone(server);
-                        *listening =
-                            Some(tokio::spawn(
-                                async move { serve_direct(listener, serving).await },
-                            ));
+                        *listening = Some(tokio::spawn(async move {
+                            serve_direct(listener, serving).await
+                        }));
                         Some(url)
                     }
                     Err(error) => {

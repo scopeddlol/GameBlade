@@ -294,7 +294,11 @@ async fn serve_chunk(
         None => return Ok(()),
     };
 
-    let Some(index) = request.query.get("index").and_then(|value| value.parse::<u64>().ok()) else {
+    let Some(index) = request
+        .query
+        .get("index")
+        .and_then(|value| value.parse::<u64>().ok())
+    else {
         return write_response(stream, 400, "text/plain", b"a chunk index is required").await;
     };
 
@@ -583,7 +587,10 @@ mod tests {
         let key = SigningKey::from_bytes(&[7u8; 32]);
         let token = grant(&key, claims("nod_1", now_seconds() + 60));
 
-        assert_eq!(node.verify_grant(&token).await.unwrap_err(), GrantError::NoKey);
+        assert_eq!(
+            node.verify_grant(&token).await.unwrap_err(),
+            GrantError::NoKey
+        );
     }
 
     #[tokio::test]
@@ -609,7 +616,10 @@ mod tests {
         // SPKI: twelve bytes of algorithm identifier, then the key itself.
         let mut spki = hex::decode("302a300506032b6570032100").expect("fixed prefix");
         spki.extend_from_slice(&key.verifying_key().to_bytes());
-        assert!(node.set_coordinator_key(&URL_SAFE_NO_PAD.encode(spki)).await);
+        assert!(
+            node.set_coordinator_key(&URL_SAFE_NO_PAD.encode(spki))
+                .await
+        );
 
         let token = grant(&key, claims("nod_1", now_seconds() + 60));
         assert!(node.verify_grant(&token).await.is_ok());
@@ -648,10 +658,8 @@ mod tests {
         let node = server("nod_1");
         let coordinator = SigningKey::from_bytes(&[7u8; 32]);
         let impostor = SigningKey::from_bytes(&[8u8; 32]);
-        node.set_coordinator_key(
-            &URL_SAFE_NO_PAD.encode(coordinator.verifying_key().to_bytes()),
-        )
-        .await;
+        node.set_coordinator_key(&URL_SAFE_NO_PAD.encode(coordinator.verifying_key().to_bytes()))
+            .await;
 
         let token = grant(&impostor, claims("nod_1", now_seconds() + 60));
         assert_eq!(
