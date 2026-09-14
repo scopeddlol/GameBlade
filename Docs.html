@@ -269,6 +269,12 @@ volumes:
         delivered this way are reported back, so allowances and Node statistics stay correct.
       </p>
       <p>
+        Put TLS in front of that port if you can — a reverse proxy, or the one already publishing
+        the Coordinator. The bytes themselves are hash-verified either way and a grant is worth one
+        file for a few minutes, so plain HTTP is a considered trade rather than a hole; but on an
+        <code>https://</code> address nobody on the path can read a grant at all.
+      </p>
+      <p>
         The relay remains the fallback for every client, every Node without an address, and every
         moment a direct fetch fails. A source that fails twice in a row sits out the rest of that
         download.
