@@ -315,14 +315,17 @@ impl SourcePool {
             *last = Some(Instant::now());
         }
 
-        let Ok(manifest) = client.manifest(&self.game_id).await else {
+        // The source list rather than the whole manifest: refreshing a grant
+        // is not a fresh install request, and the manifest route treats it as
+        // one.
+        let Ok(fresh) = client.game_sources(&self.game_id).await else {
             return false;
         };
 
         let mut entries = self.entries.lock().await;
         let mut refreshed = false;
 
-        for source in manifest.sources.unwrap_or_default() {
+        for source in fresh.sources {
             let (Some(node_id), Some(url), Some(grant)) =
                 (source.node_id, source.direct_url, source.grant)
             else {
@@ -466,8 +469,12 @@ pub async fn measure_sources(
     results.push(measure_proxy(client, game_id, file_id, sample_bytes).await);
 
     for source in sources {
+        // A source with no probe URL is one this build cannot measure directly
+        // — an older server, or a node without an address. It is skipped here
+        // rather than guessed at; the relay above already measured the path
+        // such a source is actually fetched over.
         let (Some(url), Some(grant), Some(node_id)) = (
-            source.direct_url.as_ref(),
+            source.probe_url.as_ref(),
             source.grant.as_ref(),
             source.node_id.as_ref(),
         ) else {
@@ -546,11 +553,7 @@ async fn measure_direct(
     // The node's probe route rather than its chunk route: it reads the same
     // bytes off the same disk and stops at the sample size, so a measurement
     // costs a couple of megabytes instead of a full chunk.
-    let url = format!(
-        "{}?bytes={sample_bytes}&grant={}",
-        base_url.replace("/gb/v1/chunk", "/gb/v1/probe"),
-        urlencode(grant)
-    );
+    let url = format!("{base_url}?bytes={sample_bytes}&grant={}", urlencode(grant));
 
     let request = client
         .http()
@@ -637,6 +640,7 @@ mod tests {
             label: label.to_string(),
             priority: 0,
             direct_url: direct.then(|| "https://vps.example.com:8099/gb/v1/chunk".to_string()),
+            probe_url: direct.then(|| "https://vps.example.com:8099/gb/v1/probe".to_string()),
             grant: direct.then(|| "v2.grant".to_string()),
             game_id: Some("gam_copy".to_string()),
             file_id: Some("gfl_copy".to_string()),

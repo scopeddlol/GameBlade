@@ -15,6 +15,7 @@ import {
   games,
   libraries,
   meshNodes,
+  userLibrary,
   users,
 } from '../db/schema.js';
 import { newId } from '../lib/ids.js';
@@ -218,6 +219,9 @@ describe('direct Node downloads', () => {
     const body = await manifest();
     const source = body.sources?.find((entry) => entry.nodeId === node.nodeId);
     expect(source?.directUrl).toBe('https://vps.example.com:8099/gb/v1/chunk');
+    // The measurement endpoint is advertised rather than derived, so a client
+    // never has to edit a URL it was handed.
+    expect(source?.probeUrl).toBe('https://vps.example.com:8099/gb/v1/probe');
     expect(source?.gameId).toBe(gameId);
     expect(source?.fileId).toBe(fileId);
 
@@ -341,6 +345,47 @@ describe('direct Node downloads', () => {
     const sources = (await manifest()).sources?.filter((entry) => entry.kind === 'node') ?? [];
     expect(sources[0]?.nodeId).toBe(fast.nodeId);
     expect(sources[0]?.observedBytesPerSecond).toBe(90e6);
+  });
+
+  it('lists sources for a speed test without installing anything', async () => {
+    const node = await enrol('Measured', `${'k'.repeat(43)}9`);
+    await heartbeat(node, 'https://vps.example.com:8099');
+
+    // A fresh account, so "did this add the game to a library" has an
+    // unambiguous answer.
+    const invite = await app.inject({
+      method: 'POST',
+      url: '/api/admin/invites',
+      headers: auth(admin),
+      payload: { role: 'user', maxUses: 1 },
+    });
+    const curious = await register('/api/auth/register', {
+      username: 'curious',
+      password: 'a-long-enough-password',
+      inviteCode: (invite.json() as { code: string }).code,
+    });
+    const curiousId = app.gameblade.db
+      .select()
+      .from(users)
+      .where(eq(users.username, 'curious'))
+      .get()!.id;
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/games/${gameId}/sources`,
+      headers: auth(curious),
+    });
+    expect(response.statusCode).toBe(200);
+
+    const body = response.json() as { fileId: string | null; sources: { nodeId?: string }[] };
+    expect(body.fileId).toBe(fileId);
+    expect(body.sources.some((source) => source.nodeId === node.nodeId)).toBe(true);
+
+    // The point of this route: measuring how fast a host is must not quietly
+    // add the game to somebody's library, which asking for a manifest does.
+    expect(
+      app.gameblade.db.select().from(userLibrary).where(eq(userLibrary.userId, curiousId)).all(),
+    ).toEqual([]);
   });
 
   it('always leaves the Coordinator route as the way back', async () => {

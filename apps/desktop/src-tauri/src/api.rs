@@ -65,6 +65,14 @@ pub struct ManifestSource {
     /// source is fetched the way every source always was: through the server.
     #[serde(rename = "directUrl", default)]
     pub direct_url: Option<String>,
+    /// Where the same node answers a speed measurement.
+    ///
+    /// Sent by the server rather than derived from `direct_url`: deriving it
+    /// would mean editing a URL this client was handed, and the day that path
+    /// changes every older client measures a 404 and reports a healthy node as
+    /// unreachable.
+    #[serde(rename = "probeUrl", default)]
+    pub probe_url: Option<String>,
     /// The signed permission a direct fetch presents. Useless without the URL.
     #[serde(default)]
     pub grant: Option<String>,
@@ -113,6 +121,16 @@ pub struct DownloadManifest {
 
 fn default_origin_available() -> bool {
     true
+}
+
+/// Where one game's bytes can be fetched from right now.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GameSources {
+    /// The file the sources below serve, or `None` when nothing holds it.
+    #[serde(rename = "fileId", default)]
+    pub file_id: Option<String>,
+    #[serde(default)]
+    pub sources: Vec<ManifestSource>,
 }
 
 /// One source, as this machine found it.
@@ -417,6 +435,22 @@ impl ApiClient {
         let request = self.authorised(
             self.http
                 .post(self.endpoint(&format!("/download/{game_id}/token"))),
+        )?;
+        let response = check_status(request.send().await?).await?;
+        Ok(response.json().await?)
+    }
+
+    /// Where a game can be fetched from, without asking to install it.
+    ///
+    /// The manifest answers this too and adds the game to the caller's library
+    /// on the way past, because asking for a manifest is what installing is.
+    /// Measuring how fast each host is — or replacing a grant that aged out
+    /// mid-download — is not installing, and should not quietly change what is
+    /// in somebody's library.
+    pub async fn game_sources(&self, game_id: &str) -> AppResult<GameSources> {
+        let request = self.authorised(
+            self.http
+                .get(self.endpoint(&format!("/games/{game_id}/sources"))),
         )?;
         let response = check_status(request.send().await?).await?;
         Ok(response.json().await?)

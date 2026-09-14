@@ -85,6 +85,15 @@ export interface MeshSource {
    * Coordinator, which is the transport every source has.
    */
   directUrl?: string;
+  /**
+   * Where the same node answers a speed measurement.
+   *
+   * Sent rather than derived from `directUrl`, because a client deriving it
+   * would be editing a URL the server gave it — and the day the path changes,
+   * every older client would be measuring a 404 and reporting the node as
+   * unreachable.
+   */
+  probeUrl?: string;
   /** The signed permission a direct fetch presents. Absent without `directUrl`. */
   grant?: string;
   grantExpiresAt?: string;
@@ -313,21 +322,6 @@ export const MESH_DIRECT_CHUNK_PATH = '/gb/v1/chunk';
 /** Where a direct Node answers "are you there, and how fast is this link". */
 export const MESH_DIRECT_PROBE_PATH = '/gb/v1/probe';
 
-/** Port a Node listens on for direct delivery unless it is told otherwise. */
-export const MESH_DIRECT_DEFAULT_PORT = 8099;
-
-/**
- * Largest sample a speed probe may ask for.
- *
- * One chunk. A measurement wants to be long enough to leave TCP slow start
- * behind and short enough that testing four sources is a few seconds rather
- * than a download of its own.
- */
-export const MESH_PROBE_MAX_BYTES = MESH_CHUNK_BYTES;
-
-/** Sample size a client uses when it has no reason to choose another. */
-export const MESH_PROBE_DEFAULT_BYTES = 2 * 1024 * 1024;
-
 /**
  * A short-lived, signed permission for one client to pull from one Node.
  *
@@ -374,11 +368,4 @@ export interface SourceProbeReport {
   ok: boolean;
   /** Short, human-readable failure reason. Never shown to other users. */
   detail?: string | null;
-}
-
-/** One measured source, as the Desktop shows it in the downloads panel. */
-export interface SourceProbeResult extends SourceProbeReport {
-  label: string;
-  /** True when the Node answered on its own address rather than through the VPS. */
-  direct: boolean;
 }

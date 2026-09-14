@@ -211,6 +211,41 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
+   * Where this game can be fetched from, without asking for a download.
+   *
+   * The manifest answers this too, and deliberately does more: it adds the game
+   * to the caller's library, because asking for one is what installing *is*.
+   * Measuring how fast a host is, or refreshing a grant that aged out
+   * mid-transfer, is not that — and a speed test that quietly added games to
+   * somebody's library would be a small, baffling bug.
+   *
+   * So this is the manifest's source list on its own, with fresh grants and no
+   * side effects.
+   */
+  app.get('/games/:id/sources', async (request) => {
+    const context = requireUser(request);
+    const { id } = request.params as { id: string };
+
+    const game = db.select().from(games).where(eq(games.id, id)).get();
+    if (!game) throw ApiError.notFound('Game not found');
+
+    const plan = mesh.deliveryPlan(id, { excludeOwnerId: context.user.id });
+    const packageGameId = plan?.gameId ?? id;
+
+    return {
+      gameId: game.id,
+      fileId: plan?.fileId ?? null,
+      sources: mesh.sourcesFor(id, {
+        chunked: chunks.isGameChunked(packageGameId),
+        includeOrigin: config.servesLocalFiles,
+        excludeOwnerId: context.user.id,
+        userId: context.user.id,
+        mintGrant: (claims) => downloadTokens.issueDeliveryGrant(claims),
+      }),
+    };
+  });
+
+  /**
    * What a client measured against the sources it was offered, and what it
    * pulled straight from a node.
    *

@@ -2,7 +2,7 @@ import { ACHIEVEMENT_COMPARATORS, ACHIEVEMENT_FORMATS } from './achievementRules
 import { BUG_SEVERITY, BUG_STATUS } from './constants.js';
 import { z } from 'zod';
 import type { DiscordActivityType } from './constants.js';
-import { MESH_ENDPOINT_KINDS } from './mesh.js';
+import { MESH_ENDPOINT_KINDS, MESH_TRANSPORTS } from './mesh.js';
 import { THEME_PRESETS } from './theme.js';
 import {
   ACHIEVEMENT_SOURCE,
@@ -1179,7 +1179,7 @@ export const sourceProbeReportSchema = z.object({
     .array(
       z.object({
         nodeId: z.string().trim().min(1).max(64).nullable().default(null),
-        transport: z.enum(['proxy', 'direct']),
+        transport: z.enum(MESH_TRANSPORTS),
         latencyMs: z.number().min(0).max(600_000).nullable().default(null),
         bytesPerSecond: z.number().min(0).max(10_000_000_000).nullable().default(null),
         ok: z.boolean(),

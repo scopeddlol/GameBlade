@@ -630,17 +630,19 @@ async fn test_download_sources(
     game_id: String,
 ) -> AppResult<Vec<download::sources::SourceProbe>> {
     let client = state.client().await?;
-    let manifest = client.manifest(&game_id).await?;
+    // Deliberately not the manifest: asking for one adds the game to the
+    // caller's library, and measuring how fast a host is should not.
+    let offered = client.game_sources(&game_id).await?;
 
-    let Some(file) = manifest.files.first() else {
+    let Some(file_id) = offered.file_id.as_deref() else {
         return Ok(Vec::new());
     };
 
     let results = download::sources::measure_sources(
         &client,
         &game_id,
-        &file.id,
-        manifest.sources.as_deref().unwrap_or_default(),
+        file_id,
+        &offered.sources,
         PROBE_SAMPLE_BYTES,
     )
     .await;

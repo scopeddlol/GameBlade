@@ -2,6 +2,7 @@ import { createHash, createPublicKey, verify as verifyBytes } from 'node:crypto'
 import {
   MESH_CHUNK_BYTES,
   MESH_DIRECT_CHUNK_PATH,
+  MESH_DIRECT_PROBE_PATH,
   MESH_HEARTBEAT_TIMEOUT_SECONDS,
   MESH_MAX_SOURCES_PER_GAME,
   type DeliveryGrantClaims,
@@ -973,6 +974,7 @@ export class MeshService {
         ...(direct && holder.publicUrl
           ? {
               directUrl: `${holder.publicUrl}${MESH_DIRECT_CHUNK_PATH}`,
+              probeUrl: `${holder.publicUrl}${MESH_DIRECT_PROBE_PATH}`,
               grant: direct.grant,
               grantExpiresAt: direct.expiresAt,
             }
