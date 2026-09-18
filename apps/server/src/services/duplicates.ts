@@ -1,4 +1,9 @@
-import type { DuplicateCandidate, DuplicateGroup, GameMergeReason } from '@gameblade/shared';
+import {
+  stripPackageExtension,
+  type DuplicateCandidate,
+  type DuplicateGroup,
+  type GameMergeReason,
+} from '@gameblade/shared';
 import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { gameFiles, games, libraries, meshNodeGames, meshNodes } from '../db/schema.js';
@@ -51,12 +56,16 @@ const AUTOMATIC: ReadonlySet<GameMergeReason> = new Set<GameMergeReason>(['conte
  * Windows and a few sync tools rename on copy — ` (1)`, `.1`, a trailing
  * space — and a rule that treats `Game.zip` and `Game (1).zip` as different
  * games would leave exactly the duplicates this exists to find.
+ *
+ * The extension goes too, so the same game repacked from `.zip` to `.7z` on
+ * one machine still matches the copy on the other. Size is what actually
+ * proves a match below, and a repack is never byte-identical — which is why
+ * that pairing stays a suggestion rather than an automatic merge.
  */
 function packageKey(relPath: string): string {
   const base = relPath.split(/[\\/]/).filter(Boolean).pop() ?? relPath;
-  return base
+  return stripPackageExtension(base)
     .toLowerCase()
-    .replace(/\.zip$/, '')
     .replace(/\s*\((?:\d+|copy)\)\s*$/, '')
     .replace(/[\s._-]*copy$/, '')
     .replace(/\.\d+$/, '')

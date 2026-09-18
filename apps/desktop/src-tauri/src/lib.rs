@@ -736,8 +736,8 @@ async fn list_installed(state: State<'_, AppState>) -> AppResult<Vec<InstalledGa
 
 /// Turns a completed download into an installed game.
 ///
-/// The downloaded ZIP64 package is extracted and deleted. The executable is
-/// resolved once here, so launching later never has to guess.
+/// The downloaded package — a ZIP64 or a .7z — is unpacked and deleted. The
+/// executable is resolved once here, so launching later never has to guess.
 #[tauri::command]
 async fn finish_install(
     state: State<'_, AppState>,
@@ -760,10 +760,10 @@ async fn finish_install(
     let source = PathBuf::from(&downloaded_path);
     let install_root = state.install_dir().await.join(sanitise_folder_name(&title));
 
-    let is_archive = source
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+    // Whether what was downloaded is a package to unpack, rather than a folder
+    // the player already had. Asked of the file's own extension so a game kept
+    // as .7z takes exactly the same path a .zip does.
+    let is_archive = install::package_format(&source).is_some();
 
     if is_archive {
         tokio::fs::create_dir_all(&install_root).await?;
@@ -771,7 +771,7 @@ async fn finish_install(
         let destination = install_root.clone();
         // Extraction is CPU- and IO-bound and fully synchronous, so it runs on
         // the blocking pool rather than stalling the async runtime.
-        tokio::task::spawn_blocking(move || install::extract_zip(&archive, &destination))
+        tokio::task::spawn_blocking(move || install::extract_package(&archive, &destination))
             .await
             .map_err(|err| AppError::Other(format!("Extraction failed: {err}")))??;
         let _ = tokio::fs::remove_file(&source).await;

@@ -4,7 +4,9 @@ version = "0.9.0"
 description = "GameBlade desktop client"
 authors = ["GameBlade"]
 edition = "2021"
-rust-version = "1.77.2"
+# Raised for sevenz-rust2, the pure-Rust 7z decoder the installer unpacks
+# .7z packages with. Both CI and the release build use stable.
+rust-version = "1.85"
 
 [lib]
 name = "gameblade_desktop_lib"
@@ -51,6 +53,18 @@ thiserror = "2"
 
 # Installing archived games and packing cloud saves.
 zip = { version = "2", default-features = false, features = ["deflate", "bzip2", "zstd"] }
+# The other half of installing: games kept as .7z. Pure Rust, so the client
+# still ships as one binary with no 7-Zip for the player to install. Only the
+# decoders are compiled in — GameBlade never writes a .7z — and `aes256` is
+# left out deliberately: nothing in the client could ask a player for the
+# password an encrypted archive would need, so the honest outcome is the clear
+# "encrypted" error `extract_sevenz` turns that into.
+sevenz-rust2 = { version = "0.20", default-features = false, features = [
+    "bzip2",
+    "deflate",
+    "ppmd",
+    "zstd",
+] }
 walkdir = "2"
 async-trait = "0.1"
 globset = "0.4"

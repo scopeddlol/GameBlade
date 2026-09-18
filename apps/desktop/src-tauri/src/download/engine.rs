@@ -23,6 +23,7 @@ use super::{
 };
 use crate::api::{ApiClient, ChunkRef, DownloadManifest, ManifestFile};
 use crate::error::{AppError, AppResult};
+use crate::install;
 use chrono::Utc;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -148,31 +149,33 @@ fn chunk_hashes_for(file: &ManifestFile, chunk_bytes: Option<u64>) -> Option<Vec
     Some(chunks.clone())
 }
 
-/// The v0.8 download contract is deliberately narrow: one ZIP package, one
-/// 10 MiB hash grid, no per-file fallback. Rejecting anything else before a
-/// destination file is created prevents an older or half-prepared catalog from
-/// turning into an install that can only fail after gigabytes have moved.
+/// The download contract is deliberately narrow: one package file, in a format
+/// the installer can unpack, on one 10 MiB hash grid, with no per-file
+/// fallback. Rejecting anything else before a destination file is created
+/// prevents an older or half-prepared catalog from turning into an install
+/// that can only fail after gigabytes have moved.
 fn validate_package_manifest(manifest: &DownloadManifest) -> AppResult<()> {
     if manifest.kind != "archive" || manifest.files.len() != 1 {
         return Err(AppError::Other(
-            "This game is not packaged as one ZIP archive yet".to_string(),
+            "This game is not packaged as one archive yet".to_string(),
         ));
     }
 
     let package = &manifest.files[0];
-    if !package.path.to_ascii_lowercase().ends_with(".zip") {
-        return Err(AppError::Other(
-            "GameBlade can only install .zip game packages".to_string(),
-        ));
+    if install::package_format(Path::new(&package.path)).is_none() {
+        return Err(AppError::Other(format!(
+            "GameBlade can only install {} game packages",
+            install::PACKAGE_EXTENSION_LIST
+        )));
     }
     if manifest.total_bytes != package.size_bytes {
         return Err(AppError::Other(
-            "The ZIP package manifest has an invalid size".to_string(),
+            "The package manifest has an invalid size".to_string(),
         ));
     }
     if chunk_hashes_for(package, manifest.chunk_bytes).is_none() {
         return Err(AppError::Other(
-            "This ZIP is still being prepared into verified 10 MiB chunks".to_string(),
+            "This package is still being prepared into verified 10 MiB chunks".to_string(),
         ));
     }
 

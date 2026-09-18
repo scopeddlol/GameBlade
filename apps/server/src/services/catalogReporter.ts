@@ -1,11 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { MESH_CHUNK_BYTES, type ReportedFile, type ReportedGame } from '@gameblade/shared';
+import {
+  MESH_CHUNK_BYTES,
+  isPackagedGame,
+  type ReportedFile,
+  type ReportedGame,
+} from '@gameblade/shared';
 import { eq, isNull } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { gameFileChunks, gameFiles, games, libraries } from '../db/schema.js';
-import { listZipExecutables, sortCandidates } from '../lib/executables.js';
+import { listArchiveExecutables, sortCandidates } from '../lib/executables.js';
 import type { Logger } from './metadata/service.js';
 
 /**
@@ -83,7 +88,7 @@ export function splitCatalogBatches(
  */
 export class CatalogReporter {
   private state: NodeState = {};
-  /** ZIP central directories only need reread when the package itself changes. */
+  /** An archive's contents only need rereading when the package itself changes. */
   private readonly executableCache = new Map<
     string,
     { fingerprint: string; candidates: NonNullable<ReportedGame['executables']> }
@@ -479,7 +484,7 @@ export class CatalogReporter {
       });
 
       const libraryPath = libraryPaths.get(game.libraryId);
-      if (game.kind === 'archive' && game.relPath.toLowerCase().endsWith('.zip') && libraryPath) {
+      if (libraryPath && isPackagedGame(game)) {
         const fingerprint = `${game.sizeBytes}:${game.contentMtime}`;
         const cached = this.executableCache.get(game.id);
         if (cached?.fingerprint === fingerprint) {
@@ -495,9 +500,9 @@ export class CatalogReporter {
       }
     }
 
-    // Reading a central directory is cheap, but a real library can contain
-    // thousands of ZIPs. A small bounded pool keeps network-backed libraries
-    // moving without opening every archive at once.
+    // Reading an archive's table of contents is cheap, but a real library can
+    // contain thousands of them. A small bounded pool keeps network-backed
+    // libraries moving without opening every archive at once.
     let cursor = 0;
     const workers = Array.from({ length: Math.min(8, archives.length) }, async () => {
       for (;;) {
@@ -506,7 +511,7 @@ export class CatalogReporter {
         if (!current) return;
 
         try {
-          const executables = sortCandidates(await listZipExecutables(current.absolute)).slice(
+          const executables = sortCandidates(await listArchiveExecutables(current.absolute)).slice(
             0,
             256,
           );
@@ -519,7 +524,7 @@ export class CatalogReporter {
         } catch (error) {
           this.logger.warn(
             { err: error, gameId: current.gameId },
-            'could not read ZIP executables for the coordinator catalog',
+            'could not read archive executables for the coordinator catalog',
           );
         }
       }

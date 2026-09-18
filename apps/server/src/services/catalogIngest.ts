@@ -365,7 +365,7 @@ export class CatalogIngestService {
     }
   }
 
-  /** Replace the tiny launch-rule index reported from each ZIP central directory. */
+  /** Replace the tiny launch-rule index reported from each archive's contents. */
   private replaceArchiveExecutables(tx: Tx, work: ExecutableWork[]): void {
     if (work.length === 0) return;
 

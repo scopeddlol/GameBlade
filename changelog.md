@@ -1,5 +1,15 @@
 # GameBlade Changelog
 
+## Unreleased
+
+### Games kept as .7z install like any other
+
+- A game stored as a `.7z` is now a first-class package. It is hashed into the same verified 10 MiB chunks, offered in the Store as **Ready**, downloaded over the same resumable multi-host transfer, and unpacked by the client when it arrives. Until now the Store held every one of them at "coming soon" and told the operator to repack it as a `.zip`.
+- The Desktop client unpacks `.7z` itself, so nothing has to be installed on a player's machine. Archives packed with LZMA, LZMA2, BZip2, Deflate, PPMd or Zstandard all work, solid blocks included, and entry paths are rebuilt the same careful way ZIP entries already were — an archive cannot write outside the install folder.
+- A password-protected `.7z` is reported as one, with what to do about it, rather than failing at the end of a download. GameBlade has nowhere to ask a player for a password.
+- **Admin → Launch rules** lists the executables inside a `.7z` exactly as it does for a `.zip`, read straight from the archive's header without unpacking anything, so picking an executable stays one click on a hundred-gigabyte game.
+- Duplicate detection now sees the same game as the same game across the two formats: a copy repacked from `.zip` to `.7z` on another machine is offered as a duplicate rather than sitting in the catalog twice.
+
 ## Version 0.9.0 - September 14, 2026
 
 ### One game, several machines

@@ -308,7 +308,7 @@ export const reportedGameSchema = z.object({
   sizeBytes: z.number().int().min(0),
   contentMtime: z.string().min(1).max(64),
   files: z.array(reportedFileSchema).max(50_000),
-  /** Executables found in a ZIP's central directory by the Node that can read it. */
+  /** Executables found in the archive's contents by the Node that can read it. */
   executables: z
     .array(
       z.object({

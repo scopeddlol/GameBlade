@@ -101,11 +101,11 @@
       </div>
       <p>
         For each Desktop byte range, the Coordinator selects a Node known to hold the game and
-        queues a 10 MiB ZIP chunk request. The Node reads and verifies the chunk, posts it to the
+        queues a 10 MiB package chunk request. The Node reads and verifies the chunk, posts it to the
         Coordinator, and the Coordinator verifies it again before streaming it to Desktop.
       </p>
       <p>
-        Every install is one ZIP64 package. The Desktop keeps several ranges in flight, writes
+        Every install is one package — a ZIP64 or a <code>.7z</code>. The Desktop keeps several ranges in flight, writes
         chunks at their offsets, records resume journals, verifies hashes as bytes arrive, and
         automatically unpacks the completed package with a bounded parallel worker pool.
       </p>
@@ -283,7 +283,7 @@ volumes:
       <h2 id="downloads">Download behavior</h2>
       <ul>
         <li>
-          One ZIP64 package per game, cut into fixed 10 MiB chunks with up to eight concurrent
+          One package per game — ZIP64 or <code>.7z</code> — cut into fixed 10 MiB chunks with up to eight concurrent
           HTTPS requests by default.
         </li>
         <li>Resume journals survive restarts; transient failures retry with backoff.</li>
