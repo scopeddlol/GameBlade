@@ -1,5 +1,7 @@
 import {
   MESH_CHUNK_BYTES,
+  UNSUPPORTED_PACKAGE_NOTE,
+  isPackagedGame,
   type CatalogGap,
   type FeaturedEntry,
   type FeaturedInput,
@@ -827,10 +829,10 @@ export function describeAvailability(
     };
   }
 
-  if (game.kind !== 'archive' || !game.relPath.toLowerCase().endsWith('.zip')) {
+  if (!isPackagedGame(game)) {
     return {
       state: 'coming-soon',
-      note: 'Downloads use one fast, resumable ZIP package. Store this game as a .zip archive and rescan the Node.',
+      note: UNSUPPORTED_PACKAGE_NOTE,
     };
   }
 

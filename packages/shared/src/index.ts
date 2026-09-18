@@ -5,6 +5,7 @@ export * from './discordMentions.js';
 export * from './landing.js';
 export * from './mesh.js';
 export * from './messaging.js';
+export * from './packages.js';
 export * from './schemas.js';
 export * from './theme.js';
 export * from './types.js';

@@ -1,4 +1,11 @@
-import { MESH_CHUNK_BYTES, chunkCountFor, type ChunkRef } from '@gameblade/shared';
+import {
+  MESH_CHUNK_BYTES,
+  PACKAGE_EXTENSIONS,
+  PACKAGE_EXTENSION_LIST,
+  chunkCountFor,
+  isPackagedGame,
+  type ChunkRef,
+} from '@gameblade/shared';
 import { and, eq, gt, inArray, isNull, or, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { gameFileChunks, gameFiles, games, libraries } from '../db/schema.js';
@@ -16,6 +23,19 @@ import {
 } from './hashing.js';
 import type { Logger } from './metadata/service.js';
 
+/**
+ * The catalog rows that are one downloadable package.
+ *
+ * Spelled once, as SQL, because every query below needs the same rule and the
+ * set of formats is shared with the routes, the store and the client. A format
+ * added to `PACKAGE_EXTENSIONS` starts being hashed here without this file
+ * changing — which is the difference between supporting a new format and
+ * supporting it everywhere except the one pass that makes it downloadable.
+ */
+const isPackageSql = or(
+  ...PACKAGE_EXTENSIONS.map((extension) => sql`lower(${games.relPath}) like ${`%${extension}`}`),
+);
+
 /** What one game's hashing pass is doing. */
 export type ChunkProgress = HashProgress;
 
@@ -28,7 +48,7 @@ export type ChunkProgress = HashProgress;
  */
 export interface SweepProgress {
   running: boolean;
-  /** Missing hashes only, or a deliberate verification rebuild of every ZIP. */
+  /** Missing hashes only, or a deliberate verification rebuild of every package. */
   mode: 'missing' | 'rebuild';
   /** Set while a stop has been asked for and the current game is finishing. */
   stopping: boolean;
@@ -154,7 +174,7 @@ export class ChunkService {
         and(
           isNull(games.missingAt),
           eq(games.kind, 'archive'),
-          sql`lower(${games.relPath}) like '%.zip'`,
+          isPackageSql,
           gt(gameFiles.sizeBytes, 0),
           or(isNull(gameFiles.chunkBytes), ne(gameFiles.chunkBytes, MESH_CHUNK_BYTES)),
         ),
@@ -163,7 +183,7 @@ export class ChunkService {
     return Number(row?.bytes ?? 0);
   }
 
-  /** Every byte in every present ZIP package, for a full verification pass. */
+  /** Every byte in every present package, for a full verification pass. */
   packageBytes(): number {
     const row = this.db
       .select({ bytes: sql<number>`coalesce(sum(${gameFiles.sizeBytes}), 0)` })
@@ -173,7 +193,7 @@ export class ChunkService {
         and(
           isNull(games.missingAt),
           eq(games.kind, 'archive'),
-          sql`lower(${games.relPath}) like '%.zip'`,
+          isPackageSql,
           gt(gameFiles.sizeBytes, 0),
         ),
       )
@@ -247,7 +267,7 @@ export class ChunkService {
       .from(games)
       .where(eq(games.id, gameId))
       .get();
-    if (packageGame?.kind !== 'archive' || !packageGame.relPath.toLowerCase().endsWith('.zip')) {
+    if (!packageGame || !isPackagedGame(packageGame)) {
       return false;
     }
 
@@ -282,7 +302,7 @@ export class ChunkService {
         and(
           isNull(games.missingAt),
           eq(games.kind, 'archive'),
-          sql`lower(${games.relPath}) like '%.zip'`,
+          isPackageSql,
           // A zero-byte file has no chunks and never will, so a game made only
           // of those is finished rather than pending.
           gt(gameFiles.sizeBytes, 0),
@@ -293,7 +313,7 @@ export class ChunkService {
       .map((row) => row.gameId);
   }
 
-  /** Every present ZIP game, including games that already carry valid hashes. */
+  /** Every present packaged game, including games that already carry valid hashes. */
   packageGameIds(): string[] {
     return this.db
       .selectDistinct({ gameId: gameFiles.gameId })
@@ -303,7 +323,7 @@ export class ChunkService {
         and(
           isNull(games.missingAt),
           eq(games.kind, 'archive'),
-          sql`lower(${games.relPath}) like '%.zip'`,
+          isPackageSql,
           gt(gameFiles.sizeBytes, 0),
         ),
       )
@@ -484,8 +504,10 @@ export class ChunkService {
 
     if (!row) throw ApiError.notFound('Game not found');
     if (row.game.missingAt) throw ApiError.gone('This game is no longer present on disk');
-    if (row.game.kind !== 'archive' || !row.game.relPath.toLowerCase().endsWith('.zip')) {
-      throw ApiError.conflict('Only .zip game packages are chunk-hashed for downloads');
+    if (!isPackagedGame(row.game)) {
+      throw ApiError.conflict(
+        `Only ${PACKAGE_EXTENSION_LIST} game packages are chunk-hashed for downloads`,
+      );
     }
 
     const files = this.db.select().from(gameFiles).where(eq(gameFiles.gameId, gameId)).all();

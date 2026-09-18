@@ -76,7 +76,11 @@ import {
 } from '../db/schema.js';
 import { maintain, type Db } from '../db/index.js';
 import { ApiError } from '../lib/errors.js';
-import { isLikelyGameExecutable, listZipExecutables, sortCandidates } from '../lib/executables.js';
+import {
+  isLikelyGameExecutable,
+  listArchiveExecutables,
+  sortCandidates,
+} from '../lib/executables.js';
 import { newId, newInviteCode } from '../lib/ids.js';
 import { isoNow } from '../lib/time.js';
 import { toLaunchRule } from './mappers.js';
@@ -635,9 +639,9 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   /**
    * .exe files found in a game's own files, so the launch rule's executable
    * field can be picked rather than hand-typed. A folder game's files were
-   * already indexed by the last scan; an archive game's central directory is
-   * read on demand instead, since only the archive itself — not its
-   * contents — gets a `game_files` row.
+   * already indexed by the last scan; an archive game's table of contents — a
+   * ZIP's central directory, or a 7z's header — is read on demand instead,
+   * since only the archive itself, not its contents, gets a `game_files` row.
    */
   app.get('/admin/games/:id/executables', async (request) => {
     const { id } = request.params as { id: string };
@@ -681,7 +685,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       const absolute = path.join(row.libraryPath, row.game.relPath);
       try {
         return {
-          candidates: sortCandidates(await listZipExecutables(absolute)),
+          candidates: sortCandidates(await listArchiveExecutables(absolute)),
           ready: true,
           inspectedAt: new Date().toISOString(),
           source: 'local' as const,

@@ -14,5 +14,6 @@
 *.webp binary
 *.ico binary
 *.zip binary
+*.7z binary
 *.gz binary
 pnpm-lock.yaml -diff

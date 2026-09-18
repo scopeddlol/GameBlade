@@ -24,6 +24,27 @@ describe('describeAvailability', () => {
     expect(describeAvailability(game(), { files: 1, unhashed: 0 }, null).state).toBe('ready');
   });
 
+  it('offers a .7z on exactly the same terms as a .zip', () => {
+    const sevenZip = game({ relPath: 'Game.7z' });
+    expect(describeAvailability(sevenZip, { files: 1, unhashed: 0 }, null).state).toBe('ready');
+    expect(describeAvailability(sevenZip, { files: 1, unhashed: 1 }, null).state).toBe(
+      'coming-soon',
+    );
+  });
+
+  it('holds back an archive in a format the client cannot unpack', () => {
+    // A .rar scans as one game and lands in the catalog, but nothing in the
+    // chain can open it — so the note has to say what to do about that rather
+    // than leave it looking like a slow hash.
+    const verdict = describeAvailability(
+      game({ relPath: 'Game.rar' }),
+      { files: 1, unhashed: 0 },
+      null,
+    );
+    expect(verdict.state).toBe('coming-soon');
+    expect(verdict.note).toContain('.zip or .7z');
+  });
+
   it('keeps folder games in the catalog but never offers them as downloads', () => {
     const verdict = describeAvailability(
       game({ kind: 'folder', relPath: 'Open Folder' }),
@@ -31,7 +52,7 @@ describe('describeAvailability', () => {
       null,
     );
     expect(verdict.state).toBe('coming-soon');
-    expect(verdict.note).toContain('.zip');
+    expect(verdict.note).toContain('.zip or .7z');
   });
 
   it('holds back a game whose files have gone missing', () => {

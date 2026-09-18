@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { MESH_CHUNK_BYTES } from '@gameblade/shared';
+import { MESH_CHUNK_BYTES, UNSUPPORTED_PACKAGE_NOTE, isPackagedGame } from '@gameblade/shared';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { downloadEvents, gameFiles, games, libraries, type Game } from '../db/schema.js';
@@ -418,7 +418,7 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(meter(source));
   }
 
-  /** The game's single, resumable ZIP package. */
+  /** The game's single, resumable package. */
   app.route({
     method: ['GET', 'HEAD'],
     url: '/download/:gameId',
@@ -430,10 +430,8 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
       const userId = resolveDownloadUser(request, gameId);
       const { game, libraryPath } = loadGame(gameId);
 
-      if (game.kind !== 'archive' || !game.relPath.toLowerCase().endsWith('.zip')) {
-        throw ApiError.conflict(
-          'GameBlade downloads ZIP packages only. Package this game as .zip and rescan the Node.',
-        );
+      if (!isPackagedGame(game)) {
+        throw ApiError.conflict(UNSUPPORTED_PACKAGE_NOTE);
       }
 
       /*
@@ -513,8 +511,8 @@ export async function downloadRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      if (game.kind !== 'archive' || !game.relPath.toLowerCase().endsWith('.zip')) {
-        throw ApiError.conflict('Only ZIP packages can be downloaded');
+      if (!isPackagedGame(game)) {
+        throw ApiError.conflict(UNSUPPORTED_PACKAGE_NOTE);
       }
 
       /*

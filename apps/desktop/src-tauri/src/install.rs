@@ -238,6 +238,60 @@ fn normalize(value: &str) -> String {
         .to_lowercase()
 }
 
+/// Unpacks a downloaded package into `destination`, whatever format it is in.
+///
+/// The format is decided by the file's extension rather than by sniffing its
+/// first bytes, because that is the same decision the server made when it
+/// offered the game: the catalog, the store's "ready" badge and the download
+/// manifest all key off the extension, and a client that disagreed with them
+/// about what a file is would refuse installs the store had promised.
+pub fn extract_package(archive: &Path, destination: &Path) -> AppResult<u64> {
+    match package_format(archive) {
+        Some(PackageFormat::Zip) => extract_zip(archive, destination),
+        Some(PackageFormat::SevenZ) => extract_sevenz(archive, destination),
+        None => Err(AppError::Other(format!(
+            "GameBlade can only install {PACKAGE_EXTENSION_LIST} packages",
+        ))),
+    }
+}
+
+/// A package format the client can unpack on its own.
+///
+/// Mirrors `PACKAGE_FORMATS` in `@gameblade/shared`: the server decides what it
+/// will offer from that list, and this side has to unpack exactly the same set.
+/// They are two spellings of one contract, so a format added to one without the
+/// other is the bug this comment exists to prevent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageFormat {
+    Zip,
+    SevenZ,
+}
+
+impl PackageFormat {
+    /// Every format, in the order they are listed to people.
+    pub const ALL: &'static [PackageFormat] = &[PackageFormat::Zip, PackageFormat::SevenZ];
+
+    /// The lowercase file extension, without its dot.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Zip => "zip",
+            Self::SevenZ => "7z",
+        }
+    }
+}
+
+/// The supported extensions as a phrase, so every message reads `.zip or .7z`.
+pub const PACKAGE_EXTENSION_LIST: &str = ".zip or .7z";
+
+/// Which format a path names, by extension, or `None` for anything else.
+pub fn package_format(path: &Path) -> Option<PackageFormat> {
+    let extension = path.extension().and_then(|value| value.to_str())?;
+    PackageFormat::ALL
+        .iter()
+        .copied()
+        .find(|format| extension.eq_ignore_ascii_case(format.extension()))
+}
+
 /// Extracts a downloaded .zip into `destination`.
 ///
 /// Entry paths from an archive are attacker-controlled, so each one is rebuilt
@@ -368,6 +422,147 @@ pub fn extract_zip(archive: &Path, destination: &Path) -> AppResult<u64> {
     })?;
 
     Ok(written)
+}
+
+/// Extracts a downloaded .7z into `destination`.
+///
+/// The path rules are `extract_zip`'s, for the same reason: entry names come
+/// from whoever built the archive, so each one is rebuilt from its normal
+/// components and anything that would land outside `destination` is dropped.
+///
+/// What is deliberately *not* shared is the parallelism. A ZIP entry can be
+/// decompressed on its own, so that function fans out across workers; 7z packs
+/// files into solid blocks where each entry's bytes depend on everything
+/// decoded before it in the same block, and extracting entries independently
+/// would re-decode the block from the start once per file. A single pass in
+/// the archive's own order decodes every block exactly once, which is both
+/// correct and, on a solid archive, far quicker than the "parallel" version
+/// would be. LZMA2 blocks written with multi-threading still decode on several
+/// cores inside this pass.
+pub fn extract_sevenz(archive: &Path, destination: &Path) -> AppResult<u64> {
+    let mut reader = sevenz_rust2::ArchiveReader::open(archive, sevenz_rust2::Password::empty())
+        .map_err(sevenz_error)?;
+
+    let mut targets = HashSet::new();
+    let mut written = 0u64;
+    let mut buffer = vec![0u8; 1024 * 1024];
+
+    reader
+        .for_each_entries(|entry, stream| {
+            let Some(target) = safe_join(destination, &sevenz_entry_path(entry.name())) else {
+                return Ok(true);
+            };
+
+            if entry.is_directory() {
+                std::fs::create_dir_all(&target).map_err(sevenz_io)?;
+                return Ok(true);
+            }
+
+            // 7z keeps a symlink as a regular entry whose Unix mode says
+            // otherwise, and its target is written as the file's contents. A
+            // portable Windows game has no use for one, and materialising it
+            // would either follow a link out of the install folder or leave a
+            // text file pretending to be a game binary.
+            if is_sevenz_symlink(entry) {
+                return Ok(true);
+            }
+
+            if !targets.insert(target.clone()) {
+                return Err(sevenz_rust2::Error::Other(
+                    format!(
+                        "The archive contains the same output path more than once: {}",
+                        target.display()
+                    )
+                    .into(),
+                ));
+            }
+
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(sevenz_io)?;
+            }
+
+            let file = std::fs::File::create(&target).map_err(sevenz_io)?;
+            let mut output = std::io::BufWriter::with_capacity(1024 * 1024, file);
+
+            loop {
+                let count = stream.read(&mut buffer).map_err(sevenz_io)?;
+                if count == 0 {
+                    break;
+                }
+                output.write_all(&buffer[..count]).map_err(sevenz_io)?;
+                written += count as u64;
+            }
+            output.flush().map_err(sevenz_io)?;
+
+            Ok(true)
+        })
+        .map_err(sevenz_error)?;
+
+    Ok(written)
+}
+
+/// An entry name as a path, with 7z's Windows-style separators normalised.
+///
+/// Archives built on Windows store `data\assets.pak`, which on Windows is
+/// already a path and on any other platform is one *file* with a backslash in
+/// its name. Splitting both separators here means `safe_join` sees the same
+/// components either way — and, more to the point, that `..\..\evil` is
+/// rejected rather than becoming a legal single component.
+fn sevenz_entry_path(name: &str) -> PathBuf {
+    name.split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+/// Whether a 7z entry describes a symbolic link rather than a file.
+///
+/// 7-Zip records a Unix mode in the top half of the Windows attributes word
+/// and sets `0x8000` to say it did. Anything else — including an archive built
+/// on Windows, which never sets that bit — is a real file.
+fn is_sevenz_symlink(entry: &sevenz_rust2::ArchiveEntry) -> bool {
+    const UNIX_EXTENSION: u32 = 0x8000;
+    const S_IFMT: u32 = 0xF000;
+    const S_IFLNK: u32 = 0xA000;
+
+    let attributes = entry.windows_attributes();
+    attributes & UNIX_EXTENSION != 0 && (attributes >> 16) & S_IFMT == S_IFLNK
+}
+
+/// Wraps a filesystem error so it can travel back out through the extractor.
+fn sevenz_io(error: std::io::Error) -> sevenz_rust2::Error {
+    sevenz_rust2::Error::Io(error, "writing the install".into())
+}
+
+/// Turns a 7z failure into something a player can act on.
+///
+/// The password cases are the ones worth naming. GameBlade has nowhere to ask
+/// for a password and no way to store one, so an encrypted package is not a
+/// transient failure to retry — it is an archive the operator has to republish
+/// unencrypted, and saying so beats "Could not read the archive: Io error".
+///
+/// Encryption reaches here by two routes. `PasswordRequired` is the archive
+/// saying so; `UnsupportedCompressionMethod("AES…")` is what the decoder
+/// reports instead, because the client is built without the AES decoder — a
+/// password it can never obtain would be the only thing that decoder could
+/// use. Both mean the same thing to the person waiting for the game.
+fn sevenz_error(error: sevenz_rust2::Error) -> AppError {
+    let encrypted = match &error {
+        sevenz_rust2::Error::PasswordRequired | sevenz_rust2::Error::MaybeBadPassword(_) => true,
+        sevenz_rust2::Error::UnsupportedCompressionMethod(method) => {
+            method.to_ascii_uppercase().contains("AES")
+        }
+        _ => false,
+    };
+
+    if encrypted {
+        return AppError::Other(
+            "This 7z package is password-protected, which GameBlade cannot open. Ask the \
+             operator to republish it without encryption."
+                .to_string(),
+        );
+    }
+
+    AppError::Other(format!("Could not unpack the 7z archive: {error}"))
 }
 
 /// Joins an archive-supplied path onto a root, rejecting anything that would
@@ -549,6 +744,149 @@ mod tests {
             std::fs::read(destination.join("data/second.bin")).unwrap(),
             b"second asset"
         );
+    }
+
+    /// A real archive written by 7-Zip, because the only question worth asking
+    /// is whether the client agrees with 7-Zip about what is inside one.
+    ///
+    /// It is committed rather than built here on purpose: the client links the
+    /// 7z *decoder* only — it never writes one — so a test that created its own
+    /// fixture would have to pull an encoder into every shipped binary to prove
+    /// something about decoding.
+    ///
+    /// Contents: `Game.exe`, `data/first.bin`, `data/second.bin`, an empty
+    /// `data/nested/placeholder.dat`, an empty directory, and a name outside
+    /// ASCII.
+    const SEVENZ_FIXTURE: &[u8] = include_bytes!("fixtures/game.7z");
+
+    fn sevenz_fixture(directory: &Path) -> PathBuf {
+        let archive = directory.join("game.7z");
+        std::fs::write(&archive, SEVENZ_FIXTURE).unwrap();
+        archive
+    }
+
+    #[test]
+    fn sevenz_packages_unpack_every_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = sevenz_fixture(temp.path());
+        let destination = temp.path().join("installed");
+
+        let written = extract_sevenz(&archive, &destination).unwrap();
+
+        assert_eq!(written, 14 + 11 + 12 + 11);
+        assert_eq!(
+            std::fs::read(destination.join("Game.exe")).unwrap(),
+            b"MZ game binary"
+        );
+        assert_eq!(
+            std::fs::read(destination.join("data").join("second.bin")).unwrap(),
+            b"second asset"
+        );
+        assert_eq!(
+            std::fs::read(destination.join("Ünïcode Läuncher.exe")).unwrap(),
+            b"MZ launcher"
+        );
+    }
+
+    #[test]
+    fn sevenz_packages_keep_their_empty_files_and_folders() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = sevenz_fixture(temp.path());
+        let destination = temp.path().join("installed");
+
+        extract_sevenz(&archive, &destination).unwrap();
+
+        // A game that ships an empty marker file or a folder it writes saves
+        // into needs both to survive the install.
+        let placeholder = destination
+            .join("data")
+            .join("nested")
+            .join("placeholder.dat");
+        assert!(placeholder.is_file(), "the empty file should be created");
+        assert_eq!(std::fs::metadata(&placeholder).unwrap().len(), 0);
+        assert!(destination.join("empty folder").is_dir());
+    }
+
+    /// The same tree again, packed with `7z a -p`, so its file data is AES.
+    const SEVENZ_ENCRYPTED_FIXTURE: &[u8] = include_bytes!("fixtures/encrypted.7z");
+
+    #[test]
+    fn an_encrypted_package_says_so_instead_of_failing_obscurely() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("game.7z");
+        std::fs::write(&archive, SEVENZ_ENCRYPTED_FIXTURE).unwrap();
+
+        let error = extract_sevenz(&archive, &temp.path().join("installed")).unwrap_err();
+
+        // Nothing in the client can ask a player for a password, so this is a
+        // property of the archive and not something to retry. The message has
+        // to be the one that gets the operator to republish it.
+        assert!(
+            error.to_string().contains("password-protected"),
+            "got {error}"
+        );
+    }
+
+    #[test]
+    fn packages_are_unpacked_by_extension() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = sevenz_fixture(temp.path());
+        let destination = temp.path().join("installed");
+
+        // The same call the installer makes, routed by the file's own name.
+        extract_package(&archive, &destination).unwrap();
+
+        assert!(destination.join("Game.exe").is_file());
+    }
+
+    #[test]
+    fn a_format_the_client_cannot_unpack_is_refused_by_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("game.rar");
+        std::fs::write(&archive, b"not an archive we can read").unwrap();
+
+        let error = extract_package(&archive, &temp.path().join("installed")).unwrap_err();
+
+        assert!(error.to_string().contains(".zip or .7z"), "got {error}");
+    }
+
+    #[test]
+    fn package_format_is_decided_by_extension_alone() {
+        assert_eq!(
+            package_format(Path::new("Cave Story.zip")),
+            Some(PackageFormat::Zip)
+        );
+        assert_eq!(
+            package_format(Path::new("Cave Story.7Z")),
+            Some(PackageFormat::SevenZ)
+        );
+        assert_eq!(package_format(Path::new("Cave Story.rar")), None);
+        assert_eq!(package_format(Path::new("Cave Story")), None);
+    }
+
+    #[test]
+    fn sevenz_entry_paths_split_on_either_separator() {
+        // An archive built on Windows stores `data\first.bin`; one built
+        // anywhere else stores `data/first.bin` for the identical layout.
+        assert_eq!(
+            sevenz_entry_path("data\\nested\\first.bin"),
+            Path::new("data").join("nested").join("first.bin")
+        );
+        assert_eq!(
+            sevenz_entry_path("data/nested/first.bin"),
+            Path::new("data").join("nested").join("first.bin")
+        );
+    }
+
+    #[test]
+    fn sevenz_entry_paths_cannot_escape_the_install_folder() {
+        let root = Path::new("/games/demo");
+
+        // The point of splitting backslashes: left whole, `..\..\evil` would
+        // be one legal file name and would land inside the install folder
+        // rather than being rejected.
+        assert!(safe_join(root, &sevenz_entry_path("..\\..\\evil.txt")).is_none());
+        assert!(safe_join(root, &sevenz_entry_path("../../evil.txt")).is_none());
     }
 
     #[test]

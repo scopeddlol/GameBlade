@@ -313,9 +313,10 @@ function RuleRow({
   onChange: (changes: Partial<Draft>) => void;
 }) {
   /*
-   * An archive's contents are not indexed, so its candidates cost a read of the
-   * zip's central directory. That is fine once, on demand — and ruinous for
-   * every archive on a page — so the row fetches its own list when it is opened.
+   * An archive's contents are not indexed, so its candidates cost a read of
+   * the archive's own table of contents. That is fine once, on demand — and
+   * ruinous for every archive on a page — so the row fetches its own list when
+   * it is opened.
    */
   const archiveQuery = useQuery({
     queryKey: ['admin', 'executables', row.gameId],
@@ -369,14 +370,14 @@ function RuleRow({
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             {row.needsArchiveScan && !expanded ? (
               <p className="text-ink-400 text-xs">
-                Open this row to inspect the ZIP and list what is inside it.
+                Open this row to inspect the package and list what is inside it.
               </p>
             ) : options.length === 0 ? (
               <p className="text-ink-400 text-xs">
                 {archiveQuery.isLoading
-                  ? 'Reading the ZIP index…'
+                  ? 'Reading the package index…'
                   : archiveQuery.data?.ready === false
-                    ? 'Waiting for the Node to report the ZIP contents…'
+                    ? 'Waiting for the Node to report the package contents…'
                     : 'Nothing in this game looks like an executable. Type a path below if you know it.'}
               </p>
             ) : (

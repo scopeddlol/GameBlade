@@ -181,9 +181,10 @@ function Shell() {
 
   // Installation is deliberately recoverable across a UI or app restart. The
   // Rust downloader persists a completed queue entry before it emits the final
-  // event, so relying on that event alone could leave a fully downloaded ZIP
-  // sitting forever if the window closed in between. A small in-flight set also
-  // makes the event and startup recovery safe when they arrive together.
+  // event, so relying on that event alone could leave a fully downloaded
+  // package sitting forever if the window closed in between. A small in-flight
+  // set also makes the event and startup recovery safe when they arrive
+  // together.
   const finishingDownloads = useRef(new Set<string>());
   const finishCompletedDownload = useCallback(
     (download: DownloadState) => {

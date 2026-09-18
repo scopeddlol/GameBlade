@@ -131,8 +131,12 @@ describe('ChunkService.hashUnhashed', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  /** One ZIP package, on disk and in the database, unhashed. */
-  async function seed(name: string, bytes: Buffer, options: { missing?: boolean } = {}) {
+  /** One package, on disk and in the database, unhashed. */
+  async function seed(
+    name: string,
+    bytes: Buffer,
+    options: { missing?: boolean; extension?: string } = {},
+  ) {
     const libraryId = newId('lib');
     const existing = handle.db.select().from(libraries).all();
     if (existing.length === 0) {
@@ -144,7 +148,7 @@ describe('ChunkService.hashUnhashed', () => {
     const library = handle.db.select().from(libraries).all()[0]!;
 
     await mkdir(libraryDir, { recursive: true });
-    const packageName = `${name}.zip`;
+    const packageName = `${name}${options.extension ?? '.zip'}`;
     await writeFile(path.join(libraryDir, packageName), bytes);
 
     const gameId = newId('gam');
@@ -189,6 +193,26 @@ describe('ChunkService.hashUnhashed', () => {
     expect(result).toEqual({ hashed: 2, failed: 0 });
     expect(service.isGameChunked(first)).toBe(true);
     expect(service.isGameChunked(second)).toBe(true);
+  });
+
+  it('hashes a .7z package the same way it hashes a .zip', async () => {
+    // The hashing pass never opens a package — it reads its bytes on the mesh
+    // grid — so the only thing the format changes is whether the pass picks
+    // the game up at all. A format the pass skips is a game the store shows as
+    // "still being prepared" for ever.
+    const sevenZip = await seed('Seven', randomBytes(4096), { extension: '.7z' });
+
+    const result = await service.hashUnhashed();
+
+    expect(result).toEqual({ hashed: 1, failed: 0 });
+    expect(service.isGameChunked(sevenZip)).toBe(true);
+  });
+
+  it('leaves a format the client cannot unpack alone', async () => {
+    const rar = await seed('Rarely', randomBytes(4096), { extension: '.rar' });
+
+    expect(await service.hashUnhashed()).toEqual({ hashed: 0, failed: 0 });
+    expect(service.isGameChunked(rar)).toBe(false);
   });
 
   it('does nothing the second time, so it can run on a timer', async () => {

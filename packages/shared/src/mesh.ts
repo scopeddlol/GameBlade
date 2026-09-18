@@ -18,9 +18,9 @@
  * Bytes per chunk, everywhere: the hashes the server records, the ranges the
  * client asks for, and the units a node advertises.
  *
- * Ten MiB keeps request and proxy overhead low for the single large ZIP every
- * game is distributed as, while still leaving enough pieces for several HTTPS
- * connections to stay busy on ordinary game sizes.
+ * Ten MiB keeps request and proxy overhead low for the single large package
+ * every game is distributed as, while still leaving enough pieces for several
+ * HTTPS connections to stay busy on ordinary game sizes.
  * The engine already cuts transfers here, so aligning content addressing to the
  * same boundary means a chunk it fetches is exactly a chunk it can verify —
  * no re-hashing across a different grid, and a failed chunk retried against a

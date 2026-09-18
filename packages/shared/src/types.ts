@@ -244,10 +244,11 @@ export interface GameFileEntry {
 }
 
 /**
- * Describes the one ZIP64 package a client installs. The source catalog may
- * still contain folder games so metadata and launch rules survive a migration,
- * but installable manifests always contain exactly one `.zip` file cut into
- * fixed, independently verifiable chunks.
+ * Describes the one package a client installs — a ZIP64 or a `.7z`, whichever
+ * the library holds. The source catalog may still contain folder games so
+ * metadata and launch rules survive a migration, but installable manifests
+ * always contain exactly one package file, cut into fixed, independently
+ * verifiable chunks.
  */
 export interface DownloadManifest {
   gameId: string;
@@ -438,9 +439,9 @@ export interface LaunchRuleRow {
   /**
    * True for an archive, whose contents are not indexed.
    *
-   * The zip's central directory has to be read to list its executables, which
-   * is a per-game cost the list will not pay for every row up front — so those
-   * rows fetch their own candidates when they are opened.
+   * The archive's own table of contents has to be read to list its
+   * executables, which is a per-game cost the list will not pay for every row
+   * up front — so those rows fetch their own candidates when they are opened.
    */
   needsArchiveScan: boolean;
 }

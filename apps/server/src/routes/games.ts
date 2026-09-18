@@ -18,6 +18,9 @@ import {
   type GameFileEntry,
   type SaveRule,
   MESH_CHUNK_BYTES,
+  UNSUPPORTED_PACKAGE_NOTE,
+  isInstallablePackage,
+  isPackagedGame,
 } from '@gameblade/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -131,10 +134,8 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     if (game.missingAt) {
       throw ApiError.gone('This game is no longer present on disk');
     }
-    if (game.kind !== 'archive' || !game.relPath.toLowerCase().endsWith('.zip')) {
-      throw ApiError.conflict(
-        'GameBlade installs ZIP packages only. Store this game as a .zip archive and rescan the Node.',
-      );
+    if (!isPackagedGame(game)) {
+      throw ApiError.conflict(UNSUPPORTED_PACKAGE_NOTE);
     }
 
     // The store already shows this one as coming soon rather than offering a
@@ -159,8 +160,9 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
     const packageGameId = plan?.gameId ?? id;
 
     const files = db.select().from(gameFiles).where(eq(gameFiles.gameId, packageGameId)).all();
-    if (files.length !== 1 || !files[0]?.relPath.toLowerCase().endsWith('.zip')) {
-      throw ApiError.conflict('This game does not have one valid ZIP package to install');
+    const packageFile = files[0];
+    if (files.length !== 1 || !packageFile || !isInstallablePackage(packageFile.relPath)) {
+      throw ApiError.conflict('This game does not have one valid package to install');
     }
     const issued = downloadTokens.issue({ userId: context.user.id, gameId: id });
 
@@ -182,7 +184,7 @@ export async function gameRoutes(app: FastifyInstance): Promise<void> {
       gameId: game.id,
       title: game.title,
       kind: 'archive',
-      totalBytes: files[0].sizeBytes,
+      totalBytes: packageFile.sizeBytes,
       files: files.map((file) => ({
         id: file.id,
         path: file.relPath,

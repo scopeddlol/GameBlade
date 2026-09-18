@@ -30,8 +30,8 @@ file, no build step, and everything below is covered there in depth.
   hold the games and supply verified chunks to the Coordinator over outbound
   HTTPS. The Coordinator streams those chunks to clients over HTTPS. Nodes
   need no inbound port and set themselves up from a local page. Every game is
-  distributed as one ZIP64 package, split into verified 10 MiB chunks so all
-  Desktop connections start immediately and stay busy.
+  distributed as one package — a ZIP64 or a `.7z` — split into verified 10 MiB
+  chunks so all Desktop connections start immediately and stay busy.
 - **One game, several hosts.** The same game on a home server and a VPS is one
   catalog entry with two copies behind it, not two entries. Downloads use
   whichever host is up and quickest, and a node that can be reached on its own
@@ -74,15 +74,23 @@ and invite people from **Admin → Players → Invites**.
 > `sudo chown -R 1000:1000 ./data`
 
 Anything at the top level of a library root is one catalog entry. Downloads are
-intentionally ZIP-only: put each installable game in one top-level `.zip` file.
-Folders remain visible so metadata and launch rules are not lost while a library
-is being converted, but the Store marks them as not ready to install.
+intentionally package-only: put each installable game in one top-level `.zip` or
+`.7z` file. Folders remain visible so metadata and launch rules are not lost
+while a library is being converted, but the Store marks them as not ready to
+install.
 
-ZIP packages may be larger than 4 GB; GameBlade uses ZIP64, downloads them in
-parallel 10 MiB ranges, resumes interrupted chunks, verifies each chunk at the
-Node, Coordinator and Desktop, then automatically unpacks the game. The Node
-reads executable names from the ZIP central directory, so launch-rule setup
-continues to work without extracting the archive on the server.
+Packages may be larger than 4 GB; GameBlade uses ZIP64 for `.zip`, downloads
+either format in parallel 10 MiB ranges, resumes interrupted chunks, verifies
+each chunk at the Node, Coordinator and Desktop, then automatically unpacks the
+game. The client unpacks `.7z` itself — nobody has to install 7-Zip — including
+archives packed with LZMA, LZMA2, BZip2, Deflate, PPMd or Zstandard. The Node
+reads executable names straight from the package's table of contents, so
+launch-rule setup continues to work without extracting the archive on the
+server.
+
+One thing a `.7z` must not be is password-protected: the client has nowhere to
+ask a player for the password, and an encrypted archive is reported as one
+rather than failing at the end of a download.
 
 A node can hold more than one library. Mount each drive under `/libraries` in
 the node's compose file and the directory name becomes the library's name:
